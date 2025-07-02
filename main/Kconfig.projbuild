@@ -1,10 +1,17 @@
 menu "Xiaozhi Assistant"
 
+config USE_LSPLATFORM
+    bool "Connect to the Listenai AI platform"
+    default y
+    help
+        配置小智连接到聆思AI大模型链路,OTA_URL需设置为"https://api.listenai.com/v1/xiaoling/ota/",(原小智URL为"https://api.tenclass.net/xiaozhi/ota/")
+
+
 config OTA_URL
     string "Default OTA URL"
-    default "https://api.tenclass.net/xiaozhi/ota/"
+    default "https://staging-api.listenai.com/v1/xiaoling/ota/"
     help
-        The application will access this URL to check for new firmwares and server address.
+        The application will access this URL to check for new firmwares and server address.原小智URL为"https://api.tenclass.net/xiaozhi/ota/"
 
 
 choice

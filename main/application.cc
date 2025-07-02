@@ -9,6 +9,9 @@
 #include "assets/lang_config.h"
 #include "mcp_server.h"
 
+// 软件JPEG解码器（用于不支持硬件JPEG解码的芯片）
+#include "esp_jpeg_dec.h"
+
 #include <cstring>
 #include <esp_log.h>
 #include <cJSON.h>
@@ -152,7 +155,7 @@ void Application::CheckNewVersion(Ota& ota) {
         display->SetStatus(Lang::Strings::ACTIVATION);
         // Activation code is shown to the user and waiting for the user to input
         if (ota.HasActivationCode()) {
-            ShowActivationCode(ota.GetActivationCode(), ota.GetActivationMessage());
+            ShowActivationCode(ota.GetActivationCode(), ota.GetActivationMessage(), ota.GetActivationQRCode());
         }
 
         // This will block the loop until the activation is done or timeout
@@ -173,8 +176,59 @@ void Application::CheckNewVersion(Ota& ota) {
         }
     }
 }
+#if CONFIG_USE_LSPLATFORM
 
-void Application::ShowActivationCode(const std::string& code, const std::string& message) {
+void Application::ShowActivationCode(const std::string& code, const std::string& message, const std::string& qrcode) {
+    struct digit_sound {
+        char digit;
+        const std::string_view& sound;
+    };
+    static const std::array<digit_sound, 10> digit_sounds{{
+        digit_sound{'0', Lang::Sounds::P3_0},
+        digit_sound{'1', Lang::Sounds::P3_1}, 
+        digit_sound{'2', Lang::Sounds::P3_2},
+        digit_sound{'3', Lang::Sounds::P3_3},
+        digit_sound{'4', Lang::Sounds::P3_4},
+        digit_sound{'5', Lang::Sounds::P3_5},
+        digit_sound{'6', Lang::Sounds::P3_6},
+        digit_sound{'7', Lang::Sounds::P3_7},
+        digit_sound{'8', Lang::Sounds::P3_8},
+        digit_sound{'9', Lang::Sounds::P3_9}
+    }};
+
+    std::string qr_url = qrcode;
+
+    ESP_LOGI(TAG, "ShowActivationCode called: code=%s, qrcode=%s", code.c_str(), qrcode.c_str());
+
+    if (!qr_url.empty()) {
+        std::string image_data = DownloadImage(qr_url);
+        if (!image_data.empty()) {
+            ShowJPEG(image_data);
+        } else {
+            ESP_LOGW(TAG, "Downloaded image data is empty");
+        }
+    } else {
+        ESP_LOGW(TAG, "QR code URL is empty, skipping image download");
+    }
+
+    auto display = Board::GetInstance().GetDisplay();
+
+    std::string total_message = message + code;
+
+    display->SetChatMessage("system", total_message.c_str());
+
+    PlaySound(Lang::Sounds::P3_WECHAT_QRCODE);
+    PlaySound(Lang::Sounds::P3_BINDING);
+    for (const auto& digit : code) {
+        auto it = std::find_if(digit_sounds.begin(), digit_sounds.end(),
+            [digit](const digit_sound& ds) { return ds.digit == digit; });
+        if (it != digit_sounds.end()) {
+            PlaySound(it->sound);
+        }
+    }
+}
+#else
+ void Application::ShowActivationCode(const std::string& code, const std::string& message, const std::string& qrcode) {
     struct digit_sound {
         char digit;
         const std::string_view& sound;
@@ -203,6 +257,7 @@ void Application::ShowActivationCode(const std::string& code, const std::string&
         }
     }
 }
+#endif
 
 void Application::Alert(const char* status, const char* message, const char* emotion, const std::string_view& sound) {
     ESP_LOGW(TAG, "Alert %s: %s [%s]", status, message, emotion);
@@ -771,4 +826,165 @@ void Application::SetAecMode(AecMode mode) {
 
 void Application::PlaySound(const std::string_view& sound) {
     audio_service_.PlaySound(sound);
+}
+std::string Application::DownloadImage(const std::string& url) {
+    auto& board = Board::GetInstance();
+    auto network = board.GetNetwork();
+    auto http = network->CreateHttp();
+    
+    ESP_LOGI(TAG, "Downloading image from: %s", url.c_str());
+    
+    if (!http->Open("GET", url)) {
+        ESP_LOGW(TAG, "Failed to open HTTP connection for image download");
+        return "";
+    }
+    
+    int status_code = http->GetStatusCode();
+    if (status_code != 200) {
+        ESP_LOGW(TAG, "Failed to download image, HTTP status: %d", status_code);
+        http->Close();
+        return "";
+    }
+    
+    std::string image_data = http->ReadAll();
+    http->Close();
+    
+    if (image_data.empty()) {
+        ESP_LOGW(TAG, "Downloaded image data is empty");
+        return "";
+    }
+    
+    ESP_LOGI(TAG, "Successfully downloaded image (%d bytes)", (int)image_data.size());
+    return image_data;
+}
+
+void Application::ShowJPEG(const std::string& image_data) {
+    int ret;
+    if (image_data.empty()) {
+        ESP_LOGW(TAG, "Cannot show empty image data");
+        return;
+    }
+    auto display = Board::GetInstance().GetDisplay();
+    if (!display) {
+        ESP_LOGW(TAG, "Display not available");
+        return;
+    }
+
+    ESP_LOGI(TAG, "Processing JPEG image (%d bytes)", (int)image_data.size());
+
+    if (image_data.size() < 8) {
+        ESP_LOGW(TAG, "Image data too small to be valid");
+        return;
+    }
+
+    // 检查JPEG数据大小合理性
+    if (image_data.size() > 5 * 1024 * 1024) {  // 限制为5MB
+        ESP_LOGE(TAG, "JPEG file too large: %d bytes", (int)image_data.size());
+        return;
+    }
+
+    const uint8_t* data = reinterpret_cast<const uint8_t*>(image_data.data());
+    // 检查JPEG签名 (FF D8 FF)
+    if (!(data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF)) {
+        return;
+    }
+
+    static lv_img_dsc_t img_dsc;
+    static std::string stored_image_data;
+    static std::vector<uint8_t> decoded_rgb_data;
+    
+    uint32_t width = 0, height = 0;
+
+    // 使用软件JPEG解码器
+    jpeg_dec_config_t config = DEFAULT_JPEG_DEC_CONFIG();
+    config.output_type = JPEG_PIXEL_FORMAT_RGB565_LE;
+    config.rotate = JPEG_ROTATE_0D;
+    
+    jpeg_dec_handle_t jpeg_dec = NULL;
+    ret = jpeg_dec_open(&config, &jpeg_dec);
+    if (ret != JPEG_ERR_OK) {
+        ESP_LOGE(TAG, "Failed to open JPEG decoder, ret: %d", ret);
+        return;
+    }
+    
+    // 创建IO结构
+    jpeg_dec_io_t jpeg_io = {0};
+    jpeg_io.inbuf = (unsigned char*)data;
+    jpeg_io.inbuf_len = image_data.size();
+    
+    // 创建头信息结构
+    jpeg_dec_header_info_t out_info = {0};
+    
+    // 解析JPEG头信息
+    ret = jpeg_dec_parse_header(jpeg_dec, &jpeg_io, &out_info);
+    if (ret != JPEG_ERR_OK) {
+        ESP_LOGE(TAG, "Failed to parse JPEG header: %d", ret);
+        jpeg_dec_close(jpeg_dec);
+        return;
+    }
+    
+    width = out_info.width;
+    height = out_info.height;
+    ESP_LOGI(TAG, "JPEG dimensions: %dx%d", (int)width, (int)height);
+    
+    // 检查图片尺寸合理性
+    if (width == 0 || height == 0 || width > 2048 || height > 2048) {
+        ESP_LOGE(TAG, "Invalid JPEG dimensions: %dx%d", (int)width, (int)height);
+        jpeg_dec_close(jpeg_dec);
+        return;
+    }
+    
+    // 分配输出缓冲区 (RGB565格式，每像素2字节)
+    size_t output_size = (size_t)width * height * 2;
+    
+    // 检查内存大小合理性 (限制为2MB)
+    if (output_size > 2 * 1024 * 1024) {
+        ESP_LOGE(TAG, "JPEG image too large: %d bytes required", (int)output_size);
+        jpeg_dec_close(jpeg_dec);
+        return;
+    }
+    
+    // 使用对齐内存分配
+    unsigned char *output_buffer = (unsigned char*)jpeg_calloc_align(output_size, 16);
+    if (output_buffer == NULL) {
+        ESP_LOGE(TAG, "Failed to allocate aligned memory for JPEG decoding: %d bytes", (int)output_size);
+        jpeg_dec_close(jpeg_dec);
+        return;
+    }
+    
+    // 更新输入缓冲区指针（解析头信息后需要调整）
+    int inbuf_consumed = jpeg_io.inbuf_len - jpeg_io.inbuf_remain;
+    jpeg_io.inbuf = (unsigned char*)data + inbuf_consumed;
+    jpeg_io.inbuf_len = jpeg_io.inbuf_remain;
+    jpeg_io.outbuf = output_buffer;
+    
+    // 解码JPEG
+    ret = jpeg_dec_process(jpeg_dec, &jpeg_io);
+    if (ret != JPEG_ERR_OK) {
+        ESP_LOGE(TAG, "Failed to decode JPEG: %d", ret);
+        jpeg_free_align(output_buffer);
+        jpeg_dec_close(jpeg_dec);
+        return;
+    }
+    
+    // 复制数据到vector中以便管理生命周期
+    decoded_rgb_data.resize(output_size);
+    memcpy(decoded_rgb_data.data(), output_buffer, output_size);
+    
+    // 释放对齐内存
+    jpeg_free_align(output_buffer);
+    jpeg_dec_close(jpeg_dec);
+    
+    // 创建LVGL图片描述符
+    memset(&img_dsc, 0, sizeof(img_dsc));
+    img_dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
+    img_dsc.header.cf = LV_COLOR_FORMAT_RGB565;  // RGB565格式
+    img_dsc.header.w = width;
+    img_dsc.header.h = height;
+    img_dsc.data_size = output_size;
+    img_dsc.data = decoded_rgb_data.data();
+    
+    display->SetImage(&img_dsc, 80);
+    ESP_LOGI(TAG, "JPEG image decoded and displayed successfully (%d bytes -> %d bytes)", 
+                (int)image_data.size(), (int)output_size);
 }

@@ -83,9 +83,14 @@ private:
     void MainEventLoop();
     void OnWakeWordDetected();
     void CheckNewVersion(Ota& ota);
-    void ShowActivationCode(const std::string& code, const std::string& message);
+    void ShowActivationCode(const std::string& code, const std::string& message, const std::string& qrcode = "");
     void OnClockTimer();
     void SetListeningMode(ListeningMode mode);
+    void AudioLoop();
+    void EnterAudioTestingMode();
+    void ExitAudioTestingMode();
+    std::string DownloadImage(const std::string& url);
+    void ShowJPEG(const std::string& image_data);
 };
 
 #endif // _APPLICATION_H_

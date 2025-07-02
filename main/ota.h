@@ -21,13 +21,16 @@ public:
     bool HasActivationCode() { return has_activation_code_; }
     bool HasServerTime() { return has_server_time_; }
     bool StartUpgrade(std::function<void(int progress, size_t speed)> callback);
+    bool HasACtivationQRCode() { return has_activation_qrcode_; }
     void MarkCurrentVersionValid();
 
     const std::string& GetFirmwareVersion() const { return firmware_version_; }
     const std::string& GetCurrentVersion() const { return current_version_; }
     const std::string& GetActivationMessage() const { return activation_message_; }
     const std::string& GetActivationCode() const { return activation_code_; }
+    const std::string& GetActivationQRCode() const {return activation_qrcode_; }
     std::string GetCheckVersionUrl();
+    static void ResetAuthStatus();
 
 private:
     std::string activation_message_;
@@ -39,12 +42,14 @@ private:
     bool has_activation_code_ = false;
     bool has_serial_number_ = false;
     bool has_activation_challenge_ = false;
+    bool has_activation_qrcode_ = false;
     std::string current_version_;
     std::string firmware_version_;
     std::string firmware_url_;
     std::string activation_challenge_;
     std::string serial_number_;
     int activation_timeout_ms_ = 30000;
+    std::string activation_qrcode_;
 
     bool Upgrade(const std::string& firmware_url);
     std::function<void(int progress, size_t speed)> upgrade_callback_;
@@ -52,6 +57,7 @@ private:
     bool IsNewVersionAvailable(const std::string& currentVersion, const std::string& newVersion);
     std::string GetActivationPayload();
     std::unique_ptr<Http> SetupHttp();
+    int IsNeedAuth();
 };
 
 #endif // _OTA_H

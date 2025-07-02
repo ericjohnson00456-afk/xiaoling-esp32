@@ -350,6 +350,12 @@ void LcdDisplay::SetupUI() {
     // We'll create chat messages dynamically in SetChatMessage
     chat_message_label_ = nullptr;
 
+    // Create preview image for QR codes and other images
+    preview_image_ = lv_image_create(content_);
+    lv_obj_set_size(preview_image_, width_ * 0.5, height_ * 0.5);
+    lv_obj_align(preview_image_, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_add_flag(preview_image_, LV_OBJ_FLAG_HIDDEN);
+
     /* Status bar */
     lv_obj_set_flex_flow(status_bar_, LV_FLEX_FLOW_ROW);
     lv_obj_set_style_pad_all(status_bar_, 0, 0);
@@ -814,11 +820,19 @@ void LcdDisplay::SetPreviewImage(const lv_img_dsc_t* img_dsc) {
     }
     
     if (img_dsc != nullptr) {
-        // zoom factor 0.5
-        lv_image_set_scale(preview_image_, 128 * width_ / img_dsc->header.w);
-        // 设置图片源并显示预览图片
-        lv_image_set_src(preview_image_, img_dsc);
-        lv_obj_clear_flag(preview_image_, LV_OBJ_FLAG_HIDDEN);
+        // Check if image dimensions are valid to avoid division by zero
+        if (img_dsc->header.w > 0 && img_dsc->header.h > 0) {
+            // zoom factor 0.5
+            lv_image_set_scale(preview_image_, 128 * width_ / img_dsc->header.w);
+            // 设置图片源并显示预览图片
+            lv_image_set_src(preview_image_, img_dsc);
+            lv_obj_clear_flag(preview_image_, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            ESP_LOGW(TAG, "Invalid image dimensions: %dx%d, cannot display", 
+                     img_dsc->header.w, img_dsc->header.h);
+            // Hide the preview image if dimensions are invalid
+            lv_obj_add_flag(preview_image_, LV_OBJ_FLAG_HIDDEN);
+        }
         // 隐藏emotion_label_
         if (emotion_label_ != nullptr) {
             lv_obj_add_flag(emotion_label_, LV_OBJ_FLAG_HIDDEN);
@@ -832,6 +846,43 @@ void LcdDisplay::SetPreviewImage(const lv_img_dsc_t* img_dsc) {
     }
 }
 #endif
+
+void LcdDisplay::SetImage(const lv_img_dsc_t* img_dsc,uint8_t external_zoom){
+    DisplayLockGuard lock(this);
+    if (preview_image_ == nullptr) {
+        return;
+    }
+    
+    if (img_dsc != nullptr) {
+                // Check if image dimensions are valid to avoid division by zero
+        if (img_dsc->header.w > 0 && img_dsc->header.h > 0) {
+            // zoom factor 0.5
+            // 处理缩放参数，如果external_zoom为0则使用默认100%
+            uint8_t zoom = external_zoom == 0 ? 100 : external_zoom;
+            lv_image_set_scale(preview_image_, 128 * width_ / img_dsc->header.w * zoom / 100);
+            // 重新居中对齐图片，移除垂直偏移
+            lv_obj_align(preview_image_, LV_ALIGN_CENTER, 0, 0);
+            // 设置图片源并显示预览图片
+            lv_image_set_src(preview_image_, img_dsc);
+            lv_obj_clear_flag(preview_image_, LV_OBJ_FLAG_HIDDEN);
+                    } else {
+            ESP_LOGW(TAG, "Invalid image dimensions: %dx%d, cannot display", 
+                     img_dsc->header.w, img_dsc->header.h);
+            // Hide the preview image if dimensions are invalid
+            lv_obj_add_flag(preview_image_, LV_OBJ_FLAG_HIDDEN);
+        }
+        // 隐藏emotion_label_
+        if (emotion_label_ != nullptr) {
+            lv_obj_add_flag(emotion_label_, LV_OBJ_FLAG_HIDDEN);
+        }
+    } else {
+        // 隐藏预览图片并显示emotion_label_
+        lv_obj_add_flag(preview_image_, LV_OBJ_FLAG_HIDDEN);
+        if (emotion_label_ != nullptr) {
+            lv_obj_clear_flag(emotion_label_, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+}
 
 void LcdDisplay::SetEmotion(const char* emotion) {
     struct Emotion {

@@ -49,6 +49,28 @@ std::string Ota::GetCheckVersionUrl() {
     return url;
 }
 
+
+int Ota::IsNeedAuth() {
+    // Get authentication configuration
+    Settings settings("auth", true);
+    int force_auth = settings.GetInt("force_auth");
+    if(force_auth) {
+        settings.SetInt("force_auth", 0);
+    }
+    return force_auth;
+}
+
+void Ota::ResetAuthStatus() {
+    // Reset authentication status
+    {
+        Settings settings("auth", true);
+        settings.SetInt("force_auth", 1);
+    }
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    // Reboot the device
+    esp_restart();
+}
+
 std::unique_ptr<Http> Ota::SetupHttp() {
     auto& board = Board::GetInstance();
     auto app_desc = esp_app_get_description();
@@ -64,6 +86,14 @@ std::unique_ptr<Http> Ota::SetupHttp() {
     http->SetHeader("User-Agent", std::string(BOARD_NAME "/") + app_desc->version);
     http->SetHeader("Accept-Language", Lang::CODE);
     http->SetHeader("Content-Type", "application/json");
+
+#if CONFIG_USE_LSPLATFORM
+
+    if(IsNeedAuth()) {
+        ESP_LOGD(TAG, "force-reset:  1");
+        http->SetHeader("force-reset", "1");
+    }
+#endif
 
     return http;
 }
@@ -109,6 +139,7 @@ bool Ota::CheckVersion() {
     // Parse the JSON response and check if the version is newer
     // If it is, set has_new_version_ to true and store the new version and URL
     
+    ESP_LOGI(TAG, "Received response: %s", data.c_str());
     cJSON *root = cJSON_Parse(data.c_str());
     if (root == NULL) {
         ESP_LOGE(TAG, "Failed to parse JSON response");
@@ -136,6 +167,11 @@ bool Ota::CheckVersion() {
         cJSON* timeout_ms = cJSON_GetObjectItem(activation, "timeout_ms");
         if (cJSON_IsNumber(timeout_ms)) {
             activation_timeout_ms_ = timeout_ms->valueint;
+        }
+        cJSON* qrcode = cJSON_GetObjectItem(activation, "qrcode");
+        if (cJSON_IsString(qrcode)) {
+            activation_qrcode_ = qrcode->valuestring;
+            has_activation_qrcode_ = true;
         }
     }
 

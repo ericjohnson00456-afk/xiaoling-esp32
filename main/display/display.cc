@@ -255,6 +255,14 @@ void Display::SetPreviewImage(const lv_img_dsc_t* image) {
     // Do nothing
 }
 
+/*
+* image: 图像数据
+* external_zoom: 额外的缩放百分比，显示时本身会自适应，该参数是在自适应后，再额外缩放一下
+*/
+void Display::SetImage(const lv_img_dsc_t* image, uint8_t external_zoom) {
+    // Do nothing
+}
+
 void Display::SetChatMessage(const char* role, const char* content) {
     DisplayLockGuard lock(this);
     if (chat_message_label_ == nullptr) {
