@@ -10,6 +10,9 @@
 #include <stdexcept>
 #include <thread>
 
+#include <lvgl.h>
+#include <esp_jpeg_dec.h>
+
 #include <cJSON.h>
 
 // 添加类型别名
@@ -276,6 +279,9 @@ private:
 
     std::vector<McpTool*> tools_;
     std::thread tool_call_thread_;
+
+    lv_img_dsc_t network_image_;
+    void FetchNetworkImage(const std::string &url);
 };
 
 #endif // MCP_SERVER_H

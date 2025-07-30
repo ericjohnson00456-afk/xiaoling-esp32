@@ -81,6 +81,19 @@ void McpServer::AddCommonTools() {
                 display->SetTheme(properties["theme"].value<std::string>().c_str());
                 return true;
             });
+
+        AddTool("self.show_image",
+            "Show an image on the screen. Use this tool if you want to show something to the user.\n"
+            "Args:\n"
+            "  `url`: The URL of the image to show.",
+            PropertyList({
+                Property("url", kPropertyTypeString)
+            }),
+            [this](const PropertyList& properties) -> ReturnValue {
+                auto url = properties["url"].value<std::string>();
+                FetchNetworkImage(url);
+                return true;
+            });
     }
 
     auto camera = board.GetCamera();
@@ -364,4 +377,172 @@ void McpServer::DoToolCall(int id, const std::string& tool_name, const cJSON* to
         }
     });
     tool_call_thread_.detach();
+}
+
+void McpServer::FetchNetworkImage(const std::string &url) {
+    int ret;
+
+    ESP_LOGI(TAG, "Fetching network image from %s", url.c_str());
+
+    try {
+        auto network = Board::GetInstance().GetNetwork();
+        if (!network) {
+            ESP_LOGE(TAG, "Network not available");
+            return;
+        }
+
+        auto http = network->CreateHttp();
+        if (!http) {
+            ESP_LOGE(TAG, "Failed to create HTTP client");
+            return;
+        }
+
+        http->SetTimeout(15000);
+        http->SetHeader("User-Agent", "XiaoZhi-ESP32/1.0");
+
+        if (!http->Open("GET", url)) {
+            ESP_LOGE(TAG, "Failed to connect to %s", url.c_str());
+            return;
+        }
+
+        int status_code = http->GetStatusCode();
+        ESP_LOGI(TAG, "HTTP status code: %d", status_code);
+
+        if (status_code != 200) {
+            ESP_LOGE(TAG, "HTTP error: %d", status_code);
+            http->Close();
+            return;
+        }
+
+        std::string image_data = http->ReadAll();
+        http->Close();
+
+        if (image_data.empty()) {
+            ESP_LOGE(TAG, "No image data received");
+            return;
+        }
+
+        if (image_data.size() > 2 * 1024 * 1024) {  // 2MB limit
+            ESP_LOGE(TAG, "Image too large: %u bytes", image_data.size());
+            return;
+        }
+
+        ESP_LOGI(TAG, "Downloaded image data: %u bytes", image_data.size());
+
+        if (image_data.empty() || image_data.size() < 10 ||
+            image_data[0] != 0xFF || image_data[1] != 0xD8) {
+            ESP_LOGE(TAG, "Invalid JPEG header");
+            return;
+        }
+
+        jpeg_dec_config_t config = {
+            .output_type = JPEG_PIXEL_FORMAT_RGB565_LE,
+            .rotate = JPEG_ROTATE_0D,
+        };
+
+        jpeg_dec_handle_t jpeg_dec = NULL;
+        ret = jpeg_dec_open(&config, &jpeg_dec);
+        if (ret != JPEG_ERR_OK) {
+            ESP_LOGE(TAG, "Failed to open JPEG decoder, ret: %d", ret);
+            return;
+        }
+
+        jpeg_dec_io_t* jpeg_io = (jpeg_dec_io_t*)heap_caps_malloc(sizeof(jpeg_dec_io_t), MALLOC_CAP_SPIRAM);
+        if (!jpeg_io) {
+            ESP_LOGE(TAG, "Failed to allocate memory for JPEG IO");
+            jpeg_dec_close(jpeg_dec);
+            return;
+        }
+        memset(jpeg_io, 0, sizeof(jpeg_dec_io_t));
+
+        jpeg_dec_header_info_t* out_info = (jpeg_dec_header_info_t*)heap_caps_aligned_alloc(16, sizeof(jpeg_dec_header_info_t), MALLOC_CAP_SPIRAM);
+        if (!out_info) {
+            ESP_LOGE(TAG, "Failed to allocate memory for JPEG output header");
+            heap_caps_free(jpeg_io);
+            jpeg_dec_close(jpeg_dec);
+            return;
+        }
+        memset(out_info, 0, sizeof(jpeg_dec_header_info_t));
+
+        jpeg_io->inbuf = (uint8_t*)image_data.data();
+        jpeg_io->inbuf_len = image_data.size();
+
+        ret = jpeg_dec_parse_header(jpeg_dec, jpeg_io, out_info);
+        if (ret != JPEG_ERR_OK) {
+            ESP_LOGE(TAG, "Failed to parse JPEG header, ret: %d", ret);
+            heap_caps_free(out_info);
+            heap_caps_free(jpeg_io);
+            jpeg_dec_close(jpeg_dec);
+            return;
+        }
+
+        ESP_LOGI(TAG, "JPEG info: %dx%d pixels", out_info->width, out_info->height);
+
+        if (out_info->width <= 0 || out_info->height <= 0 || 
+            out_info->width > 640 || out_info->height > 480) {
+            ESP_LOGE(TAG, "Invalid JPEG dimensions: %dx%d", out_info->width, out_info->height);
+            heap_caps_free(out_info);
+            heap_caps_free(jpeg_io);
+            jpeg_dec_close(jpeg_dec);
+            return;
+        }
+
+        size_t output_size = out_info->width * out_info->height * 2; // RGB565
+        ESP_LOGI(TAG, "Allocating %u bytes for RGB data", output_size);
+
+        uint8_t* rgb_data = (uint8_t*)heap_caps_aligned_alloc(16, output_size, 
+            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+
+        if (!rgb_data) {
+            ESP_LOGE(TAG, "Failed to allocate memory for RGB data (%u bytes)", output_size);
+            heap_caps_free(out_info);
+            heap_caps_free(jpeg_io);
+            jpeg_dec_close(jpeg_dec);
+            return;
+        }
+
+        jpeg_io->outbuf = rgb_data;
+        int inbuf_consumed = jpeg_io->inbuf_len - jpeg_io->inbuf_remain;
+        jpeg_io->inbuf = (uint8_t*)image_data.data() + inbuf_consumed;
+        jpeg_io->inbuf_len = jpeg_io->inbuf_remain;
+
+        ESP_LOGI(TAG, "Starting JPEG decode process...");
+        ret = jpeg_dec_process(jpeg_dec, jpeg_io);
+        if (ret != JPEG_ERR_OK) {
+            ESP_LOGE(TAG, "Failed to decode JPEG, ret: %d", ret);
+            heap_caps_free(rgb_data);
+            heap_caps_free(out_info);
+            heap_caps_free(jpeg_io);
+            jpeg_dec_close(jpeg_dec);
+            return;
+        }
+
+        ESP_LOGI(TAG, "JPEG decode successful");
+
+        memset(&network_image_, 0, sizeof(network_image_));
+        network_image_.header.magic = LV_IMAGE_HEADER_MAGIC;
+        network_image_.header.cf = LV_COLOR_FORMAT_RGB565;
+        network_image_.header.flags = LV_IMAGE_FLAGS_ALLOCATED | LV_IMAGE_FLAGS_MODIFIABLE;
+        network_image_.header.w = out_info->width;
+        network_image_.header.h = out_info->height;
+        network_image_.header.stride = out_info->width * 2; // RGB565 = 2 bytes per pixel
+        network_image_.data_size = out_info->width * out_info->height * 2;
+        network_image_.data = rgb_data;
+
+        auto display = Board::GetInstance().GetDisplay();
+        if (display) {
+            display->SetPreviewImage(&network_image_);
+        } else {
+            ESP_LOGE(TAG, "Display not available");
+        }
+
+        // heap_caps_free(rgb_data);
+        heap_caps_free(out_info);
+        heap_caps_free(jpeg_io);
+        jpeg_dec_close(jpeg_dec);
+    } catch (const std::exception& e) {
+        ESP_LOGE(TAG, "Exception in FetchNetworkImage: %s", e.what());
+    } catch (...) {
+        ESP_LOGE(TAG, "Unknown exception in FetchNetworkImage");
+    }
 }
