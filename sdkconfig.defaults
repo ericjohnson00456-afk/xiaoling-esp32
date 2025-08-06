@@ -74,6 +74,6 @@ CONFIG_LV_USE_WIN=n
 CONFIG_LV_BUILD_EXAMPLES=n
 
 # LISTENAI flavor
-CONFIG_OTA_URL="https://staging-api.listenai.com/v1/xiaoling/ota/"
+CONFIG_OTA_URL="https://api.listenai.com/v1/xiaoling/ota/"
 CONFIG_BOARD_TYPE_ESP32S3_KORVO2_V3=y
 CONFIG_USE_WECHAT_MESSAGE_STYLE=y

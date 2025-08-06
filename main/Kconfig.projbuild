@@ -9,7 +9,7 @@ config USE_LSPLATFORM
 
 config OTA_URL
     string "Default OTA URL"
-    default "https://staging-api.listenai.com/v1/xiaoling/ota/"
+    default "https://api.listenai.com/v1/xiaoling/ota/"
     help
         The application will access this URL to check for new firmwares and server address.原小智URL为"https://api.tenclass.net/xiaozhi/ota/"
 
