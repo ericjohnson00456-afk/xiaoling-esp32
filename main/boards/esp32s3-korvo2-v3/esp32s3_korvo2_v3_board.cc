@@ -14,6 +14,7 @@
 #include <driver/spi_common.h>
 #include <wifi_station.h>
 #include "esp32_camera.h"
+#include "ota.h"
 
 #define TAG "esp32s3_korvo2_v3"
 
@@ -133,11 +134,19 @@ private:
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
+            ESP_LOGI(TAG, "Boot button clicked");
             auto& app = Application::GetInstance();
-            if (app.GetDeviceState() == kDeviceStateStarting && !WifiStation::GetInstance().IsConnected()) {
+            if (app.GetDeviceState() != kDeviceStateWifiConfiguring) {
+                app.ToggleChatState();
+            }
+        });
+        boot_button_.OnLongPress([this]() {
+            auto& app = Application::GetInstance();
+            ESP_LOGI(TAG, "Boot button long pressed %d", app.GetDeviceState());
+            if (app.GetDeviceState() != kDeviceStateWifiConfiguring) {
+                Ota::ResetAuthStatus();
                 ResetWifiConfiguration();
             }
-            app.ToggleChatState();
         });
 
 #if CONFIG_USE_DEVICE_AEC

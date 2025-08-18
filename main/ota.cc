@@ -68,7 +68,7 @@ void Ota::ResetAuthStatus() {
     }
     vTaskDelay(pdMS_TO_TICKS(1000));
     // Reboot the device
-    esp_restart();
+    // esp_restart();
 }
 
 std::unique_ptr<Http> Ota::SetupHttp() {
