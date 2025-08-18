@@ -3,6 +3,7 @@
 #include "codecs/no_audio_codec.h"
 #include "display/lcd_display.h"
 #include "application.h"
+#include "ota.h"
 #include "button.h"
 #include "config.h"
 #include "led/single_led.h"
@@ -132,6 +133,88 @@ public:
     }
 };
 
+class XL9555Button {
+private:
+    XL9555_IN* xl9555_;
+    uint16_t pin_mask_;
+    std::function<void()> on_click_;
+    std::function<void()> on_long_press_;
+    bool is_pressed_;
+    bool is_long_press_;
+    int64_t press_start_time_;
+    TimerHandle_t long_press_timer_;
+    
+    // 定时器回调函数
+    static void long_press_timer_callback(TimerHandle_t timer) {
+        XL9555Button* self = static_cast<XL9555Button*>(pvTimerGetTimerID(timer));
+        if (self->is_pressed_ && !self->is_long_press_) {
+            self->is_long_press_ = true;
+            if (self->on_long_press_) {
+                self->on_long_press_();
+            }
+        }
+    }
+    
+public:
+    XL9555Button(XL9555_IN* xl9555, uint16_t pin_mask) 
+        : xl9555_(xl9555), pin_mask_(pin_mask), is_pressed_(false), is_long_press_(false), press_start_time_(0) {
+        // 创建长按定时器 (1000ms)
+        long_press_timer_ = xTimerCreate("LongPressTimer", pdMS_TO_TICKS(3000), pdFALSE, this, long_press_timer_callback);
+    }
+    
+    ~XL9555Button() {
+        // 清理定时器和回调函数
+        if (long_press_timer_) {
+            xTimerDelete(long_press_timer_, 0);
+        }
+        on_click_ = nullptr;
+        on_long_press_ = nullptr;
+    }
+    
+    void OnClick(std::function<void()> callback) { 
+        on_click_ = callback; 
+    }
+    
+    void OnLongPress(std::function<void()> callback) { 
+        on_long_press_ = callback; 
+    }
+    
+    void HandleInterrupt() {
+        bool current_state = xl9555_->GetPingState(pin_mask_) == 0; // 1表示按键按下，0表示按键释放
+        
+        if (current_state && !is_pressed_) {
+            // 按键按下
+            is_pressed_ = true;
+            is_long_press_ = false;
+            press_start_time_ = esp_timer_get_time() / 1000;
+            
+            // 启动长按定时器
+            if (long_press_timer_) {
+                xTimerStart(long_press_timer_, 0);
+            }
+        } else if (!current_state && is_pressed_) {
+            // 按键释放
+            is_pressed_ = false;
+            
+            // 停止长按定时器
+            if (long_press_timer_) {
+                xTimerStop(long_press_timer_, 0);
+            }
+            
+            // 如果不是长按，则触发短按事件
+            if (!is_long_press_) {
+                int64_t press_duration = esp_timer_get_time() / 1000 - press_start_time_;
+                if (press_duration > 50) { // 去抖动
+                    if (on_click_) on_click_();
+                }
+            }
+            
+            // 重置长按标志
+            is_long_press_ = false;
+        }
+    }
+};
+
 class atk_dnesp32s3_box : public WifiBoard {
 private:
     i2c_master_bus_handle_t i2c_bus_;
@@ -140,7 +223,35 @@ private:
     LcdDisplay* display_;
     XL9555_IN* xl9555_in_;
     bool es8311_detected_ = false;
-    USB_Esp32Camera* camera_;
+    USB_Esp32Camera* camera_ = nullptr;  // 摄像头对象
+
+    // XL9555扩展按键
+    XL9555Button* ext_button1_;  // P0.3
+    XL9555Button* ext_button2_;  // P0.4
+    TaskHandle_t button_task_handle_;
+    
+    // GPIO中断处理函数
+    static void IRAM_ATTR xl9555_isr_handler(void* arg) {
+        auto* self = static_cast<atk_dnesp32s3_box*>(arg);
+        // 在中断中只设置标志，具体处理放到任务中
+        BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+        xTaskNotifyFromISR(self->button_task_handle_, 1, eSetBits, &xHigherPriorityTaskWoken);
+        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+    }
+    
+    // 按键处理任务
+    static void button_task(void* param) {
+        auto* self = static_cast<atk_dnesp32s3_box*>(param);
+        uint32_t ulNotificationValue;
+        
+        while (1) {
+            if (xTaskNotifyWait(0, ULONG_MAX, &ulNotificationValue, portMAX_DELAY) == pdTRUE) {
+                // 处理XL9555中断
+                self->ext_button1_->HandleInterrupt();
+                self->ext_button2_->HandleInterrupt();
+            }
+        }
+    }
     
     void InitializeI2c() {
         // Initialize I2C peripheral
@@ -259,14 +370,66 @@ private:
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
+            ESP_LOGI(TAG, "Boot button clicked");
             auto& app = Application::GetInstance();
-            if (app.GetDeviceState() == kDeviceStateStarting && !WifiStation::GetInstance().IsConnected()) {
+            if (app.GetDeviceState() != kDeviceStateWifiConfiguring) {
+                app.ToggleChatState();
+            }
+        });
+        boot_button_.OnLongPress([this]() {
+            auto& app = Application::GetInstance();
+            ESP_LOGI(TAG, "Boot button long pressed %d", app.GetDeviceState());
+            if (app.GetDeviceState() != kDeviceStateWifiConfiguring) {
                 ResetWifiConfiguration();
             }
-            app.ToggleChatState();
         });
+        
+        // 初始化XL9555扩展按键
+        ext_button1_ = new XL9555Button(xl9555_in_, 0x0010); // P0.4
+        ext_button2_ = new XL9555Button(xl9555_in_, 0x0008); // P0.3
+        
+        ext_button1_->OnClick([this]() {
+            ESP_LOGI(TAG, "Extension button 1 clicked");
+            // 添加按键1功能 - 例如音量减
+            auto& app = Application::GetInstance();
+            // 可以添加自定义功能
+        });
+        
+        ext_button1_->OnLongPress([this]() {
+            ESP_LOGI(TAG, "Extension button 1 long pressed，reset auth");
+            Ota::ResetAuthStatus();
+            // 添加按键1长按功能
+        });
+        
+        ext_button2_->OnClick([this]() {
+            ESP_LOGI(TAG, "Extension button 2 clicked");
+            // 添加按键2功能 - 例如音量加
+            auto& app = Application::GetInstance();
+            // 可以添加自定义功能
+        });
+        
+        ext_button2_->OnLongPress([this]() {
+            ESP_LOGI(TAG, "Extension button 2 long pressed");
+            // 添加按键2长按功能
+        });
+        
+        // 创建按键处理任务
+        xTaskCreate(button_task, "ButtonTask", 2048, this, 10, &button_task_handle_);
+        
+        // 配置XL9555的INT引脚 (GPIO3)
+        gpio_config_t int_config = {
+            .pin_bit_mask = 1ULL << GPIO_NUM_3,
+            .mode = GPIO_MODE_INPUT,
+            .pull_up_en = GPIO_PULLUP_ENABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type = GPIO_INTR_NEGEDGE // 下降沿触发
+        };
+        gpio_config(&int_config);
+        
+        // 安装GPIO中断
+        gpio_install_isr_service(0);
+        gpio_isr_handler_add(GPIO_NUM_3, xl9555_isr_handler, this);
     }
-
     void InitializeCamera() {
         camera_ = new USB_Esp32Camera(); 
     }
