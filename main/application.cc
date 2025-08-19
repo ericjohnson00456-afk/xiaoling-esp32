@@ -984,7 +984,11 @@ void Application::ShowJPEG(const std::string& image_data) {
     img_dsc.data_size = output_size;
     img_dsc.data = decoded_rgb_data.data();
     
-    display->SetImage(&img_dsc, 80);
+    display->SetContentAlignment(ContentAlignment::CENTER);
+    //  上边距50，下边距20，左边距10，右边距10
+    display->SetContentPadding(30, 0, 0, 0); 
+    // 70%缩放
+    display->SetImage(&img_dsc, 70); 
     ESP_LOGI(TAG, "JPEG image decoded and displayed successfully (%d bytes -> %d bytes)", 
-                (int)image_data.size(), (int)output_size);
+        (int)image_data.size(), (int)output_size);
 }

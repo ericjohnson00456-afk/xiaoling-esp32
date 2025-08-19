@@ -263,6 +263,14 @@ void Display::SetImage(const lv_img_dsc_t* image, uint8_t external_zoom) {
     // Do nothing
 }
 
+void Display::SetContentAlignment(ContentAlignment alignment) {
+    // Do nothing
+}
+
+void Display::SetContentPadding(int top, int bottom, int left, int right) {
+    // Do nothing
+}
+
 void Display::SetChatMessage(const char* role, const char* content) {
     DisplayLockGuard lock(this);
     if (chat_message_label_ == nullptr) {

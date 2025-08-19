@@ -15,6 +15,12 @@ struct DisplayFonts {
     const lv_font_t* emoji_font = nullptr;
 };
 
+enum class ContentAlignment {
+    LEFT,      // 内容左对齐
+    CENTER,    // 内容居中对齐
+    RIGHT      // 内容右对齐
+};
+
 class Display {
 public:
     Display();
@@ -28,6 +34,8 @@ public:
     virtual void SetIcon(const char* icon);
     virtual void SetPreviewImage(const lv_img_dsc_t* image);
     virtual void SetImage(const lv_img_dsc_t* image, uint8_t external_zoom);
+    virtual void SetContentAlignment(ContentAlignment alignment);
+    virtual void SetContentPadding(int top, int bottom, int left, int right);
     virtual void SetTheme(const std::string& theme_name);
     virtual std::string GetTheme() { return current_theme_name_; }
     virtual void UpdateStatusBar(bool update_all = false);
