@@ -413,11 +413,28 @@ bool Ota::StartUpgrade(std::function<void(int progress, size_t speed)> callback)
 
 std::vector<int> Ota::ParseVersion(const std::string& version) {
     std::vector<int> versionNumbers;
-    std::stringstream ss(version);
+    std::string ver = version;
+    
+    // Support "vx.y.z" or "Vx.y.z" formats by removing v/V prefix
+    if (!ver.empty() && (ver[0] == 'v' || ver[0] == 'V')) {
+        ver = ver.substr(1);
+    }
+    
+    std::stringstream ss(ver);
     std::string segment;
     
     while (std::getline(ss, segment, '.')) {
-        versionNumbers.push_back(std::stoi(segment));
+        if (segment.empty()) {
+            continue;  // Skip empty segments
+        }
+
+        try {
+            versionNumbers.push_back(std::stoi(segment));
+        } catch (const std::invalid_argument& e) {
+            ESP_LOGW(TAG, "Invalid version segment: '%s' (not a number)", segment.c_str());
+        } catch (const std::out_of_range& e) {
+            ESP_LOGW(TAG, "Version segment out of range: '%s'", segment.c_str());
+        }
     }
     
     return versionNumbers;
