@@ -50,7 +50,7 @@ def release_current():
     print("project version:", project_version)
     zip_bin(board_type, project_version)
 
-def get_all_board_types():
+def get_all_board_types(config_filename="config.json"):
     board_configs = {}
     with open("main/CMakeLists.txt", encoding='utf-8') as f:
         lines = f.readlines()
@@ -62,6 +62,9 @@ def get_all_board_types():
                 next_line = lines[i + 1].strip()
                 if next_line.startswith("set(BOARD_TYPE"):
                     board_type = next_line.split('"')[1]
+                    config_path = f"main/boards/{board_type}/{config_filename}"
+                    if not os.path.exists(config_path):
+                        continue
                     board_configs[config_name] = board_type
     return board_configs
 
@@ -128,7 +131,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.list_boards:
-        board_configs = get_all_board_types()
+        board_configs = get_all_board_types(config_filename=args.config)
         boards = list(board_configs.values())
         if args.json:
             print(json.dumps(boards))
