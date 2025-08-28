@@ -412,6 +412,10 @@ void LcdDisplay::SetupUI() {
     lv_obj_set_style_text_color(low_battery_label_, lv_color_white(), 0);
     lv_obj_center(low_battery_label_);
     lv_obj_add_flag(low_battery_popup_, LV_OBJ_FLAG_HIDDEN);
+
+#ifdef CONFIG_LSPLATFORM
+    SetupActivationUI();
+#endif // CONFIG_LSPLATFORM
 }
 #if CONFIG_IDF_TARGET_ESP32P4
 #define  MAX_MESSAGES 40
@@ -805,6 +809,10 @@ void LcdDisplay::SetupUI() {
     lv_obj_set_style_text_color(low_battery_label_, lv_color_white(), 0);
     lv_obj_center(low_battery_label_);
     lv_obj_add_flag(low_battery_popup_, LV_OBJ_FLAG_HIDDEN);
+
+#ifdef CONFIG_LSPLATFORM
+    SetupActivationUI();
+#endif // CONFIG_LSPLATFORM
 }
 
 void LcdDisplay::SetPreviewImage(const lv_img_dsc_t* img_dsc) {
@@ -1101,3 +1109,57 @@ void LcdDisplay::SetTheme(const std::string& theme_name) {
     // No errors occurred. Save theme to settings
     Display::SetTheme(theme_name);
 }
+
+#ifdef CONFIG_LSPLATFORM
+void LcdDisplay::SetupActivationUI() {
+    DisplayLockGuard lock(this);
+
+    activation_container_ = lv_obj_create(container_);
+    lv_obj_set_scrollbar_mode(activation_container_, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_set_width(activation_container_, LV_HOR_RES);
+    lv_obj_set_flex_grow(activation_container_, 1);
+    lv_obj_set_flex_flow(activation_container_, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(activation_container_, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_SPACE_EVENLY);
+    lv_obj_set_style_radius(activation_container_, 0, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(activation_container_, current_theme_.background, LV_PART_MAIN);
+    lv_obj_set_style_text_color(activation_container_, current_theme_.text, LV_PART_MAIN);
+    lv_obj_add_flag(activation_container_, LV_OBJ_FLAG_HIDDEN);
+
+    activation_qrcode_ = lv_image_create(activation_container_);
+    lv_obj_set_size(activation_qrcode_, LV_HOR_RES, LV_SIZE_CONTENT);
+
+    activation_message_ = lv_label_create(activation_container_);
+    lv_obj_set_size(activation_message_, LV_HOR_RES, LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_hor(activation_message_, 16, LV_PART_MAIN);
+    lv_label_set_long_mode(activation_message_, LV_LABEL_LONG_WRAP);
+}
+
+void LcdDisplay::ShowActivation(const lv_img_dsc_t* qrcode, const std::string& message) {
+    DisplayLockGuard lock(this);
+    if (activation_container_ == nullptr || activation_qrcode_ == nullptr || activation_message_ == nullptr) {
+        return;
+    }
+
+    lv_obj_add_flag(content_, LV_OBJ_FLAG_HIDDEN);
+
+    lv_image_set_src(activation_qrcode_, qrcode);
+    lv_image_set_scale(activation_qrcode_, 64);  // 256/4
+    lv_obj_set_size(activation_qrcode_, LV_HOR_RES, qrcode->header.h / 4);
+
+    lv_label_set_text(activation_message_, message.c_str());
+
+    lv_obj_remove_flag(activation_container_, LV_OBJ_FLAG_HIDDEN);
+}
+
+void LcdDisplay::DismissActivation() {
+    DisplayLockGuard lock(this);
+    if (activation_container_ == nullptr) {
+        return;
+    }
+
+    lv_obj_add_flag(activation_container_, LV_OBJ_FLAG_HIDDEN);
+    lv_image_set_src(activation_qrcode_, NULL);
+
+    lv_obj_remove_flag(content_, LV_OBJ_FLAG_HIDDEN);
+}
+#endif // CONFIG_LSPLATFORM

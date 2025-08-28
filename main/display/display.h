@@ -32,6 +32,11 @@ public:
     virtual void UpdateStatusBar(bool update_all = false);
     virtual void SetPowerSaveMode(bool on);
 
+#ifdef CONFIG_LSPLATFORM
+    virtual void ShowActivation(const lv_img_dsc_t* qrcode, const std::string& message) {};
+    virtual void DismissActivation() {};
+#endif // CONFIG_LSPLATFORM
+
     inline int width() const { return width_; }
     inline int height() const { return height_; }
 

@@ -28,6 +28,10 @@ public:
     const std::string& GetActivationMessage() const { return activation_message_; }
     const std::string& GetActivationCode() const { return activation_code_; }
     std::string GetCheckVersionUrl();
+#ifdef CONFIG_LSPLATFORM
+    bool HasACtivationQRCode() { return has_activation_qrcode_; }
+    const std::string& GetActivationQRCode() const {return activation_qrcode_; }
+#endif // CONFIG_LSPLATFORM
 
 private:
     std::string activation_message_;
@@ -45,6 +49,10 @@ private:
     std::string activation_challenge_;
     std::string serial_number_;
     int activation_timeout_ms_ = 30000;
+#ifdef CONFIG_LSPLATFORM
+    bool has_activation_qrcode_ = false;
+    std::string activation_qrcode_;
+#endif // CONFIG_LSPLATFORM
 
     bool Upgrade(const std::string& firmware_url);
     std::function<void(int progress, size_t speed)> upgrade_callback_;

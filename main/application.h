@@ -83,7 +83,7 @@ private:
 
     void OnWakeWordDetected();
     void CheckNewVersion(Ota& ota);
-    void ShowActivationCode(const std::string& code, const std::string& message);
+    void ShowActivationCode(const std::string& code, const std::string& message, const std::string& qrcode = "");
     void OnClockTimer();
     void SetListeningMode(ListeningMode mode);
 };

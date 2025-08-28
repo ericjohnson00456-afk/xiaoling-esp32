@@ -143,6 +143,13 @@ bool Ota::CheckVersion() {
         if (cJSON_IsNumber(timeout_ms)) {
             activation_timeout_ms_ = timeout_ms->valueint;
         }
+#ifdef CONFIG_LSPLATFORM
+        cJSON* qrcode = cJSON_GetObjectItem(activation, "qrcode");
+        if (cJSON_IsString(qrcode)) {
+            activation_qrcode_ = qrcode->valuestring;
+            has_activation_qrcode_ = true;
+        }
+#endif // CONFIG_LSPLATFORM
     }
 
     has_mqtt_config_ = false;

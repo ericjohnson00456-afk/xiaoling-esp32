@@ -73,6 +73,7 @@ dependencies:
     version: ^0.1.8
     rules:
     - if: target in [esp32c3]
+  espressif/esp_new_jpeg: ^0.5.*
 
   ## Required IDF version
   idf:

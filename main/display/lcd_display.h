@@ -35,6 +35,12 @@ protected:
     lv_obj_t* side_bar_ = nullptr;
     lv_obj_t* preview_image_ = nullptr;
 
+#ifdef CONFIG_LSPLATFORM
+    lv_obj_t* activation_container_ = nullptr;
+    lv_obj_t* activation_qrcode_ = nullptr;
+    lv_obj_t* activation_message_ = nullptr;
+#endif // CONFIG_LSPLATFORM
+
     DisplayFonts fonts_;
     ThemeColors current_theme_;
 
@@ -57,6 +63,12 @@ public:
 
     // Add theme switching function
     virtual void SetTheme(const std::string& theme_name) override;
+
+#ifdef CONFIG_LSPLATFORM
+    void SetupActivationUI();
+    virtual void ShowActivation(const lv_img_dsc_t* qrcode, const std::string& message) override;
+    virtual void DismissActivation() override;
+#endif // CONFIG_LSPLATFORM
 };
 
 // RGB LCD显示器

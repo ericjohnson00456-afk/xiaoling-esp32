@@ -9,6 +9,10 @@
 #include "assets/lang_config.h"
 #include "mcp_server.h"
 
+#ifdef CONFIG_LSPLATFORM
+#include "image_fetcher.h"
+#endif // CONFIG_LSPLATFORM
+
 #include <cstring>
 #include <esp_log.h>
 #include <cJSON.h>
@@ -154,7 +158,11 @@ void Application::CheckNewVersion(Ota& ota) {
         display->SetStatus(Lang::Strings::ACTIVATION);
         // Activation code is shown to the user and waiting for the user to input
         if (ota.HasActivationCode()) {
+#ifdef CONFIG_LSPLATFORM
+            ShowActivationCode(ota.GetActivationCode(), ota.GetActivationMessage(), ota.GetActivationQRCode());
+#else // !CONFIG_LSPLATFORM
             ShowActivationCode(ota.GetActivationCode(), ota.GetActivationMessage());
+#endif // CONFIG_LSPLATFORM
         }
 
         // This will block the loop until the activation is done or timeout
@@ -162,6 +170,10 @@ void Application::CheckNewVersion(Ota& ota) {
             ESP_LOGI(TAG, "Activating... %d/%d", i + 1, 10);
             esp_err_t err = ota.Activate();
             if (err == ESP_OK) {
+#ifdef CONFIG_LSPLATFORM
+                ESP_LOGI(TAG, "Activation successful, dismiss UI");
+                display->DismissActivation();
+#endif // CONFIG_LSPLATFORM
                 xEventGroupSetBits(event_group_, MAIN_EVENT_CHECK_NEW_VERSION_DONE);
                 break;
             } else if (err == ESP_ERR_TIMEOUT) {
@@ -176,7 +188,7 @@ void Application::CheckNewVersion(Ota& ota) {
     }
 }
 
-void Application::ShowActivationCode(const std::string& code, const std::string& message) {
+void Application::ShowActivationCode(const std::string& code, const std::string& message, const std::string& qrcode) {
     struct digit_sound {
         char digit;
         const std::string_view& sound;
@@ -194,8 +206,28 @@ void Application::ShowActivationCode(const std::string& code, const std::string&
         digit_sound{'9', Lang::Sounds::OGG_9}
     }};
 
+#ifdef CONFIG_LSPLATFORM
+    ESP_LOGI(TAG, "Showing activation code: %s, QR url: %s", code.c_str(), qrcode.c_str());
+    if (!qrcode.empty()) {
+        auto& board = Board::GetInstance();
+        auto fetcher = ImageFetcher::From(board.GetNetwork());
+        auto display = board.GetDisplay();
+        lv_img_dsc_t img_dsc;
+        if (fetcher.Fetch(qrcode, &img_dsc)) { 
+            display->ShowActivation(&img_dsc, message + code);
+        } else {
+            ESP_LOGE(TAG, "Failed to fetch QR code image");
+        }
+    } else {
+        ESP_LOGW(TAG, "QR code URL is empty, skipping image download");
+    }
+
+    audio_service_.PlaySound(Lang::Sounds::OGG_WECHAT_QRCODE);
+    audio_service_.PlaySound(Lang::Sounds::OGG_BINDING);
+#else // !CONFIG_LSPLATFORM
     // This sentence uses 9KB of SRAM, so we need to wait for it to finish
     Alert(Lang::Strings::ACTIVATION, message.c_str(), "happy", Lang::Sounds::OGG_ACTIVATION);
+#endif // CONFIG_LSPLATFORM
 
     for (const auto& digit : code) {
         auto it = std::find_if(digit_sounds.begin(), digit_sounds.end(),
