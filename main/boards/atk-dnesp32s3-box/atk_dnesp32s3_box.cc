@@ -7,6 +7,7 @@
 #include "config.h"
 #include "led/single_led.h"
 #include "i2c_device.h"
+#include "usb_esp32_camera.h"
 
 #include <wifi_station.h>
 #include <esp_log.h>
@@ -139,6 +140,7 @@ private:
     LcdDisplay* display_;
     XL9555_IN* xl9555_in_;
     bool es8311_detected_ = false;
+    USB_Esp32Camera* camera_;
     
     void InitializeI2c() {
         // Initialize I2C peripheral
@@ -265,6 +267,10 @@ private:
         });
     }
 
+    void InitializeCamera() {
+        camera_ = new USB_Esp32Camera(); 
+    }
+
 public:
     atk_dnesp32s3_box() : boot_button_(BOOT_BUTTON_GPIO) {
         InitializeI2c();
@@ -272,6 +278,7 @@ public:
         xl9555_in_->SetOutputState(5, 1);
         xl9555_in_->SetOutputState(7, 1);
         InitializeButtons();
+        InitializeCamera();
     }
 
     virtual AudioCodec* GetAudioCodec() override {
@@ -307,6 +314,10 @@ public:
     
     virtual Display* GetDisplay() override {
         return display_;
+    }
+
+    virtual Camera* GetCamera() override {
+        return camera_;
     }
 };
 
