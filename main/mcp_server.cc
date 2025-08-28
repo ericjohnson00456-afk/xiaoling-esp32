@@ -14,6 +14,11 @@
 #include "display.h"
 #include "board.h"
 
+#ifdef CONFIG_LSPLATFORM
+#include <lvgl.h>
+#include "image_fetcher.h"
+#endif // CONFIG_LSPLATFORM
+
 #define TAG "MCP"
 
 #define DEFAULT_TOOLCALL_STACK_SIZE 6144
@@ -81,6 +86,27 @@ void McpServer::AddCommonTools() {
                 display->SetTheme(properties["theme"].value<std::string>().c_str());
                 return true;
             });
+
+#ifdef CONFIG_LSPLATFORM
+        AddTool("self.show_image",
+            "Show an image on the screen. Use this tool if you want to show something to the user.\n"
+            "Args:\n"
+            "  `url`: The URL of the image to show.",
+            PropertyList({
+                Property("url", kPropertyTypeString)
+            }),
+            [&board, display](const PropertyList& properties) -> ReturnValue {
+                auto url = properties["url"].value<std::string>();
+                auto fetcher = ImageFetcher::From(board.GetNetwork());
+                lv_img_dsc_t img_dsc;
+                if (!fetcher.Fetch(url, &img_dsc)) {
+                    ESP_LOGE(TAG, "Failed to fetch image: %s", url.c_str());
+                    return false;
+                }
+                display->SetPreviewImage(&img_dsc);
+                return true;
+            });
+#endif // CONFIG_LSPLATFORM
     }
 
     auto camera = board.GetCamera();
