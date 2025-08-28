@@ -44,7 +44,11 @@ std::string Ota::GetCheckVersionUrl() {
     Settings settings("wifi", false);
     std::string url = settings.GetString("ota_url");
     if (url.empty()) {
+#ifdef CONFIG_LSPLATFORM
+        url = "https://api.listenai.com/v1/xiaoling/" CONFIG_LSPLATFORM_PRODUCT_ID "/ota/";
+#else // !CONFIG_LSPLATFORM
         url = CONFIG_OTA_URL;
+#endif // CONFIG_LSPLATFORM
     }
     return url;
 }

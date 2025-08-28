@@ -9,6 +9,11 @@ set(PROJECT_VER "1.8.9")
 # Add this line to disable the specific warning
 add_compile_options(-Wno-missing-field-initializers)
 
+if(NOT "$ENV{BUILD_XIAOZHI}" STREQUAL "1")
+    message(STATUS "Using sdkconfig defaults for LSPlatform")
+    set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.lsplatform")
+endif()
+
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(xiaozhi)
 

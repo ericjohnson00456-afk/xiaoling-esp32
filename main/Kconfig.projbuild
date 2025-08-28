@@ -1,11 +1,34 @@
 menu "Xiaozhi Assistant"
 
-config OTA_URL
-    string "Default OTA URL"
-    default "https://api.tenclass.net/xiaozhi/ota/"
+choice
+    prompt "服务提供方"
+    default SERVICE_PROVIDER_XIAOZHI
     help
-        The application will access this URL to check for new firmwares and server address.
+        选择服务提供方
+    config SERVICE_PROVIDER_XIAOZHI
+        bool "小智"
+    config SERVICE_PROVIDER_LSPLATFORM
+        bool "LSPlatform"
+endchoice
 
+if SERVICE_PROVIDER_XIAOZHI
+    config OTA_URL
+        string "Default OTA URL"
+        default "https://api.tenclass.net/xiaozhi/ota/"
+        help
+            The application will access this URL to check for new firmwares and server address.
+endif
+
+if SERVICE_PROVIDER_LSPLATFORM
+    config LSPLATFORM
+        bool
+        default y
+    config LSPLATFORM_PRODUCT_ID
+        string "LSPlatform Product ID"
+        default "ef22350d-6863-4814-8ed8-47c5b0c514a6"
+        help
+            LSPlatform 上的应用 product_id
+endif
 
 choice
     prompt "Default Language"
