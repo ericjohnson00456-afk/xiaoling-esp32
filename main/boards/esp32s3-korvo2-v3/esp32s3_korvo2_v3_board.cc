@@ -5,6 +5,7 @@
 #include "button.h"
 #include "config.h"
 #include "i2c_device.h"
+#include "assets/lang_config.h"
 
 #include <esp_log.h>
 #include <esp_lcd_panel_vendor.h>
@@ -19,6 +20,16 @@
 
 LV_FONT_DECLARE(font_puhui_20_4);
 LV_FONT_DECLARE(font_awesome_20_4);
+
+typedef enum {
+    ADC_BUTTON_REC,
+    ADC_BUTTON_MUTE,
+    ADC_BUTTON_PLAY,
+    ADC_BUTTON_SET,
+    ADC_BUTTON_VOLUME_DOWN,
+    ADC_BUTTON_VOLUME_UP,
+    ADC_BUTTON_NUM,
+} adc_button_t;
 
 // Init ili9341 by custom cmd
 static const ili9341_lcd_init_cmd_t vendor_specific_init[] = {
@@ -44,7 +55,7 @@ static const ili9341_lcd_init_cmd_t vendor_specific_init[] = {
 
 class Esp32S3Korvo2V3Board : public WifiBoard {
 private:
-    Button boot_button_;
+    Button* adc_buttons_[ADC_BUTTON_NUM];
     i2c_master_bus_handle_t i2c_bus_;
     LcdDisplay* display_;
     esp_io_expander_handle_t io_expander_ = NULL;
@@ -132,22 +143,81 @@ private:
     }
 
     void InitializeButtons() {
-        boot_button_.OnClick([this]() {
+        button_adc_config_t adc_cfg = {
+            .unit_id = ADC_UNIT_1,
+            .adc_channel = ADC_CHANNEL_4, // GPIO5
+        };
+
+        adc_cfg.button_index = ADC_BUTTON_REC;
+        adc_cfg.min = 2310;
+        adc_cfg.max = 2510;
+        adc_buttons_[ADC_BUTTON_REC] = new AdcButton(adc_cfg);
+
+        adc_buttons_[ADC_BUTTON_REC]->OnClick([this]() {
             auto& app = Application::GetInstance();
-            if (app.GetDeviceState() == kDeviceStateStarting && !WifiStation::GetInstance().IsConnected()) {
-                ResetWifiConfiguration();
+            auto codec = GetAudioCodec();
+            if (app.GetDeviceState() != kDeviceStateIdle || codec->input_enabled()) {
+                app.ToggleChatState();
             }
-            app.ToggleChatState();
+        });
+
+        adc_cfg.button_index = ADC_BUTTON_SET;
+        adc_cfg.min = 1010;
+        adc_cfg.max = 1210;
+        adc_buttons_[ADC_BUTTON_SET] = new AdcButton(adc_cfg);
+
+        adc_buttons_[ADC_BUTTON_SET]->OnLongPress([this]() {
+            ResetWifiConfiguration();
         });
 
 #if CONFIG_USE_DEVICE_AEC
-        boot_button_.OnDoubleClick([this]() {
+        adc_buttons_[ADC_BUTTON_SET]->OnDoubleClick([this]() {
             auto& app = Application::GetInstance();
             if (app.GetDeviceState() == kDeviceStateIdle) {
                 app.SetAecMode(app.GetAecMode() == kAecOff ? kAecOnDeviceSide : kAecOff);
             }
         });
 #endif
+
+        adc_cfg.button_index = ADC_BUTTON_VOLUME_DOWN;
+        adc_cfg.min = 720;
+        adc_cfg.max = 920;
+        adc_buttons_[ADC_BUTTON_VOLUME_DOWN] = new AdcButton(adc_cfg);
+
+        adc_buttons_[ADC_BUTTON_VOLUME_DOWN]->OnClick([this]() {
+            auto codec = GetAudioCodec();
+            int volume = codec->output_volume() - 10;
+            if (volume < 0) {
+                volume = 0;
+            }
+            codec->SetOutputVolume(volume);
+            GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
+        });
+
+        adc_buttons_[ADC_BUTTON_VOLUME_DOWN]->OnLongPress([this]() {
+            GetAudioCodec()->SetOutputVolume(0);
+            GetDisplay()->ShowNotification(Lang::Strings::MUTED);
+        });
+
+        adc_cfg.button_index = ADC_BUTTON_VOLUME_UP;
+        adc_cfg.min = 280;
+        adc_cfg.max = 480;
+        adc_buttons_[ADC_BUTTON_VOLUME_UP] = new AdcButton(adc_cfg);
+
+        adc_buttons_[ADC_BUTTON_VOLUME_UP]->OnClick([this]() {
+            auto codec = GetAudioCodec();
+            int volume = codec->output_volume() + 10;
+            if (volume > 100) {
+                volume = 100;
+            }
+            codec->SetOutputVolume(volume);
+            GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
+        });
+
+        adc_buttons_[ADC_BUTTON_VOLUME_UP]->OnLongPress([this]() {
+            GetAudioCodec()->SetOutputVolume(100);
+            GetDisplay()->ShowNotification(Lang::Strings::MAX_VOLUME);
+        });
     }
 
     void InitializeIli9341Display() {
@@ -270,7 +340,7 @@ private:
     }
 
 public:
-    Esp32S3Korvo2V3Board() : boot_button_(BOOT_BUTTON_GPIO) {
+    Esp32S3Korvo2V3Board() {
         ESP_LOGI(TAG, "Initializing esp32s3_korvo2_v3 Board");
         InitializeI2c();
         I2cDetect();
