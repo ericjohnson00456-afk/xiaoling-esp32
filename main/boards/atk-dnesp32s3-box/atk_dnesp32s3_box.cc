@@ -8,6 +8,7 @@
 #include "led/single_led.h"
 #include "i2c_device.h"
 #include "usb_esp32_camera.h"
+#include "assets/lang_config.h"
 
 #include <wifi_station.h>
 #include <esp_log.h>
@@ -87,6 +88,9 @@ public:
 
 
 class XL9555_IN : public I2cDevice {
+private:
+    std::function<void()> on_int_;
+
 public:
     XL9555_IN(i2c_master_bus_handle_t i2c_bus, uint8_t addr) : I2cDevice(i2c_bus, addr) {
         WriteReg(0x06, 0x3B);
@@ -96,6 +100,17 @@ public:
     void xl9555_cfg(void) {
         WriteReg(0x06, 0x1B);
         WriteReg(0x07, 0xFE);
+    }
+
+    void RegisterISR(gpio_num_t gpio_num, std::function<void()> isr_handler) {
+        on_int_ = isr_handler;
+        gpio_install_isr_service(0);
+        gpio_isr_handler_add(gpio_num, [](void* arg) {
+            auto* self = static_cast<XL9555_IN*>(arg);
+            if (self->on_int_) {
+                self->on_int_();
+            }
+        }, this);
     }
 
     void SetOutputState(uint8_t bit, uint8_t level) {
@@ -132,6 +147,83 @@ public:
     }
 };
 
+class XL9555_Button : public Button {
+public:
+    XL9555_Button(XL9555_IN* xl9555_in, uint16_t pin) : Button(nullptr), xl9555_in_(xl9555_in), pin_(pin) {
+        last_state_ = xl9555_in_->GetPingState(pin_);
+        xTaskCreate(ButtonTask, "XL9555_ButtonTask", 2048, this, tskIDLE_PRIORITY + 1, &button_task_handle_);
+
+        long_press_timer_ = xTimerCreate("XL9555_Button_LongPress", pdMS_TO_TICKS(CONFIG_BUTTON_LONG_PRESS_TIME_MS), pdFALSE, this, [](TimerHandle_t xTimer) {
+            auto* self = static_cast<XL9555_Button*>(pvTimerGetTimerID(xTimer));
+            if (self->on_long_press_) {
+                self->on_long_press_();
+            }
+        });
+    }
+
+    static void HandleISR(void* arg) {
+        auto* self = static_cast<XL9555_Button*>(arg);
+        BaseType_t woken = pdFALSE;
+        xTaskNotifyFromISR(self->button_task_handle_, 1, eSetBits, &woken);
+        portYIELD_FROM_ISR(woken);
+    }
+
+    static void ButtonTask(void* arg) {
+        auto* self = static_cast<XL9555_Button*>(arg);
+        uint32_t notify_value;
+        while (true) {
+            if (xTaskNotifyWait(0, UINT32_MAX, &notify_value, portMAX_DELAY) == pdTRUE) {
+                vTaskDelay(pdMS_TO_TICKS(10)); // Debounce delay
+                int state = self->xl9555_in_->GetPingState(self->pin_);
+                if (state != self->last_state_) {
+                    self->last_state_ = state;
+                    if (state == 0) { // Button pressed
+                        if (self->on_press_down_) {
+                            self->on_press_down_();
+                        }
+
+                        xTimerStart(self->long_press_timer_, 0);
+                    } else { // Button released
+                        if (self->on_press_up_) {
+                            self->on_press_up_();
+                        }
+
+                        if (xTimerIsTimerActive(self->long_press_timer_)) {
+                            xTimerStop(self->long_press_timer_, 0);
+                            if (self->on_click_) {
+                                self->on_click_();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    void OnPressDown(std::function<void()> callback) {
+        on_press_down_ = callback;
+    }
+
+    void OnPressUp(std::function<void()> callback) {
+        on_press_up_ = callback;
+    }
+
+    void OnLongPress(std::function<void()> callback) {
+        on_long_press_ = callback;
+    }
+
+    void OnClick(std::function<void()> callback) {
+        on_click_ = callback;
+    }
+
+private:
+    XL9555_IN* xl9555_in_;
+    uint16_t pin_;
+    TaskHandle_t button_task_handle_;
+    TimerHandle_t long_press_timer_;
+    int last_state_;
+};
+
 class atk_dnesp32s3_box : public WifiBoard {
 private:
     i2c_master_bus_handle_t i2c_bus_;
@@ -139,6 +231,8 @@ private:
     Button boot_button_;
     LcdDisplay* display_;
     XL9555_IN* xl9555_in_;
+    XL9555_Button* key1_button_;
+    XL9555_Button* key2_button_;
     bool es8311_detected_ = false;
     USB_Esp32Camera* camera_;
     
@@ -168,6 +262,23 @@ private:
         }
 
         xl9555_in_->xl9555_cfg();
+
+        key1_button_ = new XL9555_Button(xl9555_in_, 0x0010);  // IO0_4
+        key2_button_ = new XL9555_Button(xl9555_in_, 0x0008);  // IO0_3
+
+        gpio_config_t int_config = {
+            .pin_bit_mask = 1UL << GPIO_NUM_3,
+            .mode = GPIO_MODE_INPUT,
+            .pull_up_en = GPIO_PULLUP_ENABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type = GPIO_INTR_NEGEDGE,
+        };
+        ESP_ERROR_CHECK(gpio_config(&int_config));
+
+        xl9555_in_->RegisterISR(GPIO_NUM_3, [this]() {
+            XL9555_Button::HandleISR(key1_button_);
+            XL9555_Button::HandleISR(key2_button_);
+        });
     }
 
     void InitializeATK_ST7789_80_Display() {
@@ -264,6 +375,36 @@ private:
                 ResetWifiConfiguration();
             }
             app.ToggleChatState();
+        });
+
+        key1_button_->OnClick([this]() {
+            auto codec = GetAudioCodec();
+            int volume = codec->output_volume() + 10;
+            if (volume > 100) {
+                volume = 100;
+            }
+            codec->SetOutputVolume(volume);
+            GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
+        });
+
+        key1_button_->OnLongPress([this]() {
+            GetAudioCodec()->SetOutputVolume(100);
+            GetDisplay()->ShowNotification(Lang::Strings::MAX_VOLUME);
+        });
+
+        key2_button_->OnClick([this]() {
+            auto codec = GetAudioCodec();
+            int volume = codec->output_volume() - 10;
+            if (volume < 0) {
+                volume = 0;
+            }
+            codec->SetOutputVolume(volume);
+            GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
+        });
+
+        key2_button_->OnLongPress([this]() {
+            GetAudioCodec()->SetOutputVolume(0);
+            GetDisplay()->ShowNotification(Lang::Strings::MUTED);
         });
     }
 
