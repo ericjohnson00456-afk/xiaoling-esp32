@@ -71,6 +71,13 @@ std::unique_ptr<Http> Ota::SetupHttp() {
     http->SetHeader("Accept-Language", Lang::CODE);
     http->SetHeader("Content-Type", "application/json");
 
+#ifdef CONFIG_LSPLATFORM
+    if (PickForceAuthRequest()) {
+        ESP_LOGD(TAG, "force-reset: 1");
+        http->SetHeader("force-reset", "1");
+    }
+#endif // CONFIG_LSPLATFORM
+
     return http;
 }
 
@@ -487,3 +494,19 @@ esp_err_t Ota::Activate() {
     ESP_LOGI(TAG, "Activation successful");
     return ESP_OK;
 }
+
+#ifdef CONFIG_LSPLATFORM
+void Ota::RequestForceAuth() {
+    Settings settings("auth", true);
+    settings.SetInt("force_auth", 1);
+}
+
+int Ota::PickForceAuthRequest() { 
+    Settings settings("auth", true);
+    int force_auth = settings.GetInt("force_auth");
+    if (force_auth) {
+        settings.SetInt("force_auth", 0);
+    }
+    return force_auth;
+}
+#endif // CONFIG_LSPLATFORM

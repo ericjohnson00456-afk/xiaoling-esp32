@@ -164,6 +164,9 @@ void WifiBoard::ResetWifiConfiguration() {
         Settings settings("wifi", true);
         settings.SetInt("force_ap", 1);
     }
+#ifdef CONFIG_LSPLATFORM
+    Ota::RequestForceAuth();
+#endif // CONFIG_LSPLATFORM
     GetDisplay()->ShowNotification(Lang::Strings::ENTERING_WIFI_CONFIG_MODE);
     vTaskDelay(pdMS_TO_TICKS(1000));
     // Reboot the device

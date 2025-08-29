@@ -31,6 +31,7 @@ public:
 #ifdef CONFIG_LSPLATFORM
     bool HasACtivationQRCode() { return has_activation_qrcode_; }
     const std::string& GetActivationQRCode() const {return activation_qrcode_; }
+    static void RequestForceAuth();
 #endif // CONFIG_LSPLATFORM
 
 private:
@@ -60,6 +61,9 @@ private:
     bool IsNewVersionAvailable(const std::string& currentVersion, const std::string& newVersion);
     std::string GetActivationPayload();
     std::unique_ptr<Http> SetupHttp();
+#ifdef CONFIG_LSPLATFORM
+    int PickForceAuthRequest();
+#endif // CONFIG_LSPLATFORM
 };
 
 #endif // _OTA_H
