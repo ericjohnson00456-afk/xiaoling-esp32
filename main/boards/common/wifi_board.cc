@@ -38,7 +38,11 @@ void WifiBoard::EnterWifiConfigMode() {
 
     auto& wifi_ap = WifiConfigurationAp::GetInstance();
     wifi_ap.SetLanguage(Lang::CODE);
+#ifdef CONFIG_LSPLATFORM
+    wifi_ap.SetSsidPrefix("Xiaoling");
+#else // !CONFIG_LSPLATFORM
     wifi_ap.SetSsidPrefix("Xiaozhi");
+#endif // CONFIG_LSPLATFORM
     wifi_ap.Start();
 
     // 显示 WiFi 配置 AP 的 SSID 和 Web 服务器 URL

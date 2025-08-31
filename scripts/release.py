@@ -22,7 +22,7 @@ def get_board_type():
 def get_project_version():
     with open("CMakeLists.txt") as f:
         for line in f:
-            if line.startswith("set(PROJECT_VER"):
+            if line.strip().startswith("set(XIAOLING_VER"):
                 return line.split("\"")[1].split("\"")[0].strip()
     return None
 
