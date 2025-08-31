@@ -50,8 +50,8 @@ def release_current():
     print("project version:", project_version)
     zip_bin(board_type, project_version)
 
-def get_all_board_types(config_filename="config.json"):
-    board_configs = {}
+def get_all_board_configs(config_filename="config.json"):
+    board_configs = []
     with open("main/CMakeLists.txt", encoding='utf-8') as f:
         lines = f.readlines()
         for i, line in enumerate(lines):
@@ -65,10 +65,19 @@ def get_all_board_types(config_filename="config.json"):
                     config_path = f"main/boards/{board_type}/{config_filename}"
                     if not os.path.exists(config_path):
                         continue
-                    board_configs[config_name] = board_type
+                else:
+                    continue
+                # 查找下一行的 set(BOARD_NAME "xxx")
+                next_line_2 = lines[i + 2].strip()
+                if next_line_2.startswith("set(BOARD_NAME"):
+                    board_name = next_line_2.split('"')[1]
+                else:
+                    board_name = board_type
+                if not any(x[2] == board_name for x in board_configs):
+                    board_configs.append((config_name, board_type, board_name))
     return board_configs
 
-def release(board_type, board_config, config_filename="config.json"):
+def release(board_type, board_name, board_config, config_filename="config.json"):
     config_path = f"main/boards/{board_type}/{config_filename}"
     if not os.path.exists(config_path):
         print(f"跳过 {board_type} 因为 {config_filename} 不存在")
@@ -85,11 +94,13 @@ def release(board_type, board_config, config_filename="config.json"):
     
     for build in builds:
         name = build["name"]
+        if not name == board_name:
+            continue
         if not name.startswith(board_type):
             raise ValueError(f"name {name} 必须以 {board_type} 开头")
         output_path = f"releases/v{project_version}_{name}.zip"
         if os.path.exists(output_path):
-            print(f"跳过 {board_type} 因为 {output_path} 已存在")
+            print(f"跳过 {name} 因为 {output_path} 已存在")
             continue
 
         sdkconfig_append = [f"{board_config}=y"]
@@ -131,8 +142,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.list_boards:
-        board_configs = get_all_board_types(config_filename=args.config)
-        boards = list(board_configs.values())
+        board_configs = get_all_board_configs(config_filename=args.config)
+        boards = [board[2] for board in board_configs]
         if args.json:
             print(json.dumps(boards))
         else:
@@ -141,11 +152,11 @@ if __name__ == "__main__":
         sys.exit(0)
 
     if args.board:
-        board_configs = get_all_board_types()
+        board_configs = get_all_board_configs(config_filename=args.config)
         found = False
-        for board_config, board_type in board_configs.items():
-            if args.board == 'all' or board_type == args.board:
-                release(board_type, board_config, config_filename=args.config)
+        for board_config, board_type, board_name in board_configs:
+            if args.board == 'all' or board_name == args.board:
+                release(board_type, board_name, board_config, config_filename=args.config)
                 found = True
         if not found:
             print(f"未找到板子类型: {args.board}")

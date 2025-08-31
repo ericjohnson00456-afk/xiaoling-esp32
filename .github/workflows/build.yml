@@ -101,7 +101,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: xiaozhi_${{ matrix.board }}_${{ github.sha }}.bin
+          name: xiaozhi_${{ matrix.board }}_${{ github.sha }}
           path: build/merged-binary.bin
           if-no-files-found: error
 
