@@ -8,9 +8,11 @@ on:
   pull_request:
     branches:
       - main
+  release:
+    types: [published]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   prepare:
@@ -39,8 +41,8 @@ jobs:
         run: |
           EVENT_NAME="${{ github.event_name }}"
 
-          # For push to main branch, build all boards
-          if [[ "$EVENT_NAME" == "push" ]]; then
+          # For push to main branch or release, build all boards
+          if [[ "$EVENT_NAME" == "push" || "$EVENT_NAME" == "release" ]]; then
             echo "boards=$ALL_BOARDS" >> $GITHUB_OUTPUT
             exit 0
           fi
@@ -86,6 +88,7 @@ jobs:
       matrix:
         board: ${{ fromJson(needs.prepare.outputs.boards) }}
     runs-on: ubuntu-latest
+    continue-on-error: true
     container:
       image: espressif/idf:release-v5.4
     steps:
@@ -126,3 +129,34 @@ jobs:
           python scripts/release.py ${{ matrix.board }}
         env:
           BUILD_XIAOZHI: '1'
+
+  release:
+    name: Publish release
+    needs: [ build, upstream ]
+    if: github.event_name == 'release' && startsWith(github.ref, 'refs/tags/xiaoling/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v5
+        with:
+          pattern: xiaoling_*
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p assets
+          for dir in xiaoling_*; do
+            board=${dir#xiaoling_}
+            board=${board%_*}
+            ref=${{ github.ref_name }}
+            ref=${ref#xiaoling/}
+            pushd $dir
+            zip -r9 "../assets/xiaoling_${board}_${ref}.zip" *.bin
+            popd
+          done
+
+      - name: Upload release assets
+        uses: svenstaro/upload-release-action@2.11.2
+        with:
+          file: assets/*
+          file_glob: true
+          make_latest: false
