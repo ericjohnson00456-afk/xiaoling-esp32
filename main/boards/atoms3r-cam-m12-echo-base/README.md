@@ -37,6 +37,10 @@ idf.py menuconfig
 
 按 `S` 保存，按 `Q` 退出。
 
+如果使用聆思AI提供的"小聆小聆"唤醒词, 请做如下修改:
+
+- `Partition Table` → `Custom partition CSV file` → 删除原有内容，输入 `partitions/v1/8m_custom_wakeword.csv`
+
 **编译**
 
 ```bash
