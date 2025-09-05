@@ -45,7 +45,12 @@ std::string Ota::GetCheckVersionUrl() {
     std::string url = settings.GetString("ota_url");
     if (url.empty()) {
 #ifdef CONFIG_LSPLATFORM
-        url = "https://api.listenai.com/v1/xiaoling/" CONFIG_LSPLATFORM_PRODUCT_ID "/ota/";
+#if defined(CONFIG_LSPLATFORM_PRODUCT_ID_BUILTIN)
+#define PRODUCT_ID CONFIG_LSPLATFORM_BUILTIN_PRODUCT_ID
+#elif defined(CONFIG_LSPLATFORM_PRODUCT_ID_CUSTOM)
+#define PRODUCT_ID CONFIG_LSPLATFORM_CUSTOM_PRODUCT_ID
+#endif
+        url = "https://api.listenai.com/v1/xiaoling/" PRODUCT_ID "/ota/";
 #else // !CONFIG_LSPLATFORM
         url = CONFIG_OTA_URL;
 #endif // CONFIG_LSPLATFORM
