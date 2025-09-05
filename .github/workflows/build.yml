@@ -108,16 +108,20 @@ jobs:
           path: build/merged-binary.bin
           if-no-files-found: error
 
-  upstream:
-    name: Ensure upstream compatibility
+  compatibility:
+    name: Compatibility check
     strategy:
       matrix:
+        idf:
+          - v5.4
+          - v5.5
         board:
           - atk-dnesp32s3-box
           - esp32s3-korvo2-v3
+        upstream: [ '0', '1' ]
     runs-on: ubuntu-latest
     container:
-      image: espressif/idf:release-v5.4
+      image: espressif/idf:release-${{ matrix.idf }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -128,11 +132,11 @@ jobs:
           source $IDF_PATH/export.sh
           python scripts/release.py ${{ matrix.board }}
         env:
-          BUILD_XIAOZHI: '1'
+          BUILD_XIAOZHI: ${{ matrix.upstream }}
 
   release:
     name: Publish release
-    needs: [ build, upstream ]
+    needs: [ build, compatibility ]
     if: github.event_name == 'release' && startsWith(github.ref, 'refs/tags/xiaoling/v')
     runs-on: ubuntu-latest
     steps:
