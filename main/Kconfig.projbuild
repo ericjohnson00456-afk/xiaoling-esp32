@@ -23,11 +23,29 @@ if SERVICE_PROVIDER_LSPLATFORM
     config LSPLATFORM
         bool
         default y
-    config LSPLATFORM_PRODUCT_ID
-        string "LSPlatform Product ID"
-        default "ef22350d-6863-4814-8ed8-47c5b0c514a6"
-        help
-            LSPlatform 上的应用 product_id
+    menu "LSPlatform 选项"
+        choice
+            prompt "Product ID"
+            default LSPLATFORM_PRODUCT_ID_BUILTIN
+            help
+                选择 Product ID
+            config LSPLATFORM_PRODUCT_ID_BUILTIN
+                bool "内置"
+                help
+                    使用内置的 Product ID
+            config LSPLATFORM_PRODUCT_ID_CUSTOM
+                bool "自定义"
+                help
+                    使用自定义的 Product ID
+        endchoice
+        config LSPLATFORM_BUILTIN_PRODUCT_ID
+            string
+            default "ef22350d-6863-4814-8ed8-47c5b0c514a6"
+            depends on LSPLATFORM_PRODUCT_ID_BUILTIN
+        config LSPLATFORM_CUSTOM_PRODUCT_ID
+            string "自定义 Product ID"
+            depends on LSPLATFORM_PRODUCT_ID_CUSTOM
+    endmenu
 endif
 
 choice
