@@ -40,6 +40,11 @@ if SERVICE_PROVIDER_LSPLATFORM
         endchoice
         config LSPLATFORM_BUILTIN_PRODUCT_ID
             string
+            default "def3d247-a012-451b-8bde-e80f621e06d2" if \
+                BOARD_TYPE_ATOMS3_ECHO_BASE || \
+                BOARD_TYPE_ATOMS3R_ECHO_BASE || \
+                BOARD_TYPE_ATOMS3R_CAM_M12_ECHO_BASE || \
+                BOARD_TYPE_ATOMMATRIX_ECHO_BASE
             default "1932f91f-8e6f-4403-aada-956de35b3e5e" if \
                 BOARD_TYPE_ATK_DNESP32S3 || \
                 BOARD_TYPE_ATK_DNESP32S3_BOX || \
