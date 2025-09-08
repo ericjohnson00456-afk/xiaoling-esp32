@@ -40,6 +40,14 @@ if SERVICE_PROVIDER_LSPLATFORM
         endchoice
         config LSPLATFORM_BUILTIN_PRODUCT_ID
             string
+            default "1932f91f-8e6f-4403-aada-956de35b3e5e" if \
+                BOARD_TYPE_ATK_DNESP32S3 || \
+                BOARD_TYPE_ATK_DNESP32S3_BOX || \
+                BOARD_TYPE_ATK_DNESP32S3_BOX0 || \
+                BOARD_TYPE_ATK_DNESP32S3_BOX2_WIFI || \
+                BOARD_TYPE_ATK_DNESP32S3_BOX2_4G || \
+                BOARD_TYPE_ATK_DNESP32S3M_WIFI || \
+                BOARD_TYPE_ATK_DNESP32S3M_4G
             default "ef22350d-6863-4814-8ed8-47c5b0c514a6"
             depends on LSPLATFORM_PRODUCT_ID_BUILTIN
         config LSPLATFORM_CUSTOM_PRODUCT_ID
