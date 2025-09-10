@@ -14,6 +14,8 @@
 #include "wake_words/esp_wake_word.h"
 #elif CONFIG_USE_CUSTOM_WAKE_WORD
 #include "wake_words/custom_wake_word.h"
+#elif CONFIG_USE_MICRO_WAKE_WORD
+#include "wake_words/micro_wake_word.h"
 #endif
 
 #define TAG "AudioService"
@@ -56,6 +58,8 @@ void AudioService::Initialize(AudioCodec* codec) {
     wake_word_ = std::make_unique<EspWakeWord>();
 #elif CONFIG_USE_CUSTOM_WAKE_WORD
     wake_word_ = std::make_unique<CustomWakeWord>();
+#elif CONFIG_USE_MICRO_WAKE_WORD
+    wake_word_ = std::make_unique<MicroWakeWord>();
 #else
     wake_word_ = nullptr;
 #endif
@@ -250,6 +254,16 @@ void AudioService::AudioInputTask() {
             int samples = wake_word_->GetFeedSize();
             if (samples > 0) {
                 if (ReadAudioData(data, 16000, samples)) {
+#if CONFIG_USE_MICRO_WAKE_WORD
+                    // If input channels is 2, we need to fetch the left channel data for MicroWakeWord
+                    if (codec_->input_channels() == 2) {
+                        auto mono_data = std::vector<int16_t>(data.size() / 2);
+                        for (size_t i = 0, j = 0; i < mono_data.size(); ++i, j += 2) {
+                            mono_data[i] = data[j];
+                        }
+                        data = std::move(mono_data);
+                    }
+#endif // CONFIG_USE_MICRO_WAKE_WORD
                     wake_word_->Feed(data);
                     continue;
                 }

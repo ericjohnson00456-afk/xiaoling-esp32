@@ -1,0 +1,16 @@
+choice
+    prompt "模型"
+
+config MICRO_WAKE_WORD_MODEL_ALEXA
+    bool "Alexa"
+
+config MICRO_WAKE_WORD_MODEL_HEY_JARVIS
+    bool "Hey Jarvis"
+
+config MICRO_WAKE_WORD_MODEL_HEY_MYCROFT
+    bool "Hey Mycroft"
+
+config MICRO_WAKE_WORD_MODEL_OKAY_NABU
+    bool "Okay Nabu"
+
+endchoice
