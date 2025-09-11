@@ -13,4 +13,13 @@ config MICRO_WAKE_WORD_MODEL_HEY_MYCROFT
 config MICRO_WAKE_WORD_MODEL_OKAY_NABU
     bool "Okay Nabu"
 
+config MICRO_WAKE_WORD_MODEL_XIAOLINGXIAOLING
+    bool "小聆小聆"
+
 endchoice
+
+config MICRO_WAKE_WORD_MODEL_XIAOLINGXIAOLING_PROBABILITY_CUTOFF
+    int "触发阈值 (%)"
+    default 90
+    range 1 99
+    depends on MICRO_WAKE_WORD_MODEL_XIAOLINGXIAOLING
