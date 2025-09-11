@@ -32,16 +32,8 @@ Serial flasher config -> Flash size -> 8 MB
 
 **修改分区表：**
 
-使用ESP-SR提供的唤醒词
-
 ```
 Partition Table -> Custom partition CSV file -> partitions/v1/8m.csv
-```
-
-使用聆思AI提供的"小聆小聆"唤醒词
-
-```
-Partition Table -> Custom partition CSV file -> partitions/v1/8m_custom_wakeword.csv
 ```
 
 **关闭片外 PSRAM：**
