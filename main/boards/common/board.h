@@ -11,6 +11,7 @@
 #include "led/led.h"
 #include "backlight.h"
 #include "camera.h"
+#include "banners.h"
 
 void* create_board();
 class AudioCodec;
@@ -42,6 +43,9 @@ public:
     virtual bool GetTemperature(float& esp32temp);
     virtual Display* GetDisplay();
     virtual Camera* GetCamera();
+#if CONFIG_LSPLATFORM_BANNERS
+    virtual Banners *GetBanners();
+#endif
     virtual NetworkInterface* GetNetwork() = 0;
     virtual void StartNetwork() = 0;
     virtual const char* GetNetworkStateIcon() = 0;
@@ -50,6 +54,11 @@ public:
     virtual void SetPowerSaveMode(bool enabled) = 0;
     virtual std::string GetBoardJson() = 0;
     virtual std::string GetDeviceStatusJson() = 0;
+
+private:
+#if CONFIG_LSPLATFORM_BANNERS
+    Banners* banners_ = nullptr;
+#endif
 };
 
 #define DECLARE_BOARD(BOARD_CLASS_NAME) \

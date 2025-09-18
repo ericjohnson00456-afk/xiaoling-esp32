@@ -25,6 +25,7 @@ set(SOURCES "audio/audio_codec.cc"
             "device_state_event.cc"
             "main.cc"
             "image_fetcher.cc"
+            "banners.cc"
             )
 
 set(INCLUDE_DIRS "." "display" "audio" "protocols")

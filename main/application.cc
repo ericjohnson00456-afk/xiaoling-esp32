@@ -536,6 +536,11 @@ void Application::Start() {
         audio_service_.PlaySound(Lang::Sounds::OGG_SUCCESS);
     }
 
+#if CONFIG_LSPLATFORM_BANNERS
+    auto banners = board.GetBanners();
+    banners->Fetch();
+#endif
+
     // Print heap stats
     SystemInfo::PrintHeapStats();
 }
@@ -552,6 +557,14 @@ void Application::OnClockTimer() {
         // SystemInfo::PrintTaskList();
         SystemInfo::PrintHeapStats();
     }
+
+#if CONFIG_LSPLATFORM_BANNERS
+    if (clock_ticks_ % 5 == 0 && device_state_ == kDeviceStateIdle) {
+        auto banners = Board::GetInstance().GetBanners();
+        auto banner = banners->Next();
+        display->SetChatMessage("system", banner.c_str());
+    }
+#endif
 }
 
 // Add a async task to MainLoop

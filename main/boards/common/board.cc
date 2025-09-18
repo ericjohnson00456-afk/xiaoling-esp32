@@ -19,6 +19,10 @@ Board::Board() {
         settings.SetString("uuid", uuid_);
     }
     ESP_LOGI(TAG, "UUID=%s SKU=%s", uuid_.c_str(), BOARD_NAME);
+
+#if CONFIG_LSPLATFORM_BANNERS
+    banners_ = new Banners(this);
+#endif
 }
 
 std::string Board::GenerateUuid() {
@@ -60,6 +64,12 @@ Display* Board::GetDisplay() {
 Camera* Board::GetCamera() {
     return nullptr;
 }
+
+#if CONFIG_LSPLATFORM_BANNERS
+Banners* Board::GetBanners() {
+    return banners_;
+}
+#endif
 
 Led* Board::GetLed() {
     static NoLed led;
