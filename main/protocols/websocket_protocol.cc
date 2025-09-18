@@ -108,6 +108,9 @@ bool WebsocketProtocol::OpenAudioChannel() {
     websocket_->SetHeader("Device-Id", SystemInfo::GetMacAddress().c_str());
     websocket_->SetHeader("Client-Id", Board::GetInstance().GetUuid().c_str());
 
+    ESP_LOGI(TAG, "Device-Id: %s", SystemInfo::GetMacAddress().c_str());
+    ESP_LOGI(TAG, "Client-Id: %s", Board::GetInstance().GetUuid().c_str());
+
     websocket_->OnData([this](const char* data, size_t len, bool binary) {
         if (binary) {
             if (on_incoming_audio_ != nullptr) {
@@ -155,6 +158,7 @@ bool WebsocketProtocol::OpenAudioChannel() {
                     if (on_incoming_json_ != nullptr) {
                         on_incoming_json_(root);
                     }
+                    ESP_LOGI(TAG, "JSON << %s", cJSON_PrintUnformatted(root));
                 }
             } else {
                 ESP_LOGE(TAG, "Missing message type, data: %s", data);
