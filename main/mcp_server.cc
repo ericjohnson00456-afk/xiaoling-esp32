@@ -103,7 +103,7 @@ void McpServer::AddCommonTools() {
                     ESP_LOGE(TAG, "Failed to fetch image: %s", url.c_str());
                     return false;
                 }
-                display->SetPreviewImage(&img_dsc);
+                display->ShowImage(&img_dsc);
                 return true;
             });
 #endif // CONFIG_LSPLATFORM

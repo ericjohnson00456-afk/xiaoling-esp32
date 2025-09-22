@@ -39,6 +39,9 @@ protected:
     lv_obj_t* activation_container_ = nullptr;
     lv_obj_t* activation_qrcode_ = nullptr;
     lv_obj_t* activation_message_ = nullptr;
+
+    lv_obj_t* image_container_ = nullptr;
+    lv_obj_t* image_ = nullptr;
 #endif // CONFIG_LSPLATFORM
 
     DisplayFonts fonts_;
@@ -68,6 +71,10 @@ public:
     void SetupActivationUI();
     virtual void ShowActivation(const lv_img_dsc_t* qrcode, const std::string& message) override;
     virtual void DismissActivation() override;
+
+    void SetupImageUI();
+    virtual void ShowImage(const lv_img_dsc_t* img_dsc) override;
+    virtual void DismissImage() override;
 #endif // CONFIG_LSPLATFORM
 };
 

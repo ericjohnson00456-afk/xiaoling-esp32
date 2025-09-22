@@ -415,6 +415,7 @@ void LcdDisplay::SetupUI() {
 
 #ifdef CONFIG_LSPLATFORM
     SetupActivationUI();
+    SetupImageUI();
 #endif // CONFIG_LSPLATFORM
 }
 #if CONFIG_IDF_TARGET_ESP32P4
@@ -812,6 +813,7 @@ void LcdDisplay::SetupUI() {
 
 #ifdef CONFIG_LSPLATFORM
     SetupActivationUI();
+    SetupImageUI();
 #endif // CONFIG_LSPLATFORM
 }
 
@@ -1162,4 +1164,59 @@ void LcdDisplay::DismissActivation() {
 
     lv_obj_remove_flag(content_, LV_OBJ_FLAG_HIDDEN);
 }
+
+#ifdef CONFIG_USE_WECHAT_MESSAGE_STYLE
+void LcdDisplay::SetupImageUI() {
+    // WeChat message style does not need a separate image UI
+}
+
+void LcdDisplay::ShowImage(const lv_img_dsc_t* img_dsc) {
+    SetPreviewImage(img_dsc);
+}
+
+void LcdDisplay::DismissImage() {
+    // WeChat message style does not need a separate image UI
+}
+#else // !CONFIG_USE_WECHAT_MESSAGE_STYLE
+void LcdDisplay::SetupImageUI() {
+    DisplayLockGuard lock(this);
+
+    image_container_ = lv_obj_create(container_);
+    lv_obj_set_scrollbar_mode(image_container_, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_set_width(image_container_, LV_HOR_RES);
+    lv_obj_set_flex_grow(image_container_, 1);
+    lv_obj_set_style_bg_color(image_container_, current_theme_.background, LV_PART_MAIN);
+    lv_obj_add_flag(image_container_, LV_OBJ_FLAG_HIDDEN);
+
+    image_ = lv_image_create(image_container_);
+    lv_obj_set_size(image_, LV_PCT(100), LV_PCT(100));
+    lv_image_set_align(image_, LV_IMAGE_ALIGN_CONTAIN);
+}
+
+void LcdDisplay::ShowImage(const lv_img_dsc_t* img_dsc) {
+    DisplayLockGuard lock(this);
+    if (image_container_ == nullptr || image_ == nullptr) {
+        return;
+    }
+
+    lv_obj_add_flag(content_, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(image_container_, LV_OBJ_FLAG_HIDDEN);
+
+    lv_image_set_src(image_, img_dsc);
+
+    lv_task_handler();
+}
+
+void LcdDisplay::DismissImage() {
+    DisplayLockGuard lock(this);
+    if (image_container_ == nullptr || image_ == nullptr) {
+        return;
+    }
+
+    lv_obj_add_flag(image_container_, LV_OBJ_FLAG_HIDDEN);
+    lv_image_set_src(image_, NULL);
+
+    lv_obj_remove_flag(content_, LV_OBJ_FLAG_HIDDEN);
+}
+#endif // CONFIG_USE_WECHAT_MESSAGE_STYLE
 #endif // CONFIG_LSPLATFORM

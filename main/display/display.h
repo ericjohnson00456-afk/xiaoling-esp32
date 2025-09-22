@@ -35,6 +35,9 @@ public:
 #ifdef CONFIG_LSPLATFORM
     virtual void ShowActivation(const lv_img_dsc_t* qrcode, const std::string& message) {};
     virtual void DismissActivation() {};
+
+    virtual void ShowImage(const lv_img_dsc_t* img_dsc) {};
+    virtual void DismissImage() {};
 #endif // CONFIG_LSPLATFORM
 
     inline int width() const { return width_; }

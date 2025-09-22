@@ -470,6 +470,9 @@ void Application::Start() {
             if (cJSON_IsString(text)) {
                 ESP_LOGI(TAG, ">> %s", text->valuestring);
                 Schedule([this, display, message = std::string(text->valuestring)]() {
+#ifdef CONFIG_LSPLATFORM
+                    display->DismissImage();
+#endif // CONFIG_LSPLATFORM
                     display->SetChatMessage("user", message.c_str());
                 });
             }
@@ -695,6 +698,9 @@ void Application::SetDeviceState(DeviceState state) {
         case kDeviceStateIdle:
             display->SetStatus(Lang::Strings::STANDBY);
             display->SetEmotion("neutral");
+#ifdef CONFIG_LSPLATFORM
+            display->DismissImage();
+#endif // CONFIG_LSPLATFORM
             audio_service_.EnableVoiceProcessing(false);
             audio_service_.EnableWakeWordDetection(true);
             break;
