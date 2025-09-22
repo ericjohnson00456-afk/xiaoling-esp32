@@ -538,7 +538,7 @@ void Application::Start() {
 
 #if CONFIG_LSPLATFORM_BANNERS
     auto banners = board.GetBanners();
-    banners->Fetch();
+    banners->Fetch(ota.GetBannersUrl());
 #endif
 
     // Print heap stats

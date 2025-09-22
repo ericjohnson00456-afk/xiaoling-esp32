@@ -58,6 +58,12 @@ std::string Ota::GetCheckVersionUrl() {
     return url;
 }
 
+#ifdef CONFIG_LSPLATFORM_BANNERS
+std::string Ota::GetBannersUrl() {
+    return "https://api.listenai.com/v1/device/landing/banner";
+}
+#endif // CONFIG_LSPLATFORM_BANNERS
+
 std::unique_ptr<Http> Ota::SetupHttp() {
     auto& board = Board::GetInstance();
     auto app_desc = esp_app_get_description();

@@ -12,7 +12,7 @@ public:
 
     virtual ~Banners() = default;
 
-    bool Fetch();
+    bool Fetch(std::string url);
     std::string Next();
 
 private:

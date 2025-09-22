@@ -9,9 +9,7 @@
 
 #define TAG "Banners"
 
-static const std::string kBannerApiUrl = "https://api.listenai.com/v1/device/landing/banner";
-
-bool Banners::Fetch() {
+bool Banners::Fetch(std::string url) {
     Settings settings("websocket", false);
     std::string token = settings.GetString("token");
     if (token.empty()) {
@@ -36,8 +34,8 @@ bool Banners::Fetch() {
     http->SetHeader("Authorization", "Bearer " + token);
     http->SetHeader("Content-Type", "application/json");
 
-    if (!http->Open("GET", kBannerApiUrl)) {
-        ESP_LOGE(TAG, "Failed to open HTTP connection to %s", kBannerApiUrl.c_str());
+    if (!http->Open("GET", url)) {
+        ESP_LOGE(TAG, "Failed to open HTTP connection to %s", url.c_str());
         return false;
     }
 

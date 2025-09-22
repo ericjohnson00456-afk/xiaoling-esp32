@@ -28,6 +28,9 @@ public:
     const std::string& GetActivationMessage() const { return activation_message_; }
     const std::string& GetActivationCode() const { return activation_code_; }
     std::string GetCheckVersionUrl();
+#ifdef CONFIG_LSPLATFORM_BANNERS
+    std::string GetBannersUrl();
+#endif // CONFIG_LSPLATFORM_BANNERS
 #ifdef CONFIG_LSPLATFORM
     bool HasACtivationQRCode() { return has_activation_qrcode_; }
     const std::string& GetActivationQRCode() const {return activation_qrcode_; }
