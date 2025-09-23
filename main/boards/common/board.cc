@@ -20,9 +20,12 @@ Board::Board() {
     }
     ESP_LOGI(TAG, "UUID=%s SKU=%s", uuid_.c_str(), BOARD_NAME);
 
+#if CONFIG_LSPLATFORM
+    image_fetcher_ = new ImageFetcher(this);
 #if CONFIG_LSPLATFORM_BANNERS
     banners_ = new Banners(this);
 #endif
+#endif // CONFIG_LSPLATFORM
 }
 
 std::string Board::GenerateUuid() {
@@ -65,11 +68,17 @@ Camera* Board::GetCamera() {
     return nullptr;
 }
 
+#if CONFIG_LSPLATFORM
+ImageFetcher* Board::GetImageFetcher() {
+    return image_fetcher_;
+}
+
 #if CONFIG_LSPLATFORM_BANNERS
 Banners* Board::GetBanners() {
     return banners_;
 }
 #endif
+#endif // CONFIG_LSPLATFORM
 
 Led* Board::GetLed() {
     static NoLed led;

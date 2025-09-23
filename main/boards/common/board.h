@@ -11,6 +11,7 @@
 #include "led/led.h"
 #include "backlight.h"
 #include "camera.h"
+#include "image_fetcher.h"
 #include "banners.h"
 
 void* create_board();
@@ -43,9 +44,12 @@ public:
     virtual bool GetTemperature(float& esp32temp);
     virtual Display* GetDisplay();
     virtual Camera* GetCamera();
+#if CONFIG_LSPLATFORM
+    virtual ImageFetcher* GetImageFetcher();
 #if CONFIG_LSPLATFORM_BANNERS
     virtual Banners *GetBanners();
 #endif
+#endif // CONFIG_LSPLATFORM
     virtual NetworkInterface* GetNetwork() = 0;
     virtual void StartNetwork() = 0;
     virtual const char* GetNetworkStateIcon() = 0;
@@ -56,9 +60,12 @@ public:
     virtual std::string GetDeviceStatusJson() = 0;
 
 private:
+#if CONFIG_LSPLATFORM
+    ImageFetcher* image_fetcher_ = nullptr;
 #if CONFIG_LSPLATFORM_BANNERS
     Banners* banners_ = nullptr;
 #endif
+#endif // CONFIG_LSPLATFORM
 };
 
 #define DECLARE_BOARD(BOARD_CLASS_NAME) \

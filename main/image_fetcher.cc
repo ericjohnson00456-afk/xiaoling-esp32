@@ -6,6 +6,9 @@
 #include <esp_app_desc.h>
 #include <esp_jpeg_dec.h>
 
+#include "board.h"
+#include "network_interface.h"
+
 #define TAG "ImageFetcher"
 
 bool ImageFetcher::Fetch(const std::string& url, lv_img_dsc_t* into, int timeout_ms) {
@@ -14,7 +17,13 @@ bool ImageFetcher::Fetch(const std::string& url, lv_img_dsc_t* into, int timeout
     ESP_LOGI(TAG, "Fetching image from %s", url.c_str());
 
     try {
-        auto http = network_->CreateHttp();
+        auto network = board_->GetNetwork();
+        if (!network) {
+            ESP_LOGE(TAG, "Failed to get network instance");
+            return false;
+        }
+
+        auto http = network->CreateHttp();
         if (!http) {
             ESP_LOGE(TAG, "Failed to create HTTP client");
             return false;
@@ -91,7 +100,7 @@ bool ImageFetcher::Fetch(const std::string& url, lv_img_dsc_t* into, int timeout
             return false;
         }
 
-        size_t out_size = (size_t)out_info.width * (size_t)out_info.height * 2; // RGB565 = 2 bytes/pixel
+        size_t out_size = LV_DRAW_BUF_SIZE(out_info.width, out_info.height, LV_COLOR_FORMAT_RGB565);
         if (out_size > 2 * 1024 * 1024) {
             ESP_LOGE(TAG, "Decoded image too large");
             jpeg_dec_close(jpeg_dec);
@@ -121,20 +130,23 @@ bool ImageFetcher::Fetch(const std::string& url, lv_img_dsc_t* into, int timeout
 
         ESP_LOGI(TAG, "JPEG image decoded successfully, size: %d bytes", (int)out_size);
 
-        static std::vector<uint8_t> rgb_buffer;
-        rgb_buffer.resize(out_size);
-        memcpy(rgb_buffer.data(), out_buf, out_size);
-
-        jpeg_free_align(out_buf);
-        jpeg_dec_close(jpeg_dec);
+        if (rgb_buffer_) {
+            jpeg_free_align(rgb_buffer_);
+            ESP_LOGI(TAG, "Freed previous RGB buffer at %p", rgb_buffer_);
+            rgb_buffer_ = nullptr;
+        }
 
         memset(into, 0, sizeof(lv_img_dsc_t));
         into->header.magic = LV_IMAGE_HEADER_MAGIC;
         into->header.cf = LV_COLOR_FORMAT_RGB565;
         into->header.w = out_info.width;
         into->header.h = out_info.height;
-        into->data_size = rgb_buffer.size();
-        into->data = rgb_buffer.data();
+        into->header.stride = LV_DRAW_BUF_STRIDE(out_info.width, LV_COLOR_FORMAT_RGB565);
+        into->data_size = out_size;
+        into->data = out_buf;
+
+        rgb_buffer_ = out_buf; 
+        jpeg_dec_close(jpeg_dec);
 
         return true;
     } catch (const std::exception& e) {
@@ -143,5 +155,12 @@ bool ImageFetcher::Fetch(const std::string& url, lv_img_dsc_t* into, int timeout
     } catch (...) {
         ESP_LOGE(TAG, "Unknown error fetching image");
         return false;
+    }
+}
+
+ImageFetcher::~ImageFetcher() {
+    if (rgb_buffer_) {
+        jpeg_free_align(rgb_buffer_);
+        rgb_buffer_ = nullptr;
     }
 }

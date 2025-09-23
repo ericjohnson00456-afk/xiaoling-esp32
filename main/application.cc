@@ -210,10 +210,10 @@ void Application::ShowActivationCode(const std::string& code, const std::string&
     ESP_LOGI(TAG, "Showing activation code: %s, QR url: %s", code.c_str(), qrcode.c_str());
     if (!qrcode.empty()) {
         auto& board = Board::GetInstance();
-        auto fetcher = ImageFetcher::From(board.GetNetwork());
+        auto fetcher = board.GetImageFetcher();
         auto display = board.GetDisplay();
         lv_img_dsc_t img_dsc;
-        if (fetcher.Fetch(qrcode, &img_dsc)) { 
+        if (fetcher->Fetch(qrcode, &img_dsc)) { 
             display->ShowActivation(&img_dsc, message + code);
         } else {
             ESP_LOGE(TAG, "Failed to fetch QR code image");

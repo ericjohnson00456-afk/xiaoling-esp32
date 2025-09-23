@@ -97,9 +97,9 @@ void McpServer::AddCommonTools() {
             }),
             [&board, display](const PropertyList& properties) -> ReturnValue {
                 auto url = properties["url"].value<std::string>();
-                auto fetcher = ImageFetcher::From(board.GetNetwork());
+                auto fetcher = board.GetImageFetcher();
                 lv_img_dsc_t img_dsc;
-                if (!fetcher.Fetch(url, &img_dsc)) {
+                if (!fetcher->Fetch(url, &img_dsc)) {
                     ESP_LOGE(TAG, "Failed to fetch image: %s", url.c_str());
                     return false;
                 }
