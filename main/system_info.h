@@ -13,6 +13,9 @@ public:
     static size_t GetFreeHeapSize();
     static std::string GetMacAddress();
     static std::string GetChipModelName();
+#ifdef CONFIG_LSPLATFORM
+    static std::string GetProductId();
+#endif // CONFIG_LSPLATFORM
     static esp_err_t PrintTaskCpuUsage(TickType_t xTicksToWait);
     static void PrintTaskList();
     static void PrintHeapStats();

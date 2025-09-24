@@ -108,6 +108,9 @@ bool WebsocketProtocol::OpenAudioChannel() {
     websocket_->SetHeader("Device-Id", SystemInfo::GetMacAddress().c_str());
     websocket_->SetHeader("Client-Id", Board::GetInstance().GetUuid().c_str());
 
+#ifdef CONFIG_LSPLATFORM
+    ESP_LOGI(TAG, "Product-Id: %s", SystemInfo::GetProductId().c_str());
+#endif
     ESP_LOGI(TAG, "Device-Id: %s", SystemInfo::GetMacAddress().c_str());
     ESP_LOGI(TAG, "Client-Id: %s", Board::GetInstance().GetUuid().c_str());
 
