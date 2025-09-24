@@ -16,6 +16,7 @@
 #include "ota.h"
 #include "audio_service.h"
 #include "device_state_event.h"
+#include "watchdog.h"
 
 #define MAIN_EVENT_SCHEDULE (1 << 0)
 #define MAIN_EVENT_SEND_AUDIO (1 << 1)
@@ -75,6 +76,10 @@ private:
     AecMode aec_mode_ = kAecOff;
     std::string last_error_message_;
     AudioService audio_service_;
+#ifdef CONFIG_LSPLATFORM
+    Watchdog uplink_watchdog_{5000, "uplink"};
+    Watchdog downlink_watchdog_{5000, "downlink"};
+#endif // CONFIG_LSPLATFORM
 
     bool has_server_time_ = false;
     bool aborted_ = false;

@@ -26,6 +26,7 @@ set(SOURCES "audio/audio_codec.cc"
             "main.cc"
             "image_fetcher.cc"
             "banners.cc"
+            "watchdog.cc"
             )
 
 set(INCLUDE_DIRS "." "display" "audio" "protocols")

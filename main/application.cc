@@ -398,6 +398,28 @@ void Application::Start() {
     // Initialize the protocol
     display->SetStatus(Lang::Strings::LOADING_PROTOCOL);
 
+#ifdef CONFIG_LSPLATFORM
+    uplink_watchdog_.OnTimeout([this]() {
+        ESP_LOGW(TAG, "No uplink audio sent for a while, closing audio channel");
+        Schedule([this]() {
+            Alert(Lang::Strings::ERROR, "网络异常，请稍后再试", "sad", Lang::Sounds::OGG_EXCLAMATION);
+            audio_service_.EnableVoiceProcessing(false);
+            audio_service_.EnableWakeWordDetection(true);
+            AbortSpeaking(kAbortReasonNone);
+        });
+    });
+
+    downlink_watchdog_.OnTimeout([this]() {
+        ESP_LOGW(TAG, "No downlink audio received for a while, closing audio channel");
+        Schedule([this]() {
+            Alert(Lang::Strings::ERROR, "网络异常，请稍后再试", "sad", Lang::Sounds::OGG_EXCLAMATION);
+            if (protocol_ && protocol_->IsAudioChannelOpened()) {
+                protocol_->CloseAudioChannel();
+            }
+        });
+    });
+#endif // CONFIG_LSPLATFORM
+
     // Add MCP common tools before initializing the protocol
     McpServer::GetInstance().AddCommonTools();
 
@@ -415,6 +437,9 @@ void Application::Start() {
         xEventGroupSetBits(event_group_, MAIN_EVENT_ERROR);
     });
     protocol_->OnIncomingAudio([this](std::unique_ptr<AudioStreamPacket> packet) {
+#ifdef CONFIG_LSPLATFORM
+        downlink_watchdog_.Feed(packet->frame_duration);
+#endif // CONFIG_LSPLATFORM
         if (device_state_ == kDeviceStateSpeaking) {
             audio_service_.PushPacketToDecodeQueue(std::move(packet));
         }
@@ -444,6 +469,9 @@ void Application::Start() {
                     aborted_ = false;
                     if (device_state_ == kDeviceStateIdle || device_state_ == kDeviceStateListening) {
                         SetDeviceState(kDeviceStateSpeaking);
+#ifdef CONFIG_LSPLATFORM
+                        downlink_watchdog_.Start();
+#endif // CONFIG_LSPLATFORM
                     }
                 });
             } else if (strcmp(state->valuestring, "stop") == 0) {
@@ -454,6 +482,9 @@ void Application::Start() {
                         } else {
                             SetDeviceState(kDeviceStateListening);
                         }
+#ifdef CONFIG_LSPLATFORM
+                        downlink_watchdog_.Stop();
+#endif // CONFIG_LSPLATFORM
                     }
                 });
             } else if (strcmp(state->valuestring, "sentence_start") == 0) {
@@ -599,9 +630,18 @@ void Application::MainEventLoop() {
 
         if (bits & MAIN_EVENT_SEND_AUDIO) {
             while (auto packet = audio_service_.PopPacketFromSendQueue()) {
+#ifdef CONFIG_LSPLATFORM
+                auto duration = packet->frame_duration;
+                if (protocol_->SendAudio(std::move(packet))) {
+                    uplink_watchdog_.Feed(duration);
+                } else {
+                    break;
+                }
+#else // !CONFIG_LSPLATFORM
                 if (!protocol_->SendAudio(std::move(packet))) {
                     break;
                 }
+#endif // CONFIG_LSPLATFORM
             }
         }
 
@@ -703,6 +743,10 @@ void Application::SetDeviceState(DeviceState state) {
 #endif // CONFIG_LSPLATFORM
             audio_service_.EnableVoiceProcessing(false);
             audio_service_.EnableWakeWordDetection(true);
+#ifdef CONFIG_LSPLATFORM
+            uplink_watchdog_.Stop();
+            downlink_watchdog_.Stop();
+#endif // CONFIG_LSPLATFORM
             break;
         case kDeviceStateConnecting:
             display->SetStatus(Lang::Strings::CONNECTING);
@@ -719,6 +763,9 @@ void Application::SetDeviceState(DeviceState state) {
                 protocol_->SendStartListening(listening_mode_);
                 audio_service_.EnableVoiceProcessing(true);
                 audio_service_.EnableWakeWordDetection(false);
+#ifdef CONFIG_LSPLATFORM
+                uplink_watchdog_.Start();
+#endif // CONFIG_LSPLATFORM
             }
             break;
         case kDeviceStateSpeaking:
@@ -732,6 +779,9 @@ void Application::SetDeviceState(DeviceState state) {
 #else
                 audio_service_.EnableWakeWordDetection(false);
 #endif
+#ifdef CONFIG_LSPLATFORM
+                uplink_watchdog_.Stop();
+#endif // CONFIG_LSPLATFORM
             }
             audio_service_.ResetDecoder();
             break;
