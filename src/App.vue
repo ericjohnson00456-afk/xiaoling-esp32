@@ -1,32 +1,17 @@
 <template>
   <sonic-view :peak="peak" :level="level" :period="500" />
-  <div :class="{ [$style.header]: true, [$style.inverted]: (progress || 0) > 95 }">
-    <a-space align="center">
-      <span>高级模式</span>
-      <a-switch :checked="advanced" @update:checked="setAdvanced" />
-    </a-space>
-  </div>
   <div :class="$style.content">
-    <router-view v-slot="{ Component }">
-      <component :is="Component" :state="state" :accept-exts="ACCEPT_EXTS" @file="handleFile" @connect="connect"
-        @flash="flash" @reset="reset" @start="oneClick" @clear="clear" />
-    </router-view>
-  </div>
-  <div :class="{ [$style.footer]: true, [$style.inverted]: !advanced && (progress || 0) > 10 }">
-    <span>© 2021-2025 XiNGRZ</span>
-    <a-divider type="vertical" />
-    <a href="https://github.com/xingrz/web-esptool">Fork me on GitHub</a>
-    <a-divider type="vertical" />
-    <a href="https://github.com/xingrz/web-esptool/wiki">固件格式说明</a>
+    <simple-view :state="state" :accept-exts="ACCEPT_EXTS" @file="handleFile" @connect="connect" @flash="flash"
+      @reset="reset" @start="oneClick" @clear="clear" />
   </div>
 </template>
 
 <script lang="ts" setup>
 import { computed, reactive } from 'vue';
-import { useRouter } from 'vue-router';
 import { message } from 'ant-design-vue';
 
 import SonicView from '@/components/SonicView.vue';
+import SimpleView from '@/routes/SimpleView.vue';
 
 import useTotalProgress from '@/composables/useTotalProgress';
 
@@ -41,16 +26,6 @@ import type { IESPDevice, IFlashProgress } from '@/esptool';
 const ACCEPT_EXTS = ['.zip', '.bin', '.uf2'];
 
 const MAX_FILE_SIZE = 16 * 1024 * 1024;
-
-const router = useRouter();
-const advanced = computed(() => router.currentRoute.value.name == 'studio');
-function setAdvanced(value: boolean) {
-  if (value) {
-    router.replace({ name: 'studio' });
-  } else {
-    router.replace({ name: 'simple' });
-  }
-}
 
 const state = reactive<IState>({
   stage: 'idle',
@@ -158,12 +133,12 @@ const progress = useTotalProgress(state);
 const peak = computed(() => {
   if (state.stage == 'flashing') return 0.7;
   else if (state.stage == 'connecting') return 0.4;
-  else if (progress.value != null && progress.value >= 100 && !advanced.value) return 0;
+  else if (progress.value != null && progress.value >= 100) return 0;
   else return 0.2;
 });
 
 const level = computed(() => {
-  if (progress.value == null || advanced.value) {
+  if (progress.value == null) {
     return 0.02;
   } else {
     return 0.02 + (progress.value / 100) * 1.1;
@@ -178,11 +153,6 @@ const level = computed(() => {
   padding: 0;
 }
 
-.header {
-  padding: 16px 32px;
-  text-align: right;
-}
-
 .content {
   width: 100vw;
   height: 80vh;
@@ -191,30 +161,5 @@ const level = computed(() => {
   flex-direction: column;
   justify-content: center;
   align-items: center;
-}
-
-.footer {
-  opacity: 0.6;
-  font-size: 12px;
-  text-align: center;
-
-  color: #000;
-  transition: color 500ms;
-
-  a {
-    color: #599;
-
-    &:hover {
-      text-decoration: underline;
-    }
-  }
-
-  &.inverted {
-    color: #FFF;
-
-    a {
-      color: #FFD;
-    }
-  }
 }
 </style>

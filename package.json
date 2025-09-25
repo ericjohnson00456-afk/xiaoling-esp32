@@ -14,8 +14,7 @@
     "events": "^3.3.0",
     "fflate": "^0.8.2",
     "pify": "^6.1.0",
-    "vue": "^3.5.20",
-    "vue-router": "^4.5.1"
+    "vue": "^3.5.20"
   },
   "devDependencies": {
     "@types/events": "^3.0.3",
