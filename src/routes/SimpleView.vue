@@ -1,6 +1,5 @@
 <template>
-  <h1 :class="$style.title">Web ESPTool</h1>
-  <div :class="$style.author">by XiNGRZ</div>
+  <h1 :class="$style.title">小聆 AI 在线升级</h1>
   <Transition name="slide-up" mode="out-in">
     <div :class="[$style.main, $style.upload]" v-if="progress == null">
       <a-upload-dragger :accept="acceptExts.join(',')" :showUploadList="false" :customRequest="handleFile">
@@ -74,12 +73,6 @@ function handleClear(): void {
   font-size: 50px;
   font-weight: 100;
   line-height: 1;
-  margin-bottom: 0;
-}
-
-.author {
-  font-size: 18px;
-  font-weight: 300;
   margin-bottom: 50px;
 }
 
