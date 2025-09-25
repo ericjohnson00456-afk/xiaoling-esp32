@@ -11,18 +11,18 @@
         <p class="ant-upload-text" v-else>点击选择或将固件包拖放到此处</p>
       </a-upload-dragger>
     </div>
-    <div :class="[$style.main, $style.progress]" v-else-if="completed">烧录完成</div>
+    <div :class="[$style.main, $style.progress]" v-else-if="completed">升级完成</div>
     <div :class="[$style.main, $style.progress]" v-else>{{ Math.floor(progress || 0) }}%</div>
   </Transition>
   <div :class="$style.buttons">
     <Transition name="fade" mode="out-in">
       <template v-if="stage != 'flashing'">
         <a-button v-if="completed" size="large" type="default" ghost @click="handleClear" :class="$style.reset">
-          再次烧录
+          再次升级
         </a-button>
         <a-button v-else size="large" type="primary" :disabled="!firmware"
           :loading="['connecting', 'flashing'].includes(stage)" @click="handleStart">
-          开始烧录
+          开始升级
         </a-button>
       </template>
     </Transition>

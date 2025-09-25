@@ -103,7 +103,7 @@ async function flash(reset = false): Promise<boolean> {
     return true;
   } catch (e) {
     console.error(e);
-    message.error('烧录失败');
+    message.error('升级失败');
     state.progress = undefined;
     return false;
   } finally {
