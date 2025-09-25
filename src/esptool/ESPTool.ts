@@ -37,7 +37,7 @@ const LOADERS = [
   ESP32C6ROM,
 ];
 
-const COMPRESS = true;
+const COMPRESS = false;
 
 export default class ESPTool extends EventEmitter {
 

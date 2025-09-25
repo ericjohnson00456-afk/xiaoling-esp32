@@ -1,9 +1,15 @@
 <template>
-  <sonic-view :peak="peak" :level="level" :period="500" />
-  <div :class="$style.content">
-    <simple-view :state="state" :accept-exts="ACCEPT_EXTS" @file="handleFile" @connect="connect" @flash="flash"
-      @reset="reset" @start="oneClick" @clear="clear" />
-  </div>
+  <a-config-provider :theme="{
+    token: {
+      colorPrimary: '#55CAB3',
+    },
+  }">
+    <sonic-view :peak="peak" :level="level" :period="500" />
+    <div :class="$style.content">
+      <simple-view :state="state" :accept-exts="ACCEPT_EXTS" @file="handleFile" @connect="connect" @flash="flash"
+        @reset="reset" @start="oneClick" @clear="clear" />
+    </div>
+  </a-config-provider>
 </template>
 
 <script lang="ts" setup>
