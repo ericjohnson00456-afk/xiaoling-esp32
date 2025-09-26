@@ -72,7 +72,11 @@ Application::~Application() {
 }
 
 void Application::CheckNewVersion(Ota& ota) {
+#ifdef CONFIG_LSPLATFORM
+    const int MAX_RETRY = 3;
+#else // !CONFIG_LSPLATFORM
     const int MAX_RETRY = 10;
+#endif // CONFIG_LSPLATFORM
     int retry_count = 0;
     int retry_delay = 10; // 初始重试延迟为10秒
 
@@ -86,6 +90,10 @@ void Application::CheckNewVersion(Ota& ota) {
             retry_count++;
             if (retry_count >= MAX_RETRY) {
                 ESP_LOGE(TAG, "Too many retries, exit version check");
+#ifdef CONFIG_LSPLATFORM
+                vTaskDelay(pdMS_TO_TICKS(3000));
+                Reboot();
+#endif // CONFIG_LSPLATFORM
                 return;
             }
 
