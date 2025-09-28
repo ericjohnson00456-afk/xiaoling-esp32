@@ -5,7 +5,6 @@
 #include "audio_codec.h"
 #include "mqtt_protocol.h"
 #include "websocket_protocol.h"
-#include "font_awesome_symbols.h"
 #include "assets/lang_config.h"
 #include "mcp_server.h"
 
@@ -18,6 +17,7 @@
 #include <cJSON.h>
 #include <driver/gpio.h>
 #include <arpa/inet.h>
+#include <font_awesome.h>
 
 #define TAG "Application"
 
@@ -53,7 +53,7 @@ Application::Application() {
     esp_timer_create_args_t clock_timer_args = {
         .callback = [](void* arg) {
             Application* app = (Application*)arg;
-            app->OnClockTimer();
+            xEventGroupSetBits(app->event_group_, MAIN_EVENT_CLOCK_TICK);
         },
         .arg = this,
         .dispatch_method = ESP_TIMER_TASK,
@@ -99,7 +99,7 @@ void Application::CheckNewVersion(Ota& ota) {
 
             char buffer[256];
             snprintf(buffer, sizeof(buffer), Lang::Strings::CHECK_NEW_VERSION_FAILED, retry_delay, ota.GetCheckVersionUrl().c_str());
-            Alert(Lang::Strings::ERROR, buffer, "sad", Lang::Sounds::OGG_EXCLAMATION);
+            Alert(Lang::Strings::ERROR, buffer, "cloud_slash", Lang::Sounds::OGG_EXCLAMATION);
 
             ESP_LOGW(TAG, "Check new version failed, retry in %d seconds (%d/%d)", retry_delay, retry_count, MAX_RETRY);
             for (int i = 0; i < retry_delay; i++) {
@@ -115,13 +115,12 @@ void Application::CheckNewVersion(Ota& ota) {
         retry_delay = 10; // 重置重试延迟时间
 
         if (ota.HasNewVersion()) {
-            Alert(Lang::Strings::OTA_UPGRADE, Lang::Strings::UPGRADING, "happy", Lang::Sounds::OGG_UPGRADE);
+            Alert(Lang::Strings::OTA_UPGRADE, Lang::Strings::UPGRADING, "download", Lang::Sounds::OGG_UPGRADE);
 
             vTaskDelay(pdMS_TO_TICKS(3000));
 
             SetDeviceState(kDeviceStateUpgrading);
             
-            display->SetIcon(FONT_AWESOME_DOWNLOAD);
             std::string message = std::string(Lang::Strings::NEW_VERSION) + ota.GetFirmwareVersion();
             display->SetChatMessage("system", message.c_str());
 
@@ -142,7 +141,7 @@ void Application::CheckNewVersion(Ota& ota) {
                 ESP_LOGE(TAG, "Firmware upgrade failed, restarting audio service and continuing operation...");
                 audio_service_.Start(); // Restart audio service
                 board.SetPowerSaveMode(true); // Restore power save mode
-                Alert(Lang::Strings::ERROR, Lang::Strings::UPGRADE_FAILED, "sad", Lang::Sounds::OGG_EXCLAMATION);
+                Alert(Lang::Strings::ERROR, Lang::Strings::UPGRADE_FAILED, "circle_xmark", Lang::Sounds::OGG_EXCLAMATION);
                 vTaskDelay(pdMS_TO_TICKS(3000));
                 // Continue to normal operation (don't break, just fall through)
             } else {
@@ -234,7 +233,7 @@ void Application::ShowActivationCode(const std::string& code, const std::string&
     audio_service_.PlaySound(Lang::Sounds::OGG_BINDING);
 #else // !CONFIG_LSPLATFORM
     // This sentence uses 9KB of SRAM, so we need to wait for it to finish
-    Alert(Lang::Strings::ACTIVATION, message.c_str(), "happy", Lang::Sounds::OGG_ACTIVATION);
+    Alert(Lang::Strings::ACTIVATION, message.c_str(), "link", Lang::Sounds::OGG_ACTIVATION);
 #endif // CONFIG_LSPLATFORM
 
     for (const auto& digit : code) {
@@ -247,7 +246,7 @@ void Application::ShowActivationCode(const std::string& code, const std::string&
 }
 
 void Application::Alert(const char* status, const char* message, const char* emotion, const std::string_view& sound) {
-    ESP_LOGW(TAG, "Alert %s: %s [%s]", status, message, emotion);
+    ESP_LOGW(TAG, "Alert [%s] %s: %s", emotion, status, message);
     auto display = Board::GetInstance().GetDisplay();
     display->SetStatus(status);
     display->SetEmotion(emotion);
@@ -440,6 +439,10 @@ void Application::Start() {
         protocol_ = std::make_unique<MqttProtocol>();
     }
 
+    protocol_->OnConnected([this]() {
+        DismissAlert();
+    });
+
     protocol_->OnNetworkError([this](const std::string& message) {
         last_error_message_ = message;
         xEventGroupSetBits(event_group_, MAIN_EVENT_ERROR);
@@ -567,6 +570,8 @@ void Application::Start() {
     });
     bool protocol_started = protocol_->Start();
 
+    // Print heap stats
+    SystemInfo::PrintHeapStats();
     SetDeviceState(kDeviceStateIdle);
 
     has_server_time_ = ota.HasServerTime();
@@ -581,31 +586,6 @@ void Application::Start() {
 #if CONFIG_LSPLATFORM_BANNERS
     auto banners = board.GetBanners();
     banners->Fetch(ota.GetBannersUrl());
-#endif
-
-    // Print heap stats
-    SystemInfo::PrintHeapStats();
-}
-
-void Application::OnClockTimer() {
-    clock_ticks_++;
-
-    auto display = Board::GetInstance().GetDisplay();
-    display->UpdateStatusBar();
-
-    // Print the debug info every 10 seconds
-    if (clock_ticks_ % 10 == 0) {
-        // SystemInfo::PrintTaskCpuUsage(pdMS_TO_TICKS(1000));
-        // SystemInfo::PrintTaskList();
-        SystemInfo::PrintHeapStats();
-    }
-
-#if CONFIG_LSPLATFORM_BANNERS
-    if (clock_ticks_ % 5 == 0 && device_state_ == kDeviceStateIdle) {
-        auto banners = Board::GetInstance().GetBanners();
-        auto banner = banners->Next();
-        display->SetChatMessage("system", banner.c_str());
-    }
 #endif
 }
 
@@ -630,10 +610,12 @@ void Application::MainEventLoop() {
             MAIN_EVENT_SEND_AUDIO |
             MAIN_EVENT_WAKE_WORD_DETECTED |
             MAIN_EVENT_VAD_CHANGE |
+            MAIN_EVENT_CLOCK_TICK |
             MAIN_EVENT_ERROR, pdTRUE, pdFALSE, portMAX_DELAY);
+
         if (bits & MAIN_EVENT_ERROR) {
             SetDeviceState(kDeviceStateIdle);
-            Alert(Lang::Strings::ERROR, last_error_message_.c_str(), "sad", Lang::Sounds::OGG_EXCLAMATION);
+            Alert(Lang::Strings::ERROR, last_error_message_.c_str(), "circle_xmark", Lang::Sounds::OGG_EXCLAMATION);
         }
 
         if (bits & MAIN_EVENT_SEND_AUDIO) {
@@ -671,6 +653,27 @@ void Application::MainEventLoop() {
             for (auto& task : tasks) {
                 task();
             }
+        }
+
+        if (bits & MAIN_EVENT_CLOCK_TICK) {
+            clock_ticks_++;
+            auto display = Board::GetInstance().GetDisplay();
+            display->UpdateStatusBar();
+        
+            // Print the debug info every 10 seconds
+            if (clock_ticks_ % 10 == 0) {
+                // SystemInfo::PrintTaskCpuUsage(pdMS_TO_TICKS(1000));
+                // SystemInfo::PrintTaskList();
+                SystemInfo::PrintHeapStats();
+            }
+
+#if CONFIG_LSPLATFORM_BANNERS
+            if (clock_ticks_ % 5 == 0 && device_state_ == kDeviceStateIdle) {
+                auto banners = Board::GetInstance().GetBanners();
+                auto banner = banners->Next();
+                display->SetChatMessage("system", banner.c_str());
+            }
+#endif
         }
     }
 }

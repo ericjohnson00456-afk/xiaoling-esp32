@@ -9,7 +9,6 @@
 #include <string>
 #include <mutex>
 #include <deque>
-#include <vector>
 #include <memory>
 
 #include "protocol.h"
@@ -18,12 +17,15 @@
 #include "device_state_event.h"
 #include "watchdog.h"
 
+
 #define MAIN_EVENT_SCHEDULE (1 << 0)
 #define MAIN_EVENT_SEND_AUDIO (1 << 1)
 #define MAIN_EVENT_WAKE_WORD_DETECTED (1 << 2)
 #define MAIN_EVENT_VAD_CHANGE (1 << 3)
 #define MAIN_EVENT_ERROR (1 << 4)
 #define MAIN_EVENT_CHECK_NEW_VERSION_DONE (1 << 5)
+#define MAIN_EVENT_CLOCK_TICK (1 << 6)
+
 
 enum AecMode {
     kAecOff,
@@ -89,7 +91,6 @@ private:
     void OnWakeWordDetected();
     void CheckNewVersion(Ota& ota);
     void ShowActivationCode(const std::string& code, const std::string& message, const std::string& qrcode = "");
-    void OnClockTimer();
     void SetListeningMode(ListeningMode mode);
 };
 

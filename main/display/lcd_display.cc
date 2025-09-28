@@ -1,15 +1,15 @@
 #include "lcd_display.h"
+#include "assets/lang_config.h"
+#include "settings.h"
 
 #include <vector>
 #include <algorithm>
-#include <font_awesome_symbols.h>
+#include <font_awesome.h>
 #include <esp_log.h>
 #include <esp_err.h>
 #include <esp_lvgl_port.h>
-#include <esp_heap_caps.h>
-#include "assets/lang_config.h"
+#include <esp_psram.h>
 #include <cstring>
-#include "settings.h"
 
 #include "board.h"
 
@@ -102,10 +102,21 @@ SpiLcdDisplay::SpiLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_h
     ESP_LOGI(TAG, "Initialize LVGL library");
     lv_init();
 
+#if CONFIG_SPIRAM
+    // lv image cache, currently only PNG is supported
+    size_t psram_size_mb = esp_psram_get_size() / 1024 / 1024;
+    if (psram_size_mb >= 8) {
+        lv_image_cache_resize(2 * 1024 * 1024, true);
+        ESP_LOGI(TAG, "Use 2MB of PSRAM for image cache");
+    } else if (psram_size_mb >= 2) {
+        lv_image_cache_resize(512 * 1024, true);
+        ESP_LOGI(TAG, "Use 512KB of PSRAM for image cache");
+    }
+#endif
+
     ESP_LOGI(TAG, "Initialize LVGL port");
     lvgl_port_cfg_t port_cfg = ESP_LVGL_PORT_INIT_CONFIG();
     port_cfg.task_priority = 1;
-    port_cfg.timer_period_ms = 40;
     lvgl_port_init(&port_cfg);
 
     ESP_LOGI(TAG, "Adding LCD display");
@@ -367,7 +378,7 @@ void LcdDisplay::SetupUI() {
     emotion_label_ = lv_label_create(status_bar_);
     lv_obj_set_style_text_font(emotion_label_, &font_awesome_30_4, 0);
     lv_obj_set_style_text_color(emotion_label_, current_theme_.text, 0);
-    lv_label_set_text(emotion_label_, FONT_AWESOME_AI_CHIP);
+    lv_label_set_text(emotion_label_, FONT_AWESOME_MICROCHIP_AI);
     lv_obj_set_style_margin_right(emotion_label_, 5, 0); // 添加右边距，与后面的元素分隔
 
     notification_label_ = lv_label_create(status_bar_);
@@ -626,7 +637,7 @@ void LcdDisplay::SetPreviewImage(const lv_img_dsc_t* img_dsc) {
         
         // 设置自定义属性标记气泡类型
         lv_obj_set_user_data(img_bubble, (void*)"image");
-        
+
         // Create the image object inside the bubble
         lv_obj_t* preview_image = lv_image_create(img_bubble);
         
@@ -749,7 +760,7 @@ void LcdDisplay::SetupUI() {
     emotion_label_ = lv_label_create(content_);
     lv_obj_set_style_text_font(emotion_label_, &font_awesome_30_4, 0);
     lv_obj_set_style_text_color(emotion_label_, current_theme_.text, 0);
-    lv_label_set_text(emotion_label_, FONT_AWESOME_AI_CHIP);
+    lv_label_set_text(emotion_label_, FONT_AWESOME_MICROCHIP_AI);
 
     preview_image_ = lv_image_create(content_);
     lv_obj_set_size(preview_image_, width_ * 0.5, height_ * 0.5);
@@ -826,8 +837,10 @@ void LcdDisplay::SetPreviewImage(const lv_img_dsc_t* img_dsc) {
     if (img_dsc != nullptr) {
         // 设置图片源并显示预览图片
         lv_image_set_src(preview_image_, img_dsc);
-        // zoom factor 0.5
-        lv_image_set_scale(preview_image_, 128 * width_ / img_dsc->header.w);
+        if (img_dsc->header.w > 0) {
+            // zoom factor 0.5
+            lv_image_set_scale(preview_image_, 128 * width_ / img_dsc->header.w);
+        }
         lv_obj_remove_flag(preview_image_, LV_OBJ_FLAG_HIDDEN);
         // 隐藏emotion_label_
         if (emotion_label_ != nullptr) {
@@ -877,6 +890,13 @@ void LcdDisplay::SetEmotion(const char* emotion) {
     std::string_view emotion_view(emotion);
     auto it = std::find_if(emotions.begin(), emotions.end(),
         [&emotion_view](const Emotion& e) { return e.text == emotion_view; });
+    if (fonts_.emoji_font == nullptr || it == emotions.end()) {
+        const char* utf8 = font_awesome_get_utf8(emotion);
+        if (utf8 != nullptr) {
+            SetIcon(utf8);
+        }
+        return;
+    }
 
     DisplayLockGuard lock(this);
     if (emotion_label_ == nullptr) {
