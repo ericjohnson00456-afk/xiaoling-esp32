@@ -8,35 +8,38 @@
           <a-radio-button value="local">本地文件</a-radio-button>
         </a-radio-group>
       </div>
-      <a-space v-if="source == 'github'" direction="vertical" :style="{ width: '100%' }" size="large">
-        <a-space align="center">
-          <span :style="{ width: '4em' }">版本：</span>
-          <a-select v-model:value="tag" :style="{ width: '250px' }" size="large" placeholder="选择固件版本">
-            <a-select-option v-for="r in releases" :key="r.tag" :value="r.tag">
-              <a-flex justify="space-between" align="center" style="width: 100%;">
-                {{ r.name }}
-                <a-tag v-if="r.kind == 'latest'" color="green">Latest</a-tag>
-                <a-tag v-else-if="r.kind == 'prerelease'" color="orange">Pre-release</a-tag>
-              </a-flex>
-            </a-select-option>
-          </a-select>
-          <span :style="{ marginLeft: '0.5em' }" v-if="release">
-            <a :href="release.url" target="_blank">发行说明</a>
-          </span>
+      <a-spin v-if="source == 'github'" :spinning="releases === undefined">
+        <a-space direction="vertical" :style="{ width: '100%' }" size="large">
+          <a-space align="center">
+            <span :style="{ width: '4em' }">版本：</span>
+            <a-select v-model:value="tag" :style="{ width: '250px' }" size="large" placeholder="选择固件版本"
+              :disabled="!releases || downloading !== undefined">
+              <a-select-option v-for="r in releases ?? []" :key="r.tag" :value="r.tag">
+                <a-flex justify="space-between" align="center" style="width: 100%;">
+                  {{ r.name }}
+                  <a-tag v-if="r.kind == 'latest'" color="green">Latest</a-tag>
+                  <a-tag v-else-if="r.kind == 'prerelease'" color="orange">Pre-release</a-tag>
+                </a-flex>
+              </a-select-option>
+            </a-select>
+            <span :style="{ marginLeft: '0.5em' }" v-if="release">
+              <a :href="release.url" target="_blank">发行说明</a>
+            </span>
+          </a-space>
+          <a-space align="center">
+            <span :style="{ width: '4em' }">板型：</span>
+            <a-select v-model:value="board" :style="{ width: '400px' }" size="large" placeholder="选择板型" show-search
+              :disabled="!release || downloading !== undefined">
+              <a-select-option v-for="a in release?.assets ?? []" :key="a.board" :value="a.board">
+                {{ a.board }}
+              </a-select-option>
+            </a-select>
+          </a-space>
+          <div :style="{ width: '200px' }" v-if="downloading !== undefined">
+            正在准备固件 <a-progress size="small" :percent="downloading" />
+          </div>
         </a-space>
-        <a-space align="center">
-          <span :style="{ width: '4em' }">板型：</span>
-          <a-select v-model:value="board" :style="{ width: '400px' }" size="large" placeholder="选择板型" show-search
-            :disabled="!release">
-            <a-select-option v-for="a in release?.assets ?? []" :key="a.board" :value="a.board">
-              {{ a.board }}
-            </a-select-option>
-          </a-select>
-        </a-space>
-        <div :style="{ width: '200px' }" v-if="downloading !== undefined">
-          正在准备固件 <a-progress size="small" :percent="downloading" />
-        </div>
-      </a-space>
+      </a-spin>
       <div v-else="source=='local'" :style="{ height: '200px' }">
         <a-upload-dragger :accept="acceptExts.join(',')" :showUploadList="false" :customRequest="handleFile">
           <p class="ant-upload-drag-icon">
@@ -162,14 +165,14 @@ const releases = ref<{
     board: string;
     url: string;
   }[];
-}[]>([]);
+}[] | undefined>();
 
 onMounted(async () => {
   releases.value = await (await fetch('https://raw.githubusercontent.com/ericjohnson00456-afk/xiaoling-esp32_releases/refs/heads/index/releases.json')).json();
-  tag.value = releases.value.find(r => r.kind == 'latest')?.tag;
+  tag.value = releases.value?.find(r => r.kind == 'latest')?.tag;
 });
 
-const release = computed(() => tag.value ? releases.value.find((r) => r.tag == tag.value) : undefined);
+const release = computed(() => tag.value ? releases.value?.find((r) => r.tag == tag.value) : undefined);
 const asset = computed(() => board.value ? release.value?.assets.find((a) => a.board == board.value) : undefined);
 </script>
 
