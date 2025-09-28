@@ -408,21 +408,23 @@ void Application::Start() {
 #ifdef CONFIG_LSPLATFORM
     uplink_watchdog_.OnTimeout([this]() {
         ESP_LOGW(TAG, "No uplink audio sent for a while, closing audio channel");
+        audio_service_.EnableVoiceProcessing(false);
+        audio_service_.EnableWakeWordDetection(true);
+        if (protocol_ && protocol_->IsAudioChannelOpened()) {
+            protocol_->CloseAudioChannel();
+        }
         Schedule([this]() {
             Alert(Lang::Strings::ERROR, "网络异常，请稍后再试", "sad", Lang::Sounds::OGG_EXCLAMATION);
-            audio_service_.EnableVoiceProcessing(false);
-            audio_service_.EnableWakeWordDetection(true);
-            AbortSpeaking(kAbortReasonNone);
         });
     });
 
     downlink_watchdog_.OnTimeout([this]() {
         ESP_LOGW(TAG, "No downlink audio received for a while, closing audio channel");
+        if (protocol_ && protocol_->IsAudioChannelOpened()) {
+            protocol_->CloseAudioChannel();
+        }
         Schedule([this]() {
             Alert(Lang::Strings::ERROR, "网络异常，请稍后再试", "sad", Lang::Sounds::OGG_EXCLAMATION);
-            if (protocol_ && protocol_->IsAudioChannelOpened()) {
-                protocol_->CloseAudioChannel();
-            }
         });
     });
 #endif // CONFIG_LSPLATFORM
