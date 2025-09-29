@@ -85,7 +85,7 @@ Led* Board::GetLed() {
     return &led;
 }
 
-std::string Board::GetJson() {
+std::string Board::GetSystemInfoJson() {
     /* 
         {
             "version": 2,
@@ -178,4 +178,13 @@ std::string Board::GetJson() {
     // Close the JSON object
     json += R"(})";
     return json;
+}
+
+Assets* Board::GetAssets() {
+#ifdef DEFAULT_ASSETS
+    static Assets assets(DEFAULT_ASSETS);
+    return &assets;
+#else
+    return nullptr;
+#endif
 }

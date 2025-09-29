@@ -7,6 +7,8 @@
 #include "websocket_protocol.h"
 #include "assets/lang_config.h"
 #include "mcp_server.h"
+#include "assets.h"
+#include "settings.h"
 
 #ifdef CONFIG_LSPLATFORM
 #include "image_fetcher.h"
@@ -71,6 +73,65 @@ Application::~Application() {
     vEventGroupDelete(event_group_);
 }
 
+void Application::CheckAssetsVersion() {
+    auto& board = Board::GetInstance();
+    auto display = board.GetDisplay();
+    auto assets = board.GetAssets();
+    if (!assets) {
+        ESP_LOGE(TAG, "Assets is not set for board %s", BOARD_NAME);
+        return;
+    }
+
+    if (!assets->partition_valid()) {
+        ESP_LOGE(TAG, "Assets partition is not valid for board %s", BOARD_NAME);
+        return;
+    }
+    
+    Settings settings("assets", true);
+    // Check if there is a new assets need to be downloaded
+    std::string download_url = settings.GetString("download_url");
+    if (!download_url.empty()) {
+        settings.EraseKey("download_url");
+    }
+    if (download_url.empty() && !assets->checksum_valid()) {
+        download_url = assets->default_assets_url();
+    }
+
+    if (!download_url.empty()) {
+        char message[256];
+        snprintf(message, sizeof(message), Lang::Strings::FOUND_NEW_ASSETS, download_url.c_str());
+        Alert(Lang::Strings::LOADING_ASSETS, message, "cloud_arrow_down", Lang::Sounds::OGG_UPGRADE);
+        
+        // Wait for the audio service to be idle for 3 seconds
+        vTaskDelay(pdMS_TO_TICKS(3000));
+        SetDeviceState(kDeviceStateUpgrading);
+        board.SetPowerSaveMode(false);
+        display->SetChatMessage("system", Lang::Strings::PLEASE_WAIT);
+
+        bool success = assets->Download(download_url, [display](int progress, size_t speed) -> void {
+            std::thread([display, progress, speed]() {
+                char buffer[32];
+                snprintf(buffer, sizeof(buffer), "%d%% %uKB/s", progress, speed / 1024);
+                display->SetChatMessage("system", buffer);
+            }).detach();
+        });
+
+        board.SetPowerSaveMode(true);
+        vTaskDelay(pdMS_TO_TICKS(1000));
+
+        if (!success) {
+            Alert(Lang::Strings::ERROR, Lang::Strings::DOWNLOAD_ASSETS_FAILED, "circle_xmark", Lang::Sounds::OGG_EXCLAMATION);
+            vTaskDelay(pdMS_TO_TICKS(2000));
+            return;
+        }
+    }
+
+    // Apply assets
+    assets->Apply();
+    display->SetChatMessage("system", "");
+    display->SetEmotion("microchip_ai");
+}
+
 void Application::CheckNewVersion(Ota& ota) {
 #ifdef CONFIG_LSPLATFORM
     const int MAX_RETRY = 3;
@@ -115,43 +176,10 @@ void Application::CheckNewVersion(Ota& ota) {
         retry_delay = 10; // 重置重试延迟时间
 
         if (ota.HasNewVersion()) {
-            Alert(Lang::Strings::OTA_UPGRADE, Lang::Strings::UPGRADING, "download", Lang::Sounds::OGG_UPGRADE);
-
-            vTaskDelay(pdMS_TO_TICKS(3000));
-
-            SetDeviceState(kDeviceStateUpgrading);
-            
-            std::string message = std::string(Lang::Strings::NEW_VERSION) + ota.GetFirmwareVersion();
-            display->SetChatMessage("system", message.c_str());
-
-            board.SetPowerSaveMode(false);
-            audio_service_.Stop();
-            vTaskDelay(pdMS_TO_TICKS(1000));
-
-            bool upgrade_success = ota.StartUpgrade([display](int progress, size_t speed) {
-                std::thread([display, progress, speed]() {
-                    char buffer[32];
-                    snprintf(buffer, sizeof(buffer), "%d%% %uKB/s", progress, speed / 1024);
-                    display->SetChatMessage("system", buffer);
-                }).detach();
-            });
-
-            if (!upgrade_success) {
-                // Upgrade failed, restart audio service and continue running
-                ESP_LOGE(TAG, "Firmware upgrade failed, restarting audio service and continuing operation...");
-                audio_service_.Start(); // Restart audio service
-                board.SetPowerSaveMode(true); // Restore power save mode
-                Alert(Lang::Strings::ERROR, Lang::Strings::UPGRADE_FAILED, "circle_xmark", Lang::Sounds::OGG_EXCLAMATION);
-                vTaskDelay(pdMS_TO_TICKS(3000));
-                // Continue to normal operation (don't break, just fall through)
-            } else {
-                // Upgrade success, reboot immediately
-                ESP_LOGI(TAG, "Firmware upgrade successful, rebooting...");
-                display->SetChatMessage("system", "Upgrade successful, rebooting...");
-                vTaskDelay(pdMS_TO_TICKS(1000)); // Brief pause to show message
-                Reboot();
+            if (UpgradeFirmware(ota)) {
                 return; // This line will never be reached after reboot
             }
+            // If upgrade failed, continue to normal operation (don't break, just fall through)
         }
 
         // No new version, mark the current version as valid
@@ -398,6 +426,9 @@ void Application::Start() {
     // Update the status bar immediately to show the network state
     display->UpdateStatusBar(true);
 
+    // Check for new assets version
+    CheckAssetsVersion();
+
     // Check for new firmware version or get the MQTT broker address
     Ota ota;
     CheckNewVersion(ota);
@@ -430,7 +461,9 @@ void Application::Start() {
 #endif // CONFIG_LSPLATFORM
 
     // Add MCP common tools before initializing the protocol
-    McpServer::GetInstance().AddCommonTools();
+    auto& mcp_server = McpServer::GetInstance();
+    mcp_server.AddCommonTools();
+    mcp_server.AddUserOnlyTools();
 
     if (ota.HasMqttConfig()) {
         protocol_ = std::make_unique<MqttProtocol>();
@@ -572,7 +605,6 @@ void Application::Start() {
     });
     bool protocol_started = protocol_->Start();
 
-    // Print heap stats
     SystemInfo::PrintHeapStats();
     SetDeviceState(kDeviceStateIdle);
 
@@ -624,13 +656,13 @@ void Application::MainEventLoop() {
             while (auto packet = audio_service_.PopPacketFromSendQueue()) {
 #ifdef CONFIG_LSPLATFORM
                 auto duration = packet->frame_duration;
-                if (protocol_->SendAudio(std::move(packet))) {
+                if (protocol_ && protocol_->SendAudio(std::move(packet))) {
                     uplink_watchdog_.Feed(duration);
                 } else {
                     break;
                 }
 #else // !CONFIG_LSPLATFORM
-                if (!protocol_->SendAudio(std::move(packet))) {
+                if (protocol_ && !protocol_->SendAudio(std::move(packet))) {
                     break;
                 }
 #endif // CONFIG_LSPLATFORM
@@ -721,7 +753,9 @@ void Application::OnWakeWordDetected() {
 void Application::AbortSpeaking(AbortReason reason) {
     ESP_LOGI(TAG, "Abort speaking");
     aborted_ = true;
-    protocol_->SendAbortSpeaking(reason);
+    if (protocol_) {
+        protocol_->SendAbortSpeaking(reason);
+    }
 }
 
 void Application::SetListeningMode(ListeningMode mode) {
@@ -806,7 +840,68 @@ void Application::SetDeviceState(DeviceState state) {
 
 void Application::Reboot() {
     ESP_LOGI(TAG, "Rebooting...");
+    // Disconnect the audio channel
+    if (protocol_ && protocol_->IsAudioChannelOpened()) {
+        protocol_->CloseAudioChannel();
+    }
+    protocol_.reset();
+    audio_service_.Stop();
+
+    vTaskDelay(pdMS_TO_TICKS(1000));
     esp_restart();
+}
+
+bool Application::UpgradeFirmware(Ota& ota, const std::string& url) {
+    auto& board = Board::GetInstance();
+    auto display = board.GetDisplay();
+    
+    // Use provided URL or get from OTA object
+    std::string upgrade_url = url.empty() ? ota.GetFirmwareUrl() : url;
+    std::string version_info = url.empty() ? ota.GetFirmwareVersion() : "(Manual upgrade)";
+    
+    // Close audio channel if it's open
+    if (protocol_ && protocol_->IsAudioChannelOpened()) {
+        ESP_LOGI(TAG, "Closing audio channel before firmware upgrade");
+        protocol_->CloseAudioChannel();
+    }
+    ESP_LOGI(TAG, "Starting firmware upgrade from URL: %s", upgrade_url.c_str());
+    
+    Alert(Lang::Strings::OTA_UPGRADE, Lang::Strings::UPGRADING, "download", Lang::Sounds::OGG_UPGRADE);
+    vTaskDelay(pdMS_TO_TICKS(3000));
+
+    SetDeviceState(kDeviceStateUpgrading);
+    
+    std::string message = std::string(Lang::Strings::NEW_VERSION) + version_info;
+    display->SetChatMessage("system", message.c_str());
+
+    board.SetPowerSaveMode(false);
+    audio_service_.Stop();
+    vTaskDelay(pdMS_TO_TICKS(1000));
+
+    bool upgrade_success = ota.StartUpgradeFromUrl(upgrade_url, [display](int progress, size_t speed) {
+        std::thread([display, progress, speed]() {
+            char buffer[32];
+            snprintf(buffer, sizeof(buffer), "%d%% %uKB/s", progress, speed / 1024);
+            display->SetChatMessage("system", buffer);
+        }).detach();
+    });
+
+    if (!upgrade_success) {
+        // Upgrade failed, restart audio service and continue running
+        ESP_LOGE(TAG, "Firmware upgrade failed, restarting audio service and continuing operation...");
+        audio_service_.Start(); // Restart audio service
+        board.SetPowerSaveMode(true); // Restore power save mode
+        Alert(Lang::Strings::ERROR, Lang::Strings::UPGRADE_FAILED, "circle_xmark", Lang::Sounds::OGG_EXCLAMATION);
+        vTaskDelay(pdMS_TO_TICKS(3000));
+        return false;
+    } else {
+        // Upgrade success, reboot immediately
+        ESP_LOGI(TAG, "Firmware upgrade successful, rebooting...");
+        display->SetChatMessage("system", "Upgrade successful, rebooting...");
+        vTaskDelay(pdMS_TO_TICKS(1000)); // Brief pause to show message
+        Reboot();
+        return true;
+    }
 }
 
 void Application::WakeWordInvoke(const std::string& wake_word) {
