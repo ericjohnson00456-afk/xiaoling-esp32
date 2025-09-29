@@ -2,7 +2,9 @@
 #define _IMAGE_FETCHER_H_
 
 #include <string>
-#include <lvgl.h>
+#include <memory>
+
+#include "lvgl_image.h"
 
 class Board;
 class ImageFetcher {
@@ -10,13 +12,12 @@ public:
     ImageFetcher(Board* board) : board_(board) {
     }
 
-    virtual ~ImageFetcher();
+    virtual ~ImageFetcher() = default;
 
-    bool Fetch(const std::string& url, lv_img_dsc_t* into, int timeout_ms = 15000);
+    std::unique_ptr<LvglImage> Fetch(const std::string& url, int timeout_ms = 15000);
 
 private:
     Board* board_;
-    uint8_t* rgb_buffer_ = nullptr;
 };
 
 #endif // _IMAGE_FETCHER_H_

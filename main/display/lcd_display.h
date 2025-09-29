@@ -37,9 +37,11 @@ protected:
     lv_obj_t* activation_container_ = nullptr;
     lv_obj_t* activation_qrcode_ = nullptr;
     lv_obj_t* activation_message_ = nullptr;
+    std::unique_ptr<LvglImage> activation_qrcode_cached_ = nullptr;
 
     lv_obj_t* image_container_ = nullptr;
     lv_obj_t* image_ = nullptr;
+    std::unique_ptr<LvglImage> image_cached_ = nullptr;
 #endif // CONFIG_LSPLATFORM
 
     void InitializeLcdThemes();
@@ -62,11 +64,11 @@ public:
 
 #ifdef CONFIG_LSPLATFORM
     void SetupActivationUI();
-    virtual void ShowActivation(const lv_img_dsc_t* qrcode, const std::string& message) override;
+    virtual void ShowActivation(std::unique_ptr<LvglImage> qrcode, const std::string& message) override;
     virtual void DismissActivation() override;
 
     void SetupImageUI();
-    virtual void ShowImage(const lv_img_dsc_t* img_dsc) override;
+    virtual void ShowImage(std::unique_ptr<LvglImage> image) override;
     virtual void DismissImage() override;
 #endif // CONFIG_LSPLATFORM
 };
