@@ -341,7 +341,7 @@ USB_Esp32Camera::USB_Esp32Camera() {
     assert(xfer_buffer_b != NULL);
     frame_buffer = (uint8_t *)heap_caps_aligned_alloc(16, DEMO_UVC_XFER_BUFFER_SIZE,MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     assert(frame_buffer != NULL);
-    decode_frame_buffer = (uint8_t *)heap_caps_aligned_alloc(16,240 * 320 * 2,MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    decode_frame_buffer = (uint8_t *)heap_caps_aligned_alloc(16,480 * 320 * 2,MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     assert(decode_frame_buffer != NULL);
     
     /* USB数据流初始化 */
@@ -352,20 +352,6 @@ USB_Esp32Camera::USB_Esp32Camera() {
     ESP_ERROR_CHECK(usb_streaming_start());
     /* 等待连接 */
     // ESP_ERROR_CHECK(usb_streaming_connect_wait(portMAX_DELAY));
-
-    memset(&preview_image_, 0, sizeof(preview_image_));
-    preview_image_.header.magic = LV_IMAGE_HEADER_MAGIC;
-    preview_image_.header.cf = LV_COLOR_FORMAT_RGB565;
-    preview_image_.header.flags = LV_IMAGE_FLAGS_ALLOCATED | LV_IMAGE_FLAGS_MODIFIABLE;
-    preview_image_.header.w = 480;
-    preview_image_.header.h = 320;
-    preview_image_.header.stride = preview_image_.header.w * 2;
-    preview_image_.data_size = preview_image_.header.w * preview_image_.header.h * 2;
-    preview_image_.data = (uint8_t*)heap_caps_malloc(preview_image_.data_size, MALLOC_CAP_SPIRAM);
-    if (preview_image_.data == nullptr) {
-        ESP_LOGE(TAG, "Failed to allocate memory for preview image");
-        return;
-    }
 }
 
 USB_Esp32Camera::~USB_Esp32Camera() {
@@ -401,8 +387,24 @@ bool USB_Esp32Camera::Capture() {
     // 显示预览图片
     auto display = dynamic_cast<LvglDisplay*>(Board::GetInstance().GetDisplay());
     if (display != nullptr) {
-        preview_image_.data = (uint8_t *)decode_frame_buffer;
-        display->SetPreviewImage(&preview_image_);
+        auto img_dsc = (lv_img_dsc_t*)heap_caps_calloc(1, sizeof(lv_img_dsc_t), MALLOC_CAP_8BIT);
+        img_dsc->header.magic = LV_IMAGE_HEADER_MAGIC;
+        img_dsc->header.cf = LV_COLOR_FORMAT_RGB565;
+        img_dsc->header.flags = 0;
+        img_dsc->header.w = 480;
+        img_dsc->header.h = 320;
+        img_dsc->header.stride = img_dsc->header.w * 2;
+        img_dsc->data_size = img_dsc->header.w * img_dsc->header.h * 2;
+        img_dsc->data = (uint8_t*)heap_caps_malloc(img_dsc->data_size, MALLOC_CAP_SPIRAM);
+        if (img_dsc->data == nullptr) {
+            ESP_LOGE(TAG, "Failed to allocate memory for preview image");
+            heap_caps_free(img_dsc);
+            return false;
+        }
+
+        memcpy((uint8_t *)img_dsc->data, decode_frame_buffer, img_dsc->data_size);
+
+        display->SetPreviewImage(img_dsc);
     }
     return true;
 }
