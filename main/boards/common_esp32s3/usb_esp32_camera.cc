@@ -1,6 +1,7 @@
 #include "usb_esp32_camera.h"
 #include "mcp_server.h"
 #include "display.h"
+#include "lvgl_display.h"
 #include "board.h"
 #include "system_info.h"
 #include "nvs_flash.h"
@@ -398,7 +399,7 @@ bool USB_Esp32Camera::Capture() {
     }
 
     // 显示预览图片
-    auto display = Board::GetInstance().GetDisplay();
+    auto display = dynamic_cast<LvglDisplay*>(Board::GetInstance().GetDisplay());
     if (display != nullptr) {
         preview_image_.data = (uint8_t *)decode_frame_buffer;
         display->SetPreviewImage(&preview_image_);
@@ -438,7 +439,7 @@ bool USB_Esp32Camera::SetVFlip(bool enabled) {
  */
 std::string USB_Esp32Camera::Explain(const std::string& question) {
     if (explain_url_.empty()) {
-        return "{\"success\": false, \"message\": \"Image explain URL or token is not set\"}";
+        throw std::runtime_error("Image explain URL or token is not set");
     }
 
     auto network = Board::GetInstance().GetNetwork();
@@ -474,7 +475,7 @@ std::string USB_Esp32Camera::Explain(const std::string& question) {
     http->SetHeader("Transfer-Encoding", "chunked");
     if (!http->Open("POST", explain_url_)) {
         ESP_LOGE(TAG, "Failed to connect to explain URL");
-        return "{\"success\": false, \"message\": \"Failed to connect to explain URL\"}";
+        throw std::runtime_error("Failed to connect to explain URL");
     }
     
     // 第一块：question字段
@@ -493,7 +494,7 @@ std::string USB_Esp32Camera::Explain(const std::string& question) {
     http->Write("", 0);
 
     if (http->GetStatusCode() != 200) {
-        return "{\"success\": false, \"message\": \"Failed to upload photo\"}";
+        throw std::runtime_error("Failed to upload photo");
     }
 
     std::string result = http->ReadAll();

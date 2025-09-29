@@ -1116,6 +1116,8 @@ void LcdDisplay::SetTheme(Theme* theme) {
 void LcdDisplay::SetupActivationUI() {
     DisplayLockGuard lock(this);
 
+    auto lvgl_theme = static_cast<LvglTheme*>(current_theme_);
+
     activation_container_ = lv_obj_create(container_);
     lv_obj_set_scrollbar_mode(activation_container_, LV_SCROLLBAR_MODE_OFF);
     lv_obj_set_width(activation_container_, LV_HOR_RES);
@@ -1123,8 +1125,8 @@ void LcdDisplay::SetupActivationUI() {
     lv_obj_set_flex_flow(activation_container_, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(activation_container_, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_SPACE_EVENLY);
     lv_obj_set_style_radius(activation_container_, 0, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(activation_container_, current_theme_.background, LV_PART_MAIN);
-    lv_obj_set_style_text_color(activation_container_, current_theme_.text, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(activation_container_, lvgl_theme->background_color(), LV_PART_MAIN);
+    lv_obj_set_style_text_color(activation_container_, lvgl_theme->text_color(), LV_PART_MAIN);
     lv_obj_add_flag(activation_container_, LV_OBJ_FLAG_HIDDEN);
 
     activation_qrcode_ = lv_image_create(activation_container_);
@@ -1181,11 +1183,13 @@ void LcdDisplay::DismissImage() {
 void LcdDisplay::SetupImageUI() {
     DisplayLockGuard lock(this);
 
+    auto lvgl_theme = static_cast<LvglTheme*>(current_theme_);
+
     image_container_ = lv_obj_create(container_);
     lv_obj_set_scrollbar_mode(image_container_, LV_SCROLLBAR_MODE_OFF);
     lv_obj_set_width(image_container_, LV_HOR_RES);
     lv_obj_set_flex_grow(image_container_, 1);
-    lv_obj_set_style_bg_color(image_container_, current_theme_.background, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(image_container_, lvgl_theme->background_color(), LV_PART_MAIN);
     lv_obj_add_flag(image_container_, LV_OBJ_FLAG_HIDDEN);
 
     image_ = lv_image_create(image_container_);

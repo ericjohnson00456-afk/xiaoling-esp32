@@ -31,7 +31,7 @@ MicroWakeWord::~MicroWakeWord() {
     UnloadModels();
 }
 
-bool MicroWakeWord::Initialize(AudioCodec* codec) {
+bool MicroWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list) {
     if (initialized_) {
         return true;
     }

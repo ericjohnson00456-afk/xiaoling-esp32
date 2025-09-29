@@ -24,7 +24,7 @@ public:
     MicroWakeWord();
     ~MicroWakeWord();
 
-    bool Initialize(AudioCodec* codec) override;
+    bool Initialize(AudioCodec* codec, srmodel_list_t* models_list) override;
     void Feed(const std::vector<int16_t>& data) override;
     void OnWakeWordDetected(std::function<void(const std::string& wake_word)> callback) override;
     void Start() override;
