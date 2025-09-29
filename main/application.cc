@@ -239,12 +239,12 @@ void Application::ShowActivationCode(const std::string& code, const std::string&
         auto& board = Board::GetInstance();
         auto fetcher = board.GetImageFetcher();
         auto display = board.GetDisplay();
-        lv_img_dsc_t img_dsc;
-        if (fetcher->Fetch(qrcode, &img_dsc)) { 
-            display->ShowActivation(&img_dsc, message + code);
-        } else {
+        auto image = fetcher->Fetch(qrcode);
+        if (!image) {
             ESP_LOGE(TAG, "Failed to fetch QR code image");
+            return;
         }
+        display->ShowActivation(std::move(image), message + code);
     } else {
         ESP_LOGW(TAG, "QR code URL is empty, skipping image download");
     }

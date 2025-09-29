@@ -11,7 +11,7 @@
 
 #define TAG "ImageFetcher"
 
-bool ImageFetcher::Fetch(const std::string& url, lv_img_dsc_t* into, int timeout_ms) {
+std::unique_ptr<LvglImage> ImageFetcher::Fetch(const std::string& url, int timeout_ms) {
     int ret;
 
     ESP_LOGI(TAG, "Fetching image from %s", url.c_str());
@@ -20,13 +20,13 @@ bool ImageFetcher::Fetch(const std::string& url, lv_img_dsc_t* into, int timeout
         auto network = board_->GetNetwork();
         if (!network) {
             ESP_LOGE(TAG, "Failed to get network instance");
-            return false;
+            return nullptr;
         }
 
         auto http = network->CreateHttp();
         if (!http) {
             ESP_LOGE(TAG, "Failed to create HTTP client");
-            return false;
+            return nullptr;
         }
 
         http->SetTimeout(timeout_ms);
@@ -37,14 +37,14 @@ bool ImageFetcher::Fetch(const std::string& url, lv_img_dsc_t* into, int timeout
 
         if (!http->Open("GET", url)) {
             ESP_LOGE(TAG, "Failed to connect to %s", url.c_str());
-            return false;
+            return nullptr;
         }
 
         int status_code = http->GetStatusCode();
         if (status_code != 200) {
             ESP_LOGE(TAG, "Failed to fetch image, status code: %d", status_code);
             http->Close();
-            return false;
+            return nullptr;
         }
 
         std::string image_data = http->ReadAll();
@@ -52,20 +52,20 @@ bool ImageFetcher::Fetch(const std::string& url, lv_img_dsc_t* into, int timeout
 
         if (image_data.empty()) {
             ESP_LOGE(TAG, "No image data received");
-            return false;
+            return nullptr;
         }
 
         ESP_LOGI(TAG, "Downloaded image data: %u bytes", image_data.size());
 
         if (image_data.size() > 5 * 1024 * 1024) {
             ESP_LOGE(TAG, "Image data too large");
-            return false;
+            return nullptr;
         }
 
         if (image_data.size() < 10 ||
             image_data[0] != 0xFF || image_data[1] != 0xD8) {
             ESP_LOGE(TAG, "Invalid JPEG header");
-            return false;
+            return nullptr;
         }
 
         jpeg_dec_config_t config = DEFAULT_JPEG_DEC_CONFIG();
@@ -75,7 +75,7 @@ bool ImageFetcher::Fetch(const std::string& url, lv_img_dsc_t* into, int timeout
         ret = jpeg_dec_open(&config, &jpeg_dec);
         if (ret != JPEG_ERR_OK) {
             ESP_LOGE(TAG, "Failed to open JPEG decoder, ret=%d", ret);
-            return false;
+            return nullptr;
         }
 
         jpeg_dec_io_t jpeg_io = {0};
@@ -88,7 +88,7 @@ bool ImageFetcher::Fetch(const std::string& url, lv_img_dsc_t* into, int timeout
         if (ret != JPEG_ERR_OK) {
             ESP_LOGE(TAG, "Failed to get JPEG header info, ret=%d", ret);
             jpeg_dec_close(jpeg_dec);
-            return false;
+            return nullptr;
         }
 
         ESP_LOGI(TAG, "JPEG header info: width=%d, height=%d", out_info.width, out_info.height);
@@ -97,21 +97,21 @@ bool ImageFetcher::Fetch(const std::string& url, lv_img_dsc_t* into, int timeout
             out_info.width > 2048 || out_info.height > 2048) {
             ESP_LOGE(TAG, "Invalid JPEG dimensions: %dx%d", out_info.width, out_info.height);
             jpeg_dec_close(jpeg_dec);
-            return false;
+            return nullptr;
         }
 
         size_t out_size = LV_DRAW_BUF_SIZE(out_info.width, out_info.height, LV_COLOR_FORMAT_RGB565);
         if (out_size > 2 * 1024 * 1024) {
             ESP_LOGE(TAG, "Decoded image too large");
             jpeg_dec_close(jpeg_dec);
-            return false;
+            return nullptr;
         }
 
         uint8_t* out_buf = (uint8_t*)jpeg_calloc_align(out_size, 16);
         if (!out_buf) {
             ESP_LOGE(TAG, "Failed to allocate memory for decoded image, size: %d bytes", (int)out_size);
             jpeg_dec_close(jpeg_dec);
-            return false;
+            return nullptr;
         }
  
         jpeg_io.inbuf += jpeg_io.inbuf_len - jpeg_io.inbuf_remain;
@@ -125,42 +125,36 @@ bool ImageFetcher::Fetch(const std::string& url, lv_img_dsc_t* into, int timeout
             ESP_LOGE(TAG, "Failed to decode JPEG image, ret=%d", ret);
             jpeg_free_align(out_buf);
             jpeg_dec_close(jpeg_dec);
-            return false;
+            return nullptr;
         }
 
         ESP_LOGI(TAG, "JPEG image decoded successfully, size: %d bytes", (int)out_size);
 
-        if (rgb_buffer_) {
-            jpeg_free_align(rgb_buffer_);
-            ESP_LOGI(TAG, "Freed previous RGB buffer at %p", rgb_buffer_);
-            rgb_buffer_ = nullptr;
+        uint8_t* out_data = (uint8_t*)heap_caps_malloc(out_size, MALLOC_CAP_8BIT);
+        if (!out_data) {
+            ESP_LOGE(TAG, "Failed to allocate memory for image data copy, size: %d bytes", (int)out_size);
+            jpeg_free_align(out_buf);
+            jpeg_dec_close(jpeg_dec);
+            return nullptr;
         }
 
-        memset(into, 0, sizeof(lv_img_dsc_t));
-        into->header.magic = LV_IMAGE_HEADER_MAGIC;
-        into->header.cf = LV_COLOR_FORMAT_RGB565;
-        into->header.w = out_info.width;
-        into->header.h = out_info.height;
-        into->header.stride = LV_DRAW_BUF_STRIDE(out_info.width, LV_COLOR_FORMAT_RGB565);
-        into->data_size = out_size;
-        into->data = out_buf;
+        memcpy(out_data, out_buf, out_size);
+        jpeg_free_align(out_buf);
 
-        rgb_buffer_ = out_buf; 
+        auto image = std::make_unique<LvglAllocatedImage>(
+            out_data, out_size,
+            out_info.width, out_info.height,
+            LV_DRAW_BUF_STRIDE(out_info.width, LV_COLOR_FORMAT_RGB565),
+            LV_COLOR_FORMAT_RGB565);
+
         jpeg_dec_close(jpeg_dec);
 
-        return true;
+        return image;
     } catch (const std::exception& e) {
         ESP_LOGE(TAG, "Error fetching image: %s", e.what());
-        return false;
+        return nullptr;
     } catch (...) {
         ESP_LOGE(TAG, "Unknown error fetching image");
-        return false;
-    }
-}
-
-ImageFetcher::~ImageFetcher() {
-    if (rgb_buffer_) {
-        jpeg_free_align(rgb_buffer_);
-        rgb_buffer_ = nullptr;
+        return nullptr;
     }
 }

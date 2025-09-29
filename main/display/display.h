@@ -41,10 +41,10 @@ public:
     virtual void SetPowerSaveMode(bool on);
 
 #ifdef CONFIG_LSPLATFORM
-    virtual void ShowActivation(const lv_img_dsc_t* qrcode, const std::string& message) {};
+    virtual void ShowActivation(std::unique_ptr<LvglImage> qrcode, const std::string& message) {};
     virtual void DismissActivation() {};
 
-    virtual void ShowImage(const lv_img_dsc_t* img_dsc) {};
+    virtual void ShowImage(std::unique_ptr<LvglImage> image) {};
     virtual void DismissImage() {};
 #endif // CONFIG_LSPLATFORM
 

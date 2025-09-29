@@ -387,24 +387,18 @@ bool USB_Esp32Camera::Capture() {
     // 显示预览图片
     auto display = dynamic_cast<LvglDisplay*>(Board::GetInstance().GetDisplay());
     if (display != nullptr) {
-        auto img_dsc = (lv_img_dsc_t*)heap_caps_calloc(1, sizeof(lv_img_dsc_t), MALLOC_CAP_8BIT);
-        img_dsc->header.magic = LV_IMAGE_HEADER_MAGIC;
-        img_dsc->header.cf = LV_COLOR_FORMAT_RGB565;
-        img_dsc->header.flags = 0;
-        img_dsc->header.w = 480;
-        img_dsc->header.h = 320;
-        img_dsc->header.stride = img_dsc->header.w * 2;
-        img_dsc->data_size = img_dsc->header.w * img_dsc->header.h * 2;
-        img_dsc->data = (uint8_t*)heap_caps_malloc(img_dsc->data_size, MALLOC_CAP_SPIRAM);
-        if (img_dsc->data == nullptr) {
+        size_t size = 480 * 320 * 2;
+
+        auto data = (uint8_t*)heap_caps_malloc(size, MALLOC_CAP_SPIRAM);
+        if (data == nullptr) {
             ESP_LOGE(TAG, "Failed to allocate memory for preview image");
-            heap_caps_free(img_dsc);
             return false;
         }
 
-        memcpy((uint8_t *)img_dsc->data, decode_frame_buffer, img_dsc->data_size);
+        memcpy((uint8_t *)data, decode_frame_buffer, size);
 
-        display->SetPreviewImage(img_dsc);
+        auto image = std::make_unique<LvglAllocatedImage>(data, size, 480, 320, 480 * 2, LV_COLOR_FORMAT_RGB565);
+        display->SetPreviewImage(std::move(image));
     }
     return true;
 }

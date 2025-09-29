@@ -112,12 +112,12 @@ void McpServer::AddCommonTools() {
             [&board, display](const PropertyList& properties) -> ReturnValue {
                 auto url = properties["url"].value<std::string>();
                 auto fetcher = board.GetImageFetcher();
-                lv_img_dsc_t img_dsc;
-                if (!fetcher->Fetch(url, &img_dsc)) {
+                auto image = fetcher->Fetch(url);
+                if (!image) {
                     ESP_LOGE(TAG, "Failed to fetch image: %s", url.c_str());
                     return false;
                 }
-                display->ShowImage(&img_dsc);
+                display->ShowImage(std::move(image));
                 return true;
             });
 #endif // CONFIG_LSPLATFORM

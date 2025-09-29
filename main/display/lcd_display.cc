@@ -1152,17 +1152,20 @@ void LcdDisplay::SetupActivationUI() {
     lv_label_set_long_mode(activation_message_, LV_LABEL_LONG_WRAP);
 }
 
-void LcdDisplay::ShowActivation(const lv_img_dsc_t* qrcode, const std::string& message) {
+void LcdDisplay::ShowActivation(std::unique_ptr<LvglImage> qrcode, const std::string& message) {
     DisplayLockGuard lock(this);
     if (activation_container_ == nullptr || activation_qrcode_ == nullptr || activation_message_ == nullptr) {
         return;
     }
 
+    activation_qrcode_cached_ = std::move(qrcode);
+    auto qrcode_dsc = activation_qrcode_cached_->image_dsc();
+
     lv_obj_add_flag(content_, LV_OBJ_FLAG_HIDDEN);
 
-    lv_image_set_src(activation_qrcode_, qrcode);
+    lv_image_set_src(activation_qrcode_, qrcode_dsc);
     lv_image_set_scale(activation_qrcode_, 64);  // 256/4
-    lv_obj_set_size(activation_qrcode_, LV_HOR_RES, qrcode->header.h / 4);
+    lv_obj_set_size(activation_qrcode_, LV_HOR_RES, qrcode_dsc->header.h / 4);
 
     lv_label_set_text(activation_message_, message.c_str());
 
@@ -1179,6 +1182,8 @@ void LcdDisplay::DismissActivation() {
     lv_image_set_src(activation_qrcode_, NULL);
 
     lv_obj_remove_flag(content_, LV_OBJ_FLAG_HIDDEN);
+
+    activation_qrcode_cached_.reset();
 }
 
 #ifdef CONFIG_USE_WECHAT_MESSAGE_STYLE
@@ -1186,8 +1191,8 @@ void LcdDisplay::SetupImageUI() {
     // WeChat message style does not need a separate image UI
 }
 
-void LcdDisplay::ShowImage(const lv_img_dsc_t* img_dsc) {
-    SetPreviewImage(img_dsc);
+void LcdDisplay::ShowImage(std::unique_ptr<LvglImage> image) {
+    SetPreviewImage(std::move(image));
 }
 
 void LcdDisplay::DismissImage() {
@@ -1211,11 +1216,14 @@ void LcdDisplay::SetupImageUI() {
     lv_image_set_align(image_, LV_IMAGE_ALIGN_CONTAIN);
 }
 
-void LcdDisplay::ShowImage(const lv_img_dsc_t* img_dsc) {
+void LcdDisplay::ShowImage(std::unique_ptr<LvglImage> image) {
     DisplayLockGuard lock(this);
     if (image_container_ == nullptr || image_ == nullptr) {
         return;
     }
+
+    image_cached_ = std::move(image);
+    auto img_dsc = image_cached_->image_dsc();
 
     lv_obj_add_flag(content_, LV_OBJ_FLAG_HIDDEN);
     lv_obj_remove_flag(image_container_, LV_OBJ_FLAG_HIDDEN);
@@ -1235,6 +1243,8 @@ void LcdDisplay::DismissImage() {
     lv_image_set_src(image_, NULL);
 
     lv_obj_remove_flag(content_, LV_OBJ_FLAG_HIDDEN);
+
+    image_cached_.reset();
 }
 #endif // CONFIG_USE_WECHAT_MESSAGE_STYLE
 #endif // CONFIG_LSPLATFORM
