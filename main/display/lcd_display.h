@@ -31,6 +31,7 @@ protected:
     lv_obj_t* emoji_box_ = nullptr;
     lv_obj_t* chat_message_label_ = nullptr;
     esp_timer_handle_t preview_timer_ = nullptr;
+    std::unique_ptr<LvglImage> preview_image_cached_ = nullptr;
 
 #ifdef CONFIG_LSPLATFORM
     lv_obj_t* activation_container_ = nullptr;
@@ -53,8 +54,8 @@ protected:
 public:
     ~LcdDisplay();
     virtual void SetEmotion(const char* emotion) override;
-    virtual void SetPreviewImage(const lv_img_dsc_t* img_dsc) override;
     virtual void SetChatMessage(const char* role, const char* content) override; 
+    virtual void SetPreviewImage(std::unique_ptr<LvglImage> image) override;
 
     // Add theme switching function
     virtual void SetTheme(Theme* theme) override;

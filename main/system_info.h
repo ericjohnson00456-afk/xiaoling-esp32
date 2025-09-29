@@ -13,6 +13,7 @@ public:
     static size_t GetFreeHeapSize();
     static std::string GetMacAddress();
     static std::string GetChipModelName();
+    static std::string GetUserAgent();
 #ifdef CONFIG_LSPLATFORM
     static std::string GetProductId();
 #endif // CONFIG_LSPLATFORM

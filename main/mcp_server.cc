@@ -25,8 +25,6 @@
 
 #define TAG "MCP"
 
-#define DEFAULT_TOOLCALL_STACK_SIZE 6144
-
 McpServer::McpServer() {
 }
 
@@ -137,6 +135,9 @@ void McpServer::AddCommonTools() {
                 Property("question", kPropertyTypeString)
             }),
             [camera](const PropertyList& properties) -> ReturnValue {
+                // Lower the priority to do the camera capture
+                TaskPriorityReset priority_reset(1);
+
                 if (!camera->Capture()) {
                     throw std::runtime_error("Failed to capture photo");
                 }
@@ -164,10 +165,10 @@ void McpServer::AddUserOnlyTools() {
         PropertyList(),
         [this](const PropertyList& properties) -> ReturnValue {
             auto& app = Application::GetInstance();
-            app.Schedule([]() {
+            app.Schedule([&app]() {
                 ESP_LOGW(TAG, "User requested reboot");
                 vTaskDelay(pdMS_TO_TICKS(1000));
-                auto& app = Application::GetInstance();
+
                 app.Reboot();
             });
             return true;
@@ -183,8 +184,7 @@ void McpServer::AddUserOnlyTools() {
             ESP_LOGI(TAG, "User requested firmware upgrade from URL: %s", url.c_str());
             
             auto& app = Application::GetInstance();
-            app.Schedule([url]() {
-                auto& app = Application::GetInstance();
+            app.Schedule([url, &app]() {
                 auto ota = std::make_unique<Ota>();
                 
                 bool success = app.UpgradeFirmware(*ota, url);
@@ -213,6 +213,61 @@ void McpServer::AddUserOnlyTools() {
                 }
                 return json;
             });
+
+#if CONFIG_LV_USE_SNAPSHOT
+        AddUserOnlyTool("self.screen.snapshot", "Snapshot the screen and upload it to a specific URL",
+            PropertyList({
+                Property("url", kPropertyTypeString),
+                Property("quality", kPropertyTypeInteger, 80, 1, 100)
+            }),
+            [display](const PropertyList& properties) -> ReturnValue {
+                auto url = properties["url"].value<std::string>();
+                auto quality = properties["quality"].value<int>();
+
+                std::string jpeg_data;
+                if (!display->SnapshotToJpeg(jpeg_data, quality)) {
+                    throw std::runtime_error("Failed to snapshot screen");
+                }
+
+                ESP_LOGI(TAG, "Upload snapshot %u bytes to %s", jpeg_data.size(), url.c_str());
+                
+                // 构造multipart/form-data请求体
+                std::string boundary = "----ESP32_SCREEN_SNAPSHOT_BOUNDARY";
+                
+                auto http = Board::GetInstance().GetNetwork()->CreateHttp(3);
+                http->SetHeader("Content-Type", "multipart/form-data; boundary=" + boundary);
+                if (!http->Open("POST", url)) {
+                    throw std::runtime_error("Failed to open URL: " + url);
+                }
+                {
+                    // 文件字段头部
+                    std::string file_header;
+                    file_header += "--" + boundary + "\r\n";
+                    file_header += "Content-Disposition: form-data; name=\"file\"; filename=\"screenshot.jpg\"\r\n";
+                    file_header += "Content-Type: image/jpeg\r\n";
+                    file_header += "\r\n";
+                    http->Write(file_header.c_str(), file_header.size());
+                }
+
+                // JPEG数据
+                http->Write((const char*)jpeg_data.data(), jpeg_data.size());
+
+                {
+                    // multipart尾部
+                    std::string multipart_footer;
+                    multipart_footer += "\r\n--" + boundary + "--\r\n";
+                    http->Write(multipart_footer.c_str(), multipart_footer.size());
+                }
+                http->Write("", 0);
+
+                if (http->GetStatusCode() != 200) {
+                    throw std::runtime_error("Unexpected status code: " + std::to_string(http->GetStatusCode()));
+                }
+                std::string result = http->ReadAll();
+                http->Close();
+                ESP_LOGI(TAG, "Snapshot screen result: %s", result.c_str());
+                return true;
+            });
         
         AddUserOnlyTool("self.screen.preview_image", "Preview an image on the screen",
             PropertyList({
@@ -225,12 +280,16 @@ void McpServer::AddUserOnlyTools() {
                 if (!http->Open("GET", url)) {
                     throw std::runtime_error("Failed to open URL: " + url);
                 }
-                if (http->GetStatusCode() != 200) {
-                    throw std::runtime_error("Unexpected status code: " + std::to_string(http->GetStatusCode()));
+                int status_code = http->GetStatusCode();
+                if (status_code != 200) {
+                    throw std::runtime_error("Unexpected status code: " + std::to_string(status_code));
                 }
 
                 size_t content_length = http->GetBodyLength();
                 char* data = (char*)heap_caps_malloc(content_length, MALLOC_CAP_8BIT);
+                if (data == nullptr) {
+                    throw std::runtime_error("Failed to allocate memory for image: " + url);
+                }
                 size_t total_read = 0;
                 while (total_read < content_length) {
                     int ret = http->Read(data + total_read, content_length - total_read);
@@ -238,44 +297,34 @@ void McpServer::AddUserOnlyTools() {
                         heap_caps_free(data);
                         throw std::runtime_error("Failed to download image: " + url);
                     }
+                    if (ret == 0) {
+                        break;
+                    }
                     total_read += ret;
                 }
                 http->Close();
 
-                auto img_dsc = (lv_img_dsc_t*)heap_caps_calloc(1, sizeof(lv_img_dsc_t), MALLOC_CAP_8BIT);
-                img_dsc->data_size = content_length;
-                img_dsc->data = (uint8_t*)data;
-                if (lv_image_decoder_get_info(img_dsc, &img_dsc->header) != LV_RESULT_OK) {
-                    heap_caps_free(data);
-                    heap_caps_free(img_dsc);
-                    throw std::runtime_error("Failed to get image info");
-                }
-                ESP_LOGI(TAG, "Preview image: %s size: %d resolution: %d x %d", url.c_str(), content_length, img_dsc->header.w, img_dsc->header.h);
-
-                auto& app = Application::GetInstance();
-                app.Schedule([display, img_dsc]() {
-                    display->SetPreviewImage(img_dsc);
-                });
+                auto image = std::make_unique<LvglAllocatedImage>(data, content_length);
+                display->SetPreviewImage(std::move(image));
                 return true;
             });
+#endif // CONFIG_LV_USE_SNAPSHOT
     }
-#endif
+#endif // HAVE_LVGL
 
     // Assets download url
-    auto assets = Board::GetInstance().GetAssets();
-    if (assets) {
-        if (assets->partition_valid()) {
-            AddUserOnlyTool("self.assets.set_download_url", "Set the download url for the assets",
-                PropertyList({
-                    Property("url", kPropertyTypeString)
-                }),
-                [assets](const PropertyList& properties) -> ReturnValue {
-                    auto url = properties["url"].value<std::string>();
-                    Settings settings("assets", true);
-                    settings.SetString("download_url", url);
-                    return true;
-                });
-        }
+    auto& assets = Assets::GetInstance();
+    if (assets.partition_valid()) {
+        AddUserOnlyTool("self.assets.set_download_url", "Set the download url for the assets",
+            PropertyList({
+                Property("url", kPropertyTypeString)
+            }),
+            [](const PropertyList& properties) -> ReturnValue {
+                auto url = properties["url"].value<std::string>();
+                Settings settings("assets", true);
+                settings.SetString("download_url", url);
+                return true;
+            });
     }
 }
 
@@ -407,13 +456,7 @@ void McpServer::ParseMessage(const cJSON* json) {
             ReplyError(id_int, "Invalid arguments");
             return;
         }
-        auto stack_size = cJSON_GetObjectItem(params, "stackSize");
-        if (stack_size != nullptr && !cJSON_IsNumber(stack_size)) {
-            ESP_LOGE(TAG, "tools/call: Invalid stackSize");
-            ReplyError(id_int, "Invalid stackSize");
-            return;
-        }
-        DoToolCall(id_int, std::string(tool_name->valuestring), tool_arguments, stack_size ? stack_size->valueint : DEFAULT_TOOLCALL_STACK_SIZE);
+        DoToolCall(id_int, std::string(tool_name->valuestring), tool_arguments);
     } else {
         ESP_LOGE(TAG, "Method not implemented: %s", method_str.c_str());
         ReplyError(id_int, "Method not implemented: " + method_str);
@@ -493,7 +536,7 @@ void McpServer::GetToolsList(int id, const std::string& cursor, bool list_user_o
     ReplyResult(id, json);
 }
 
-void McpServer::DoToolCall(int id, const std::string& tool_name, const cJSON* tool_arguments, int stack_size) {
+void McpServer::DoToolCall(int id, const std::string& tool_name, const cJSON* tool_arguments) {
     auto tool_iter = std::find_if(tools_.begin(), tools_.end(), 
                                  [&tool_name](const McpTool* tool) { 
                                      return tool->name() == tool_name; 
@@ -535,15 +578,9 @@ void McpServer::DoToolCall(int id, const std::string& tool_name, const cJSON* to
         return;
     }
 
-    // Start a task to receive data with stack size
-    esp_pthread_cfg_t cfg = esp_pthread_get_default_config();
-    cfg.thread_name = "tool_call";
-    cfg.stack_size = stack_size;
-    cfg.prio = 1;
-    esp_pthread_set_cfg(&cfg);
-
-    // Use a thread to call the tool to avoid blocking the main thread
-    tool_call_thread_ = std::thread([this, id, tool_iter, arguments = std::move(arguments)]() {
+    // Use main thread to call the tool
+    auto& app = Application::GetInstance();
+    app.Schedule([this, id, tool_iter, arguments = std::move(arguments)]() {
         try {
             ReplyResult(id, (*tool_iter)->Call(arguments));
         } catch (const std::exception& e) {
@@ -551,5 +588,4 @@ void McpServer::DoToolCall(int id, const std::string& tool_name, const cJSON* to
             ReplyError(id, e.what());
         }
     });
-    tool_call_thread_.detach();
 }

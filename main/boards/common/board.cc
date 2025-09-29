@@ -2,6 +2,7 @@
 #include "system_info.h"
 #include "settings.h"
 #include "display/display.h"
+#include "display/oled_display.h"
 #include "assets/lang_config.h"
 
 #include <esp_log.h>
@@ -173,18 +174,24 @@ std::string Board::GetSystemInfoJson() {
     json += R"("label":")" + std::string(ota_partition->label) + R"(")";
     json += R"(},)";
 
+    // Append display info
+    auto display = GetDisplay();
+    if (display) {
+        json += R"("display":{)";
+        if (dynamic_cast<OledDisplay*>(display)) {
+            json += R"("monochrome":)" + std::string("true") + R"(,)";
+        } else {
+            json += R"("monochrome":)" + std::string("false") + R"(,)";
+        }
+        json += R"("width":)" + std::to_string(display->width()) + R"(,)";
+        json += R"("height":)" + std::to_string(display->height()) + R"(,)";
+        json.pop_back(); // Remove the last comma
+    }
+    json += R"(},)";
+
     json += R"("board":)" + GetBoardJson();
 
     // Close the JSON object
     json += R"(})";
     return json;
-}
-
-Assets* Board::GetAssets() {
-#ifdef DEFAULT_ASSETS
-    static Assets assets(DEFAULT_ASSETS);
-    return &assets;
-#else
-    return nullptr;
-#endif
 }
