@@ -123,6 +123,13 @@ bool Assets::Apply() {
         }
     }
     
+#if CONFIG_USE_MICRO_WAKE_WORD
+    // MMW 不使用 srmodels.bin，但我们需要调一下 SetModelsList 来初始化 AudioService
+    static srmodel_list_t models_list = {.num = 0};
+    models_list_ = &models_list;
+    auto& app = Application::GetInstance();
+    app.GetAudioService().SetModelsList(models_list_);
+#else // CONFIG_USE_MICRO_WAKE_WORD
     cJSON* srmodels = cJSON_GetObjectItem(root, "srmodels");
     if (cJSON_IsString(srmodels)) {
         std::string srmodels_file = srmodels->valuestring;
@@ -142,6 +149,7 @@ bool Assets::Apply() {
             ESP_LOGE(TAG, "The srmodels file %s is not found", srmodels_file.c_str());
         }
     }
+#endif // CONFIG_USE_MICRO_WAKE_WORD
 
 #ifdef HAVE_LVGL
     auto& theme_manager = LvglThemeManager::GetInstance();
