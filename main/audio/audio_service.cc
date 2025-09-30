@@ -663,12 +663,22 @@ void AudioService::CheckAndUpdateAudioPowerState() {
     }
 }
 
+#if CONFIG_USE_MICRO_WAKE_WORD
+void AudioService::SetMicroWakeWordModel(const void* model_data, size_t model_size) {
+    static srmodel_list_t models_list = {.num = 0};
+    models_list_ = &models_list;
+
+    wake_word_ = std::make_unique<MicroWakeWord>(model_data, model_size);
+    wake_word_->OnWakeWordDetected([this](const std::string& wake_word) {
+        if (callbacks_.on_wake_word_detected) {
+            callbacks_.on_wake_word_detected(wake_word);
+        }
+    });
+}
+#else // !CONFIG_USE_MICRO_WAKE_WORD
 void AudioService::SetModelsList(srmodel_list_t* models_list) {
     models_list_ = models_list;
 
-#if CONFIG_USE_MICRO_WAKE_WORD
-    wake_word_ = std::make_unique<MicroWakeWord>();
-#else // CONFIG_USE_MICRO_WAKE_WORD
 #if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32P4
     if (esp_srmodel_filter(models_list_, ESP_MN_PREFIX, NULL) != nullptr) {
         wake_word_ = std::make_unique<CustomWakeWord>();
@@ -684,7 +694,6 @@ void AudioService::SetModelsList(srmodel_list_t* models_list) {
         wake_word_ = nullptr;
     }
 #endif
-#endif // CONFIG_USE_MICRO_WAKE_WORD
 
     if (wake_word_) {
         wake_word_->OnWakeWordDetected([this](const std::string& wake_word) {
@@ -694,6 +703,7 @@ void AudioService::SetModelsList(srmodel_list_t* models_list) {
         });
     }
 }
+#endif // CONFIG_USE_MICRO_WAKE_WORD
 
 bool AudioService::IsAfeWakeWord() {
 #if CONFIG_USE_MICRO_WAKE_WORD

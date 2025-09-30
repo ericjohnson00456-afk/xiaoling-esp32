@@ -123,6 +123,20 @@ bool Assets::Apply() {
         }
     }
     
+#if CONFIG_USE_MICRO_WAKE_WORD
+    cJSON *mwwmodel = cJSON_GetObjectItem(root, "mwwmodel");
+    if (cJSON_IsString(mwwmodel)) {
+        std::string mwwmodel_file = mwwmodel->valuestring;
+        if (GetAssetData(mwwmodel_file, ptr, size)) {
+            auto& app = Application::GetInstance();
+            app.GetAudioService().SetMicroWakeWordModel((const void*)ptr, size);
+        } else {
+            ESP_LOGE(TAG, "The MWW model file %s is not found", mwwmodel_file.c_str());
+        }
+    } else {
+        ESP_LOGE(TAG, "The assets does not contain a MWW model");
+    }
+#else // CONFIG_USE_MICRO_WAKE_WORD
     cJSON* srmodels = cJSON_GetObjectItem(root, "srmodels");
     if (cJSON_IsString(srmodels)) {
         std::string srmodels_file = srmodels->valuestring;
@@ -142,6 +156,7 @@ bool Assets::Apply() {
             ESP_LOGE(TAG, "The srmodels file %s is not found", srmodels_file.c_str());
         }
     }
+#endif // CONFIG_USE_MICRO_WAKE_WORD
 
 #ifdef HAVE_LVGL
     auto& theme_manager = LvglThemeManager::GetInstance();

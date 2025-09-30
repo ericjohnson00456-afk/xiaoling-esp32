@@ -108,7 +108,11 @@ public:
     void PlaySound(const std::string_view& sound);
     bool ReadAudioData(std::vector<int16_t>& data, int sample_rate, int samples);
     void ResetDecoder();
+#if CONFIG_USE_MICRO_WAKE_WORD
+    void SetMicroWakeWordModel(const void* model_data, size_t model_size);
+#else // !CONFIG_USE_MICRO_WAKE_WORD
     void SetModelsList(srmodel_list_t* models_list);
+#endif // CONFIG_USE_MICRO_WAKE_WORD
 
 private:
     AudioCodec* codec_ = nullptr;

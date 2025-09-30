@@ -202,6 +202,21 @@ def process_sr_models(wakenet_model_dirs, multinet_model_dirs, build_dir, assets
         return None
 
 
+def process_mww_model(mww_model_file, assets_dir):
+    """Process MicroWakeWord model"""
+    if not mww_model_file:
+        return None
+    
+    model_name = os.path.basename(mww_model_file)
+    
+    try:
+        copy_file(mww_model_file, os.path.join(assets_dir, model_name))
+        return model_name
+    except Exception as e:
+        print(f"Error: Failed to process MicroWakeWord model: {e}")
+        return None
+
+
 def process_text_font(text_font_file, assets_dir):
     """Process text_font parameter"""
     if not text_font_file:
@@ -272,7 +287,7 @@ def process_extra_files(extra_files_dir, assets_dir):
     return extra_files_list
 
 
-def generate_index_json(assets_dir, srmodels, text_font, emoji_collection, extra_files=None, multinet_model_info=None):
+def generate_index_json(assets_dir, srmodels, mwwmodel, text_font, emoji_collection, extra_files=None, multinet_model_info=None):
     """Generate index.json file"""
     index_data = {
         "version": 1
@@ -280,6 +295,9 @@ def generate_index_json(assets_dir, srmodels, text_font, emoji_collection, extra
     
     if srmodels:
         index_data["srmodels"] = srmodels
+
+    if mwwmodel:
+        index_data["mwwmodel"] = mwwmodel
     
     if text_font:
         index_data["text_font"] = text_font
@@ -507,6 +525,28 @@ def read_multinet_from_sdkconfig(sdkconfig_path):
     return models
 
 
+def read_micro_wake_word_model_from_sdkconfig(sdkconfig_path):
+    """
+    Read MicroWakeWord model from sdkconfig
+    Returns the model name or None if not configured
+    """
+    if not os.path.exists(sdkconfig_path):
+        print(f"Warning: sdkconfig file not found: {sdkconfig_path}")
+        return None
+        
+    model_name = None
+    with io.open(sdkconfig_path, "r") as f:
+        for label in f:
+            label = label.strip("\n")
+            if 'CONFIG_MICRO_WAKE_WORD_MODEL_' in label and '#' not in label[0]:
+                if '=' in label:
+                    label = label.split("=")[0]
+                model_name = label.split("CONFIG_MICRO_WAKE_WORD_MODEL_")[-1].lower()
+                break
+
+    return model_name
+
+
 def read_wake_word_type_from_sdkconfig(sdkconfig_path):
     """
     Read wake word type configuration from sdkconfig
@@ -518,6 +558,7 @@ def read_wake_word_type_from_sdkconfig(sdkconfig_path):
             'use_esp_wake_word': False,
             'use_afe_wake_word': False,
             'use_custom_wake_word': False,
+            'use_micro_wake_word': False,
             'wake_word_disabled': True
         }
         
@@ -525,6 +566,7 @@ def read_wake_word_type_from_sdkconfig(sdkconfig_path):
         'use_esp_wake_word': False,
         'use_afe_wake_word': False,
         'use_custom_wake_word': False,
+        'use_micro_wake_word': False,
         'wake_word_disabled': False
     }
     
@@ -541,6 +583,8 @@ def read_wake_word_type_from_sdkconfig(sdkconfig_path):
                 config_values['use_afe_wake_word'] = True
             elif 'CONFIG_USE_CUSTOM_WAKE_WORD=y' in line:
                 config_values['use_custom_wake_word'] = True
+            elif 'CONFIG_USE_MICRO_WAKE_WORD=y' in line:
+                config_values['use_micro_wake_word'] = True
             elif 'CONFIG_WAKE_WORD_DISABLED=y' in line:
                 config_values['wake_word_disabled'] = True
     
@@ -662,6 +706,22 @@ def get_multinet_model_paths(model_names, esp_sr_model_path):
     return valid_paths
 
 
+def get_micro_wake_word_model_path(model_name, microwakeword_models_path):
+    """
+    Get the full path to the MicroWakeWord model file
+    Returns the model file path or None if not found
+    """
+    if not model_name:
+        return None
+    
+    mww_model_path = os.path.join(microwakeword_models_path, f"{model_name}.tflite")
+    if os.path.exists(mww_model_path):
+        return mww_model_path
+    else:
+        print(f"Warning: MicroWakeWord model file not found: {mww_model_path}")
+        return None
+
+
 def get_text_font_path(builtin_text_font, xiaozhi_fonts_path):
     """
     Get the text font path if needed
@@ -698,7 +758,7 @@ def get_emoji_collection_path(default_emoji_collection, xiaozhi_fonts_path):
         return None
 
 
-def build_assets_integrated(wakenet_model_paths, multinet_model_paths, text_font_path, emoji_collection_path, extra_files_path, output_path, multinet_model_info=None):
+def build_assets_integrated(wakenet_model_paths, multinet_model_paths, microwakeword_model_path, text_font_path, emoji_collection_path, extra_files_path, output_path, multinet_model_info=None):
     """
     Build assets using integrated functions (no external dependencies)
     """
@@ -717,12 +777,13 @@ def build_assets_integrated(wakenet_model_paths, multinet_model_paths, text_font
         
         # Process each component
         srmodels = process_sr_models(wakenet_model_paths, multinet_model_paths, temp_build_dir, assets_dir) if (wakenet_model_paths or multinet_model_paths) else None
+        mwwmodel = process_mww_model(microwakeword_model_path, assets_dir) if microwakeword_model_path else None
         text_font = process_text_font(text_font_path, assets_dir) if text_font_path else None
         emoji_collection = process_emoji_collection(emoji_collection_path, assets_dir) if emoji_collection_path else None
         extra_files = process_extra_files(extra_files_path, assets_dir) if extra_files_path else None
         
         # Generate index.json
-        generate_index_json(assets_dir, srmodels, text_font, emoji_collection, extra_files, multinet_model_info)
+        generate_index_json(assets_dir, srmodels, mwwmodel, text_font, emoji_collection, extra_files, multinet_model_info)
         
         # Generate config.json for packing
         config_path = generate_config_json(temp_build_dir, assets_dir)
@@ -795,10 +856,12 @@ def main():
     # Read SR models from sdkconfig
     wakenet_model_names = read_wakenet_from_sdkconfig(args.sdkconfig)
     multinet_model_names = read_multinet_from_sdkconfig(args.sdkconfig)
+    microwakeword_model_name = read_micro_wake_word_model_from_sdkconfig(args.sdkconfig)
     
     # Apply wake word logic to decide which models to package
     wakenet_model_paths = []
     multinet_model_paths = []
+    microwakeword_model_path = None
     
     # 1. Only package wakenet models if USE_ESP_WAKE_WORD=y or USE_AFE_WAKE_WORD=y
     if wake_word_config['use_esp_wake_word'] or wake_word_config['use_afe_wake_word']:
@@ -818,11 +881,20 @@ def main():
     elif multinet_model_names:
         print(f"  Note: Found multinet models {multinet_model_names} but USE_CUSTOM_WAKE_WORD is disabled, skipping")
     
+    # 4. Pack MicroWakeWord models if USE_MICRO_WAKE_WORD=y
+    if wake_word_config['use_micro_wake_word']:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(script_dir)
+        microwakeword_models_path = os.path.join(project_root, "main", "audio", "wake_words", "micro_wake_word", "models")
+        microwakeword_model_path = get_micro_wake_word_model_path(microwakeword_model_name, microwakeword_models_path)
+    
     # Print model information (only for models that will actually be packaged)
     if wakenet_model_paths:
         print(f"  wakenet models: {', '.join(wakenet_model_names)} (will be packaged)")
     if multinet_model_paths:
         print(f"  multinet models: {', '.join(multinet_model_names)} (will be packaged)")
+    if microwakeword_model_path:
+        print(f"  MicroWakeWord model: {microwakeword_model_name} (will be packaged)")
     
     # Get text font path if needed
     text_font_path = get_text_font_path(args.builtin_text_font, args.xiaozhi_fonts_path)
@@ -869,7 +941,7 @@ def main():
         return
     
     # Build the assets
-    success = build_assets_integrated(wakenet_model_paths, multinet_model_paths, text_font_path, emoji_collection_path, 
+    success = build_assets_integrated(wakenet_model_paths, multinet_model_paths, microwakeword_model_path, text_font_path, emoji_collection_path, 
                                      extra_files_path, args.output, multinet_model_info)
     
     if not success:

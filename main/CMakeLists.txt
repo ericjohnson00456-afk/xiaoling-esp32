@@ -599,14 +599,13 @@ endif()
 include(${PROJECT_DIR}/main/audio/wake_words/micro_wake_word/models/models.cmake)
 
 idf_component_register(SRCS ${SOURCES}
-                    EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS} ${MWW_MODEL}
+                    EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS}
                     INCLUDE_DIRS ${INCLUDE_DIRS}
                     WHOLE_ARCHIVE
                     )
 
 if(CONFIG_USE_MICRO_WAKE_WORD)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE
-        MICRO_WAKE_WORD_MODEL_NAME="${MWW_MODEL_NAME}"
         MICRO_WAKE_WORD_MODEL_WAKE_WORD=\"${MWW_MODEL_WAKE_WORD}\"
         MICRO_WAKE_WORD_MODEL_PROBABILITY_CUTOFF=${MWW_MODEL_PROB_CUTOFF}
     )

@@ -13,9 +13,7 @@
 
 #define TAG "MicroWakeWord"
 
-extern const uint8_t model_start[] asm("_binary_" MICRO_WAKE_WORD_MODEL_NAME "_tflite_start");
-
-MicroWakeWord::MicroWakeWord() {
+MicroWakeWord::MicroWakeWord(const void* model_data, size_t model_size) : model_data_(model_data), model_size_(model_size) {
     // Initialize ring buffer
     ring_buffer_size_ = BUFFER_SIZE;
     ring_buffer_.resize(ring_buffer_size_);
@@ -78,10 +76,10 @@ bool MicroWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list) {
     }
     frontend_initialized_ = true;
 
-    ESP_LOGI(TAG, "Loading wake word model %s from %p", MICRO_WAKE_WORD_MODEL_NAME, model_start);
+    ESP_LOGI(TAG, "Loading wake word model from %p", model_data_);
 
     auto model = std::make_unique<micro_wake_word::WakeWordModel>(
-        model_start,
+        (const uint8_t *)model_data_,
         (float)MICRO_WAKE_WORD_MODEL_PROBABILITY_CUTOFF / 100.0f,
         5,
         MICRO_WAKE_WORD_MODEL_WAKE_WORD,

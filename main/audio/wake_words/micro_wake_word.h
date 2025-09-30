@@ -21,7 +21,7 @@
 
 class MicroWakeWord : public WakeWord {
 public:
-    MicroWakeWord();
+    MicroWakeWord(const void* model_data, size_t model_size);
     ~MicroWakeWord();
 
     bool Initialize(AudioCodec* codec, srmodel_list_t* models_list) override;
@@ -35,6 +35,9 @@ public:
     const std::string& GetLastDetectedWakeWord() const override { return last_detected_wake_word_; }
 
 private:
+    const void* model_data_;
+    size_t model_size_;
+
     // Core members
     AudioCodec* codec_ = nullptr;
     std::string last_detected_wake_word_;
