@@ -100,8 +100,10 @@ void McpServer::AddCommonTools() {
                 }
                 return false;
             });
+    }
 
 #ifdef CONFIG_LSPLATFORM
+    if (display) {
         AddTool("self.show_image",
             "Show an image on the screen. Use this tool if you want to show something to the user.\n"
             "Args:\n"
@@ -120,8 +122,8 @@ void McpServer::AddCommonTools() {
                 display->ShowImage(std::move(image));
                 return true;
             });
-#endif // CONFIG_LSPLATFORM
     }
+#endif // CONFIG_LSPLATFORM
 
     auto camera = board.GetCamera();
     if (camera) {
