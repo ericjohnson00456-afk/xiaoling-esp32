@@ -706,6 +706,13 @@ function(build_default_assets_bin)
     endif()
     
     # Add default emoji collection if defined
+    if(CONFIG_USE_XIAOLING_MESSAGE_STYLE)
+        set(EMOJI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/assets/xl_emoji")
+        if(DEFAULT_EMOJI_COLLECTION STREQUAL "twemoji_64")
+            list(APPEND BUILD_ARGS "--emoji_path" ${EMOJI_DIR})
+            set(DEFAULT_EMOJI_COLLECTION "240")
+        endif()
+    endif()
     if(DEFAULT_EMOJI_COLLECTION)
         list(APPEND BUILD_ARGS "--emoji_collection" "${DEFAULT_EMOJI_COLLECTION}")
     endif()

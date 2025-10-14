@@ -84,6 +84,7 @@ void McpServer::AddCommonTools() {
 
 #ifdef HAVE_LVGL
     auto display = board.GetDisplay();
+#ifndef CONFIG_USE_XIAOLING_MESSAGE_STYLE
     if (display && display->GetTheme() != nullptr) {
         AddTool("self.screen.set_theme",
             "Set the theme of the screen. The theme can be `light` or `dark`.",
@@ -101,6 +102,7 @@ void McpServer::AddCommonTools() {
                 return false;
             });
     }
+#endif // CONFIG_USE_XIAOLING_MESSAGE_STYLE
 
 #ifdef CONFIG_LSPLATFORM
     if (display) {

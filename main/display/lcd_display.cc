@@ -21,11 +21,38 @@ LV_FONT_DECLARE(BUILTIN_TEXT_FONT);
 LV_FONT_DECLARE(BUILTIN_ICON_FONT);
 LV_FONT_DECLARE(font_awesome_30_4);
 
+#ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
+static std::map<std::string, std::string> xl_emoji_mappings {
+    {"neutral",     "ready"         },
+    {"happy",       "happy"         },
+    {"laughing",    "happy"         },
+    {"funny",       "waiting"       },
+    {"sad",         "sad"           },
+    {"angry",       "angry"         },
+    {"crying",      "sad"           },
+    {"loving",      "loving"        },
+    {"embarrassed", "surprised"     },
+    {"surprised",   "surprised"     },
+    {"shocked",     "surprised"     },
+    {"thinking",    "confused"      },
+    {"winking",     "happy"         },
+    {"cool",        "happy"         },
+    {"relaxed",     "delicious"     },
+    {"delicious",   "delicious"     },
+    {"kissy",       "kissy"         },
+    {"confident",   "happy"         },
+    {"sleepy",      "sleepy"        },
+    {"silly",       "confused"      },
+    {"confused",    "confused"      },
+};
+#endif // CONFIG_USE_XIAOLING_MESSAGE_STYLE
+
 void LcdDisplay::InitializeLcdThemes() {
     auto text_font = std::make_shared<LvglBuiltInFont>(&BUILTIN_TEXT_FONT);
     auto icon_font = std::make_shared<LvglBuiltInFont>(&BUILTIN_ICON_FONT);
     auto large_icon_font = std::make_shared<LvglBuiltInFont>(&font_awesome_30_4);
 
+#ifndef CONFIG_USE_XIAOLING_MESSAGE_STYLE
     // light theme
     auto light_theme = new LvglTheme("light");
     light_theme->set_background_color(lv_color_hex(0xFFFFFF));          //rgb(255, 255, 255)
@@ -40,6 +67,7 @@ void LcdDisplay::InitializeLcdThemes() {
     light_theme->set_text_font(text_font);
     light_theme->set_icon_font(icon_font);
     light_theme->set_large_icon_font(large_icon_font);
+#endif // CONFIG_USE_XIAOLING_MESSAGE_STYLE
 
     // dark theme
     auto dark_theme = new LvglTheme("dark");
@@ -57,7 +85,9 @@ void LcdDisplay::InitializeLcdThemes() {
     dark_theme->set_large_icon_font(large_icon_font);
 
     auto& theme_manager = LvglThemeManager::GetInstance();
+#ifndef CONFIG_USE_XIAOLING_MESSAGE_STYLE
     theme_manager.RegisterTheme("light", light_theme);
+#endif // CONFIG_USE_XIAOLING_MESSAGE_STYLE
     theme_manager.RegisterTheme("dark", dark_theme);
 }
 
@@ -69,10 +99,14 @@ LcdDisplay::LcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_
     // Initialize LCD themes
     InitializeLcdThemes();
 
+#ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
+    current_theme_ = LvglThemeManager::GetInstance().GetTheme("dark");
+#else // !CONFIG_USE_XIAOLING_MESSAGE_STYLE
     // Load theme from settings
     Settings settings("display", false);
     std::string theme_name = settings.GetString("theme", "light");
     current_theme_ = LvglThemeManager::GetInstance().GetTheme(theme_name);
+#endif // CONFIG_USE_XIAOLING_MESSAGE_STYLE
 
     // Create a timer to hide the preview image
     esp_timer_create_args_t preview_timer_args = {
@@ -824,6 +858,9 @@ void LcdDisplay::SetupUI() {
     chat_message_label_ = lv_label_create(content_);
     lv_label_set_text(chat_message_label_, "");
     lv_obj_set_width(chat_message_label_, width_ * 0.9); // 限制宽度为屏幕宽度的 90%
+#ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
+    lv_obj_set_height(chat_message_label_, text_font->line_height * 3); // 高度为字体高度的3倍，显示多行文本
+#endif // CONFIG_USE_XIAOLING_MESSAGE_STYLE
     lv_label_set_long_mode(chat_message_label_, LV_LABEL_LONG_WRAP); // 设置为自动换行模式
     lv_obj_set_style_text_align(chat_message_label_, LV_TEXT_ALIGN_CENTER, 0); // 设置文本居中对齐
     lv_obj_set_style_text_color(chat_message_label_, lvgl_theme->text_color(), 0);
@@ -934,6 +971,13 @@ void LcdDisplay::SetEmotion(const char* emotion) {
     if (emoji_image_ == nullptr) {
         return;
     }
+
+#ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
+    auto xl_emoji = xl_emoji_mappings.find(emotion);
+    if (xl_emoji != xl_emoji_mappings.end()) {
+        emotion = xl_emoji->second.c_str();
+    }
+#endif
 
     auto emoji_collection = static_cast<LvglTheme*>(current_theme_)->emoji_collection();
     auto image = emoji_collection != nullptr ? emoji_collection->GetEmojiImage(emotion) : nullptr;
@@ -1141,6 +1185,7 @@ void LcdDisplay::SetupActivationUI() {
     lv_obj_set_style_radius(activation_container_, 0, LV_PART_MAIN);
     lv_obj_set_style_bg_color(activation_container_, lvgl_theme->background_color(), LV_PART_MAIN);
     lv_obj_set_style_text_color(activation_container_, lvgl_theme->text_color(), LV_PART_MAIN);
+    lv_obj_set_style_border_width(activation_container_, 0, LV_PART_MAIN);
     lv_obj_add_flag(activation_container_, LV_OBJ_FLAG_HIDDEN);
 
     activation_qrcode_ = lv_image_create(activation_container_);
@@ -1209,6 +1254,7 @@ void LcdDisplay::SetupImageUI() {
     lv_obj_set_width(image_container_, LV_HOR_RES);
     lv_obj_set_flex_grow(image_container_, 1);
     lv_obj_set_style_bg_color(image_container_, lvgl_theme->background_color(), LV_PART_MAIN);
+    lv_obj_set_style_border_width(image_container_, 0, LV_PART_MAIN);
     lv_obj_add_flag(image_container_, LV_OBJ_FLAG_HIDDEN);
 
     image_ = lv_image_create(image_container_);

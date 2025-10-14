@@ -538,6 +538,7 @@ endchoice
 
 choice DISPLAY_STYLE
     prompt "Select display style"
+    default USE_XIAOLING_MESSAGE_STYLE if LSPLATFORM
     default USE_DEFAULT_MESSAGE_STYLE
     help
         Select display style for Xiaozhi device
@@ -547,6 +548,10 @@ choice DISPLAY_STYLE
 
     config USE_WECHAT_MESSAGE_STYLE
         bool "Enable WeChat Message Style"
+
+    config USE_XIAOLING_MESSAGE_STYLE
+        bool "Enable Xiaoling Message Style"
+        depends on LSPLATFORM
 
     config USE_EMOTE_MESSAGE_STYLE
         bool "Emote animation style"

@@ -742,7 +742,7 @@ def get_text_font_path(builtin_text_font, xiaozhi_fonts_path):
         return None
 
 
-def get_emoji_collection_path(default_emoji_collection, xiaozhi_fonts_path):
+def get_emoji_collection_path(default_emoji_collection, emoji_path):
     """
     Get the emoji collection path if needed
     Returns the emoji directory path or None if no emoji collection is needed
@@ -750,7 +750,7 @@ def get_emoji_collection_path(default_emoji_collection, xiaozhi_fonts_path):
     if not default_emoji_collection:
         return None
     
-    emoji_path = os.path.join(xiaozhi_fonts_path, 'png', default_emoji_collection)
+    emoji_path = os.path.join(emoji_path, default_emoji_collection)
     if os.path.exists(emoji_path):
         return emoji_path
     else:
@@ -824,6 +824,7 @@ def main():
     parser = argparse.ArgumentParser(description='Build default assets based on configuration')
     parser.add_argument('--sdkconfig', required=True, help='Path to sdkconfig file')
     parser.add_argument('--builtin_text_font', help='Builtin text font name (e.g., font_puhui_basic_16_4)')
+    parser.add_argument('--emoji_path', help='Path to emoji collection directory (overrides {{--xiaozhi_fonts_path}}/png)')
     parser.add_argument('--emoji_collection', help='Default emoji collection name (e.g., emojis_32)')
     parser.add_argument('--output', required=True, help='Output path for assets.bin')
     parser.add_argument('--esp_sr_model_path', help='Path to ESP-SR model directory')
@@ -900,7 +901,9 @@ def main():
     text_font_path = get_text_font_path(args.builtin_text_font, args.xiaozhi_fonts_path)
     
     # Get emoji collection path if needed
-    emoji_collection_path = get_emoji_collection_path(args.emoji_collection, args.xiaozhi_fonts_path)
+    if not args.emoji_path:
+        args.emoji_path = os.path.join(args.xiaozhi_fonts_path, 'png')
+    emoji_collection_path = get_emoji_collection_path(args.emoji_collection, args.emoji_path)
     
     # Get extra files path if provided
     extra_files_path = args.extra_files
