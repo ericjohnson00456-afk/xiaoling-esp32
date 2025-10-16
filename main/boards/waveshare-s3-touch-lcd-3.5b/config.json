@@ -3,9 +3,7 @@
     "builds": [
         {
             "name": "waveshare-s3-touch-lcd-3.5b",
-            "sdkconfig_append": [
-                "CONFIG_USE_WECHAT_MESSAGE_STYLE=y"
-            ]
+            "sdkconfig_append": []
         }
     ]
 }
