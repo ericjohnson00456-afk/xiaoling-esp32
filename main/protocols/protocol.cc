@@ -32,6 +32,12 @@ void Protocol::OnDisconnected(std::function<void()> callback) {
     on_disconnected_ = callback;
 }
 
+#ifdef CONFIG_LSPLATFORM
+void Protocol::SetNarrowbandMode(bool enabled) {
+    narrowband_mode_ = enabled;
+}
+#endif // CONFIG_LSPLATFORM
+
 void Protocol::SetError(const std::string& message) {
     error_occurred_ = true;
     if (on_network_error_ != nullptr) {

@@ -82,6 +82,7 @@ private:
 #ifdef CONFIG_LSPLATFORM
     Watchdog uplink_watchdog_{5000, "uplink"};
     Watchdog downlink_watchdog_{15000, "downlink"};
+    int watchdog_bites_ = 0;
 #endif // CONFIG_LSPLATFORM
 
     bool has_server_time_ = false;
@@ -95,6 +96,10 @@ private:
     void CheckAssetsVersion();
     void ShowActivationCode(const std::string& code, const std::string& message, const std::string& qrcode = "");
     void SetListeningMode(ListeningMode mode);
+#ifdef CONFIG_LSPLATFORM
+    void CountWatchdogBites();
+    void ResetWatchdogBites() { watchdog_bites_ = 0; }
+#endif // CONFIG_LSPLATFORM
 };
 
 

@@ -19,6 +19,7 @@ public:
 
     void Start();
     void Stop();
+    bool IsRunning() const { return is_started_; }
     void Feed(uint32_t duration_ms);
 
     void OnTimeout(std::function<void()> callback) { on_timeout_ = callback; }

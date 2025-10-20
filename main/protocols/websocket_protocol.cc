@@ -216,11 +216,24 @@ std::string WebsocketProtocol::GetHelloMessage() {
     cJSON_AddBoolToObject(features, "aec", true);
 #endif
     cJSON_AddBoolToObject(features, "mcp", true);
+#ifdef CONFIG_LSPLATFORM
+    if (narrowband_mode_) {
+        cJSON_AddNumberToObject(features, "ls_tts_prefer_bitrate", 8000);
+    }
+#endif // CONFIG_LSPLATFORM
     cJSON_AddItemToObject(root, "features", features);
     cJSON_AddStringToObject(root, "transport", "websocket");
     cJSON* audio_params = cJSON_CreateObject();
     cJSON_AddStringToObject(audio_params, "format", "opus");
+#ifdef CONFIG_LSPLATFORM
+    if (narrowband_mode_) {
+        cJSON_AddNumberToObject(audio_params, "sample_rate", 8000);
+    } else {
+        cJSON_AddNumberToObject(audio_params, "sample_rate", 16000);
+    }
+#else // !CONFIG_LSPLATFORM
     cJSON_AddNumberToObject(audio_params, "sample_rate", 16000);
+#endif // CONFIG_LSPLATFORM
     cJSON_AddNumberToObject(audio_params, "channels", 1);
     cJSON_AddNumberToObject(audio_params, "frame_duration", OPUS_FRAME_DURATION_MS);
     cJSON_AddItemToObject(root, "audio_params", audio_params);

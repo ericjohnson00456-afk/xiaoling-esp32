@@ -114,6 +114,10 @@ public:
     void SetModelsList(srmodel_list_t* models_list);
 #endif // CONFIG_USE_MICRO_WAKE_WORD
 
+#ifdef CONFIG_LSPLATFORM
+    void SetNarrowbandMode(bool enabled);
+#endif // CONFIG_LSPLATFORM
+
 private:
     AudioCodec* codec_ = nullptr;
     AudioServiceCallbacks callbacks_;
@@ -124,6 +128,9 @@ private:
     std::unique_ptr<OpusDecoderWrapper> opus_decoder_;
     OpusResampler input_resampler_;
     OpusResampler reference_resampler_;
+#ifdef CONFIG_LSPLATFORM
+    OpusResampler uplink_resampler_;
+#endif // CONFIG_LSPLATFORM
     OpusResampler output_resampler_;
     DebugStatistics debug_statistics_;
     srmodel_list_t* models_list_ = nullptr;
@@ -158,6 +165,9 @@ private:
     void AudioOutputTask();
     void OpusCodecTask();
     void PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t>&& pcm);
+#ifdef CONFIG_LSPLATFORM
+    void SetEncodeSampleRate(int sample_rate, int frame_duration);
+#endif // CONFIG_LSPLATFORM
     void SetDecodeSampleRate(int sample_rate, int frame_duration);
     void CheckAndUpdateAudioPowerState();
 };
