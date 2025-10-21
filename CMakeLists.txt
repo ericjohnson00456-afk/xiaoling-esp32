@@ -17,6 +17,5 @@ if(NOT "$ENV{BUILD_XIAOZHI}" STREQUAL "1")
 endif()
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-list(APPEND EXTRA_COMPONENT_DIRS "esp_codec_dev")
 project(xiaozhi)
 
