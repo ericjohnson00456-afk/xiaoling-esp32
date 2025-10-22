@@ -108,6 +108,7 @@ LcdDisplay::LcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_
     current_theme_ = LvglThemeManager::GetInstance().GetTheme(theme_name);
 #endif // CONFIG_USE_XIAOLING_MESSAGE_STYLE
 
+#ifndef CONFIG_USE_XIAOLING_MESSAGE_STYLE
     // Create a timer to hide the preview image
     esp_timer_create_args_t preview_timer_args = {
         .callback = [](void* arg) {
@@ -120,6 +121,7 @@ LcdDisplay::LcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_
         .skip_unhandled_events = false,
     };
     esp_timer_create(&preview_timer_args, &preview_timer_);
+#endif // !CONFIG_USE_XIAOLING_MESSAGE_STYLE
 }
 
 SpiLcdDisplay::SpiLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_t panel,
@@ -327,10 +329,12 @@ LcdDisplay::~LcdDisplay() {
         gif_controller_.reset();
     }
     
+#ifndef CONFIG_USE_XIAOLING_MESSAGE_STYLE
     if (preview_timer_ != nullptr) {
         esp_timer_stop(preview_timer_);
         esp_timer_delete(preview_timer_);
     }
+#endif // !CONFIG_USE_XIAOLING_MESSAGE_STYLE
 
     if (preview_image_ != nullptr) {
         lv_obj_del(preview_image_);
@@ -922,7 +926,9 @@ void LcdDisplay::SetPreviewImage(std::unique_ptr<LvglImage> image) {
     }
 
     if (image == nullptr) {
+#ifndef CONFIG_USE_XIAOLING_MESSAGE_STYLE
         esp_timer_stop(preview_timer_);
+#endif // CONFIG_USE_XIAOLING_MESSAGE_STYLE
         lv_obj_remove_flag(emoji_box_, LV_OBJ_FLAG_HIDDEN);
         lv_obj_add_flag(preview_image_, LV_OBJ_FLAG_HIDDEN);
         preview_image_cached_.reset();
@@ -947,8 +953,10 @@ void LcdDisplay::SetPreviewImage(std::unique_ptr<LvglImage> image) {
     }
     lv_obj_add_flag(emoji_box_, LV_OBJ_FLAG_HIDDEN);
     lv_obj_remove_flag(preview_image_, LV_OBJ_FLAG_HIDDEN);
+#ifndef CONFIG_USE_XIAOLING_MESSAGE_STYLE
     esp_timer_stop(preview_timer_);
     ESP_ERROR_CHECK(esp_timer_start_once(preview_timer_, PREVIEW_IMAGE_DURATION_MS * 1000));
+#endif // CONFIG_USE_XIAOLING_MESSAGE_STYLE
 }
 
 void LcdDisplay::SetChatMessage(const char* role, const char* content) {
@@ -1034,6 +1042,10 @@ void LcdDisplay::SetEmotion(const char* emotion) {
         lv_obj_add_flag(emoji_label_, LV_OBJ_FLAG_HIDDEN);
     }
 #endif
+
+#ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
+    SetPreviewImage(nullptr);
+#endif // CONFIG_USE_XIAOLING_MESSAGE_STYLE
 }
 
 void LcdDisplay::SetTheme(Theme* theme) {

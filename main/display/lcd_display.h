@@ -30,7 +30,9 @@ protected:
     std::unique_ptr<LvglGif> gif_controller_ = nullptr;
     lv_obj_t* emoji_box_ = nullptr;
     lv_obj_t* chat_message_label_ = nullptr;
+#ifndef CONFIG_USE_XIAOLING_MESSAGE_STYLE
     esp_timer_handle_t preview_timer_ = nullptr;
+#endif // !CONFIG_USE_XIAOLING_MESSAGE_STYLE
     std::unique_ptr<LvglImage> preview_image_cached_ = nullptr;
 
 #ifdef CONFIG_LSPLATFORM
