@@ -39,6 +39,11 @@ static const char* const STATE_STRINGS[] = {
     "invalid_state"
 };
 
+#ifdef CONFIG_LSPLATFORM
+static const int kBadNetworkSampleWindowSec = 60;
+static const int kBadNetworkSampleCount = 3;
+#endif
+
 Application::Application() {
     event_group_ = xEventGroupCreate();
 
@@ -483,6 +488,7 @@ void Application::Start() {
         if (settings.GetBool("narrowband_mode", false)) {
             protocol_->SetNarrowbandMode(true);
             audio_service_.SetNarrowbandMode(true);
+            narrowband_mode_ = true;
             ESP_LOGI(TAG, "Narrowband mode enabled");
         }
     }
@@ -543,9 +549,6 @@ void Application::Start() {
                             SetDeviceState(kDeviceStateListening);
                         }
 #ifdef CONFIG_LSPLATFORM
-                        if (downlink_watchdog_.IsRunning()) {
-                            ResetWatchdogBites();
-                        }
                         downlink_watchdog_.Stop();
 #endif // CONFIG_LSPLATFORM
                     }
@@ -779,15 +782,29 @@ void Application::SetListeningMode(ListeningMode mode) {
 
 #ifdef CONFIG_LSPLATFORM
 void Application::CountWatchdogBites() {
-    watchdog_bites_++;
-    ESP_LOGI(TAG, "Watchdog bite count: %d", watchdog_bites_);
-    if (watchdog_bites_ >= 2) {
+    int32_t now = (int32_t)(esp_timer_get_time() / 1000000);
+    last_watchdog_bites_.push_back(now);
+
+    if (last_watchdog_bites_.size() > kBadNetworkSampleCount) {
+        last_watchdog_bites_.erase(last_watchdog_bites_.begin(), last_watchdog_bites_.end() - kBadNetworkSampleCount);
+    }
+
+    int bites_in_window = 0;
+    for (const auto& t : last_watchdog_bites_) {
+        if (now - t <= kBadNetworkSampleWindowSec) {
+            bites_in_window++;
+        }
+    }
+
+    ESP_LOGI(TAG, "Watchdog bites in last minute: %d", bites_in_window);
+
+    if (bites_in_window >= kBadNetworkSampleCount && !narrowband_mode_) {
         ESP_LOGW(TAG, "Too many watchdog bites, switch to narrowband mode");
-        watchdog_bites_ = 0;
         protocol_->SetNarrowbandMode(true);
         audio_service_.SetNarrowbandMode(true);
         Settings settings("wifi", true);
         settings.SetBool("narrowband_mode", true);
+        narrowband_mode_ = true;
     }
 }
 #endif // CONFIG_LSPLATFORM
@@ -820,9 +837,6 @@ void Application::SetDeviceState(DeviceState state) {
             audio_service_.EnableVoiceProcessing(false);
             audio_service_.EnableWakeWordDetection(true);
 #ifdef CONFIG_LSPLATFORM
-            if (uplink_watchdog_.IsRunning() || downlink_watchdog_.IsRunning()) {
-                ResetWatchdogBites();
-            }
             uplink_watchdog_.Stop();
             downlink_watchdog_.Stop();
 #endif // CONFIG_LSPLATFORM
@@ -855,9 +869,6 @@ void Application::SetDeviceState(DeviceState state) {
                 // Only AFE wake word can be detected in speaking mode
                 audio_service_.EnableWakeWordDetection(audio_service_.IsAfeWakeWord());
 #ifdef CONFIG_LSPLATFORM
-                if (uplink_watchdog_.IsRunning()) {
-                    ResetWatchdogBites();
-                }
                 uplink_watchdog_.Stop();
 #endif // CONFIG_LSPLATFORM
             }
