@@ -151,20 +151,16 @@ private:
 
         adc_buttons_[ADC_BUTTON_REC]->OnClick([this]() {
             auto& app = Application::GetInstance();
-            auto codec = GetAudioCodec();
-            if (app.GetDeviceState() != kDeviceStateIdle || codec->input_enabled()) {
-                app.ToggleChatState();
+            if (app.GetDeviceState() == kDeviceStateStarting && !WifiStation::GetInstance().IsConnected()) {
+                ResetWifiConfiguration();
             }
+            app.ToggleChatState();
         });
 
         adc_cfg.button_index = ADC_BUTTON_SET;
         adc_cfg.min = 1010;
         adc_cfg.max = 1210;
         adc_buttons_[ADC_BUTTON_SET] = new AdcButton(adc_cfg);
-
-        adc_buttons_[ADC_BUTTON_SET]->OnLongPress([this]() {
-            ResetWifiConfiguration();
-        });
 
 #if CONFIG_USE_DEVICE_AEC
         adc_buttons_[ADC_BUTTON_SET]->OnDoubleClick([this]() {
