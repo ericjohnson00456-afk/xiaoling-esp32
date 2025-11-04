@@ -28,6 +28,35 @@
 #include "console/console.h"
 #endif
 
+#include <esp_mac.h>
+
+static uint8_t blufi_service_uuid128[32] = {
+    /* LSB <--------------------------------------------------------------------------------> MSB */
+    //first uuid, 16bit, [12],[13] is the value
+    0xfb, 0x34, 0x9b, 0x5f, 0x80, 0x00, 0x00, 0x80, 0x00, 0x10, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00,
+};
+static esp_ble_adv_data_t blufi_adv_data = {
+    .set_scan_rsp = false,
+    .include_name = true,
+    .include_txpower = true,
+    .min_interval = 0x0006, //slave connection min interval, Time = min_interval * 1.25 msec
+    .max_interval = 0x0010, //slave connection max interval, Time = max_interval * 1.25 msec
+    .appearance = 0x00,
+    .manufacturer_len = 0,
+    .p_manufacturer_data =  NULL,
+    .service_data_len = 0,
+    .p_service_data = NULL,
+    .service_uuid_len = 16,
+    .p_service_uuid = blufi_service_uuid128,
+    .flag = 0x6,
+};
+
+void esp_blufi_adv_start_macname(void)
+{
+    esp_ble_gap_set_device_name(ble_name);
+    esp_ble_gap_config_adv_data(&blufi_adv_data);
+}
+
 #ifdef CONFIG_BT_BLUEDROID_ENABLED
 esp_err_t esp_blufi_host_init(void)
 {
@@ -43,14 +72,7 @@ esp_err_t esp_blufi_host_init(void)
         BLUFI_ERROR("%s init bluedroid failed: %s\n", __func__, esp_err_to_name(ret));
         return ESP_FAIL;
     }
-    BLUFI_INFO("BD ADDR: "ESP_BD_ADDR_STR"\n", ESP_BD_ADDR_HEX(esp_bt_dev_get_address()));
-
-    /* Set the default device name */
-    ret = esp_ble_gap_set_device_name(BLUFI_DEVICE_NAME);
-    if (ret) {
-        BLUFI_ERROR("%s set device name failed: %s\n", __func__, esp_err_to_name(ret));
-        return ESP_FAIL;
-    }
+    BLUFI_INFO("BD ADDR: " ESP_BD_ADDR_STR "\n", ESP_BD_ADDR_HEX(esp_bt_dev_get_address()));
 
     return ESP_OK;
 
@@ -161,7 +183,7 @@ esp_err_t esp_blufi_controller_deinit() {
 #endif
 
 #ifdef CONFIG_BT_NIMBLE_ENABLED
-void ble_store_config_init(void);
+extern "C" void ble_store_config_init(void);
 static void blufi_on_reset(int reason)
 {
     MODLOG_DFLT(ERROR, "Resetting state; reason=%d\n", reason);
@@ -220,7 +242,7 @@ esp_err_t esp_blufi_host_init(void)
 
 #if CONFIG_BT_NIMBLE_GAP_SERVICE
     /* Set the default device name. */
-    rc = ble_svc_gap_device_name_set(BLUFI_DEVICE_NAME);
+    rc = ble_svc_gap_device_name_set(ble_name);
     assert(rc == 0);
 #endif
 
@@ -229,7 +251,7 @@ esp_err_t esp_blufi_host_init(void)
 
     esp_blufi_btc_init();
 
-    err = esp_nimble_enable(bleprph_host_task);
+    err = esp_nimble_enable((void *)bleprph_host_task);
     if (err) {
         BLUFI_ERROR("%s failed: %s\n", __func__, esp_err_to_name(err));
         return ESP_FAIL;

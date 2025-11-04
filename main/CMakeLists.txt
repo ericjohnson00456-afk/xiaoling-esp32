@@ -55,10 +55,13 @@ if(CONFIG_IDF_TARGET_ESP32S3)
 endif()
 
 # BluFi
+if(CONFIG_PROV_MODE_BLE)
 list(APPEND SOURCES "blufi/blufi_security.cc"
                     "blufi/blufi_init.cc"
                     "blufi/blufi_main.cc")
 list(APPEND INCLUDE_DIRS "blufi")
+set(BLUFI_ASSETS ${CMAKE_CURRENT_SOURCE_DIR}/assets/common/xl_ble_prov.png)
+endif() # CONFIG_PROV_MODE_BLE
 
 idf_build_get_property(build_components BUILD_COMPONENTS)
 # Function to find component dynamically by pattern
@@ -605,7 +608,7 @@ endif()
 include(${PROJECT_DIR}/main/audio/wake_words/micro_wake_word/models/models.cmake)
 
 idf_component_register(SRCS ${SOURCES}
-                    EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS}
+                    EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS} ${BLUFI_ASSETS}
                     INCLUDE_DIRS ${INCLUDE_DIRS}
                     WHOLE_ARCHIVE
                     )

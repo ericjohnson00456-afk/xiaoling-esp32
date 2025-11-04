@@ -17,6 +17,10 @@
 #include <ssid_manager.h>
 #include "afsk_demod.h"
 
+#ifdef CONFIG_PROV_MODE_BLE
+#include "blufi/blufi.h"
+#endif // CONFIG_PROV_MODE_BLE
+
 static const char *TAG = "WifiBoard";
 
 WifiBoard::WifiBoard() {
@@ -78,7 +82,11 @@ void WifiBoard::EnterWifiConfigMode() {
 void WifiBoard::StartNetwork() {
     // User can press BOOT button while starting to enter WiFi configuration mode
     if (wifi_config_mode_) {
+#ifdef CONFIG_PROV_MODE_BLE
+        blufi_start();
+#else // !CONFIG_PROV_MODE_BLE
         EnterWifiConfigMode();
+#endif // CONFIG_PROV_MODE_BLE
         return;
     }
 
@@ -87,7 +95,11 @@ void WifiBoard::StartNetwork() {
     auto ssid_list = ssid_manager.GetSsidList();
     if (ssid_list.empty()) {
         wifi_config_mode_ = true;
+#ifdef CONFIG_PROV_MODE_BLE
+        blufi_start();
+#else // !CONFIG_PROV_MODE_BLE
         EnterWifiConfigMode();
+#endif // CONFIG_PROV_MODE_BLE
         return;
     }
 
@@ -115,7 +127,11 @@ void WifiBoard::StartNetwork() {
     if (!wifi_station.WaitForConnected(60 * 1000)) {
         wifi_station.Stop();
         wifi_config_mode_ = true;
+#ifdef CONFIG_PROV_MODE_BLE
+        blufi_start();
+#else // !CONFIG_PROV_MODE_BLE
         EnterWifiConfigMode();
+#endif // CONFIG_PROV_MODE_BLE
         return;
     }
 }

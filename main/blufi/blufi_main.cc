@@ -28,39 +28,28 @@
 #include "esp_bt.h"
 #endif
 
+#include "ssid_manager.h"
+#include "settings.h"
+#include "assets/lang_config.h"
+#include "board.h"
+#include "display.h"
+#include "application.h"
+#include "system_info.h"
+
 #include "esp_blufi_api.h"
 #include "blufi.h"
 
 #include "esp_blufi.h"
 
-#define EXAMPLE_WIFI_CONNECTION_MAXIMUM_RETRY CONFIG_EXAMPLE_WIFI_CONNECTION_MAXIMUM_RETRY
+#define EXAMPLE_WIFI_CONNECTION_MAXIMUM_RETRY 1
 #define EXAMPLE_INVALID_REASON                255
 #define EXAMPLE_INVALID_RSSI                  -128
-
-#if CONFIG_ESP_WIFI_AUTH_OPEN
-#define EXAMPLE_WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_OPEN
-#elif CONFIG_ESP_WIFI_AUTH_WEP
-#define EXAMPLE_WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WEP
-#elif CONFIG_ESP_WIFI_AUTH_WPA_PSK
-#define EXAMPLE_WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WPA_PSK
-#elif CONFIG_ESP_WIFI_AUTH_WPA2_PSK
-#define EXAMPLE_WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WPA2_PSK
-#elif CONFIG_ESP_WIFI_AUTH_WPA_WPA2_PSK
-#define EXAMPLE_WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WPA_WPA2_PSK
-#elif CONFIG_ESP_WIFI_AUTH_WPA3_PSK
-#define EXAMPLE_WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WPA3_PSK
-#elif CONFIG_ESP_WIFI_AUTH_WPA2_WPA3_PSK
-#define EXAMPLE_WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WPA2_WPA3_PSK
-#elif CONFIG_ESP_WIFI_AUTH_WAPI_PSK
-#define EXAMPLE_WIFI_SCAN_AUTH_MODE_THRESHOLD WIFI_AUTH_WAPI_PSK
-#endif
 
 static void example_event_callback(esp_blufi_cb_event_t event, esp_blufi_cb_param_t *param);
 
 #define WIFI_LIST_NUM   10
 
 static wifi_config_t sta_config;
-static wifi_config_t ap_config;
 
 /* FreeRTOS event group to signal when we are connected & ready to make a request */
 static EventGroupHandle_t wifi_event_group;
@@ -82,6 +71,26 @@ static int gl_sta_ssid_len;
 static wifi_sta_list_t gl_sta_list;
 static bool gl_sta_is_connecting = false;
 static esp_blufi_extra_info_t gl_sta_conn_info;
+
+static bool provstate = false;
+static bool authstate = false;
+char ble_name[24];
+
+extern const char xl_ble_prov_png_start[] asm("_binary_xl_ble_prov_png_start");
+extern const char xl_ble_prov_png_end[]   asm("_binary_xl_ble_prov_png_end");
+
+esp_err_t report_id()
+{
+    std::string pid = SystemInfo::GetProductId();
+    std::string did = SystemInfo::GetMacAddress();
+    char data[128];
+    sprintf(data, "{\"pid\":\"%s\",\"did\":\"%s\"}", pid.c_str(), did.c_str());
+    esp_err_t ret = esp_blufi_send_custom_data((uint8_t *)data, strlen(data));
+    if (ret != ESP_OK) {
+        BLUFI_INFO("Report ID failed\n");
+    }
+    return ret;
+}
 
 static void example_record_wifi_conn_info(int rssi, uint8_t reason)
 {
@@ -150,6 +159,9 @@ static void ip_event_handler(void* arg, esp_event_base_t event_base,
         gl_sta_got_ip = true;
         if (ble_is_connected == true) {
             esp_blufi_send_wifi_conn_report(mode, ESP_BLUFI_STA_CONN_SUCCESS, softap_get_current_connection_number(), &info);
+            provstate = true;
+            vTaskDelay(300 / portTICK_PERIOD_MS);
+            report_id();
         } else {
             BLUFI_INFO("BLUFI BLE is not connected yet\n");
         }
@@ -169,9 +181,6 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
     wifi_mode_t mode;
 
     switch (event_id) {
-    case WIFI_EVENT_STA_START:
-        example_wifi_connect();
-        break;
     case WIFI_EVENT_STA_CONNECTED:
         gl_sta_connected = true;
         gl_sta_is_connecting = false;
@@ -179,6 +188,7 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
         memcpy(gl_sta_bssid, event->bssid, 6);
         memcpy(gl_sta_ssid, event->ssid, event->ssid_len);
         gl_sta_ssid_len = event->ssid_len;
+        BLUFI_INFO("connected ssid: %s, password: %s", sta_config.sta.ssid, sta_config.sta.password);
         break;
     case WIFI_EVENT_STA_DISCONNECTED:
         /* Only handle reconnection during connecting */
@@ -186,6 +196,9 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
             gl_sta_is_connecting = false;
             disconnected_event = (wifi_event_sta_disconnected_t*) event_data;
             example_record_wifi_conn_info(disconnected_event->rssi, disconnected_event->reason);
+            BLUFI_ERROR("!!! Wifi connect failed !!! reason: %d", disconnected_event->reason);
+            esp_blufi_send_wifi_conn_report(WIFI_MODE_STA, ESP_BLUFI_STA_CONN_FAIL, 0, &gl_sta_conn_info);
+            break;
         }
         /* This is a workaround as ESP32 WiFi libs don't currently
            auto-reassociate. */
@@ -259,12 +272,12 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
     }
     case WIFI_EVENT_AP_STACONNECTED: {
         wifi_event_ap_staconnected_t* event = (wifi_event_ap_staconnected_t*) event_data;
-        BLUFI_INFO("station "MACSTR" join, AID=%d", MAC2STR(event->mac), event->aid);
+        BLUFI_INFO("station " MACSTR " join, AID=%d", MAC2STR(event->mac), event->aid);
         break;
     }
     case WIFI_EVENT_AP_STADISCONNECTED: {
         wifi_event_ap_stadisconnected_t* event = (wifi_event_ap_stadisconnected_t*) event_data;
-        BLUFI_INFO("station "MACSTR" leave, AID=%d, reason=%d", MAC2STR(event->mac), event->aid, event->reason);
+        BLUFI_INFO("station " MACSTR " leave, AID=%d, reason=%d", MAC2STR(event->mac), event->aid, event->reason);
         break;
     }
 
@@ -278,11 +291,8 @@ static void initialise_wifi(void)
 {
     ESP_ERROR_CHECK(esp_netif_init());
     wifi_event_group = xEventGroupCreate();
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
     esp_netif_t *sta_netif = esp_netif_create_default_wifi_sta();
     assert(sta_netif);
-    esp_netif_t *ap_netif = esp_netif_create_default_wifi_ap();
-    assert(ap_netif);
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &ip_event_handler, NULL));
 
@@ -309,7 +319,7 @@ static void example_event_callback(esp_blufi_cb_event_t event, esp_blufi_cb_para
     case ESP_BLUFI_EVENT_INIT_FINISH:
         BLUFI_INFO("BLUFI init finish\n");
 
-        esp_blufi_adv_start();
+        esp_blufi_adv_start_macname();
         break;
     case ESP_BLUFI_EVENT_DEINIT_FINISH:
         BLUFI_INFO("BLUFI deinit finish\n");
@@ -323,8 +333,9 @@ static void example_event_callback(esp_blufi_cb_event_t event, esp_blufi_cb_para
     case ESP_BLUFI_EVENT_BLE_DISCONNECT:
         BLUFI_INFO("BLUFI ble disconnect\n");
         ble_is_connected = false;
+        provstate = false;
         blufi_security_deinit();
-        esp_blufi_adv_start();
+        esp_blufi_adv_start_macname();
         break;
     case ESP_BLUFI_EVENT_SET_WIFI_OPMODE:
         BLUFI_INFO("BLUFI Set WIFI opmode %d\n", param->wifi_mode.op_mode);
@@ -400,56 +411,9 @@ static void example_event_callback(esp_blufi_cb_event_t event, esp_blufi_cb_para
         }
         strncpy((char *)sta_config.sta.password, (char *)param->sta_passwd.passwd, param->sta_passwd.passwd_len);
         sta_config.sta.password[param->sta_passwd.passwd_len] = '\0';
-        sta_config.sta.threshold.authmode = EXAMPLE_WIFI_SCAN_AUTH_MODE_THRESHOLD;
+        sta_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
         esp_wifi_set_config(WIFI_IF_STA, &sta_config);
         BLUFI_INFO("Recv STA PASSWORD %s\n", sta_config.sta.password);
-        break;
-	case ESP_BLUFI_EVENT_RECV_SOFTAP_SSID:
-        if (param->softap_ssid.ssid_len >= sizeof(ap_config.ap.ssid)/sizeof(ap_config.ap.ssid[0])) {
-            esp_blufi_send_error_info(ESP_BLUFI_DATA_FORMAT_ERROR);
-            BLUFI_INFO("Invalid SOFTAP SSID\n");
-            break;
-        }
-        strncpy((char *)ap_config.ap.ssid, (char *)param->softap_ssid.ssid, param->softap_ssid.ssid_len);
-        ap_config.ap.ssid[param->softap_ssid.ssid_len] = '\0';
-        ap_config.ap.ssid_len = param->softap_ssid.ssid_len;
-        esp_wifi_set_config(WIFI_IF_AP, &ap_config);
-        BLUFI_INFO("Recv SOFTAP SSID %s, ssid len %d\n", ap_config.ap.ssid, ap_config.ap.ssid_len);
-        break;
-	case ESP_BLUFI_EVENT_RECV_SOFTAP_PASSWD:
-        if (param->softap_passwd.passwd_len >= sizeof(ap_config.ap.password)/sizeof(ap_config.ap.password[0])) {
-            esp_blufi_send_error_info(ESP_BLUFI_DATA_FORMAT_ERROR);
-            BLUFI_INFO("Invalid SOFTAP PASSWD\n");
-            break;
-        }
-        strncpy((char *)ap_config.ap.password, (char *)param->softap_passwd.passwd, param->softap_passwd.passwd_len);
-        ap_config.ap.password[param->softap_passwd.passwd_len] = '\0';
-        esp_wifi_set_config(WIFI_IF_AP, &ap_config);
-        BLUFI_INFO("Recv SOFTAP PASSWORD %s len = %d\n", ap_config.ap.password, param->softap_passwd.passwd_len);
-        break;
-	case ESP_BLUFI_EVENT_RECV_SOFTAP_MAX_CONN_NUM:
-        if (param->softap_max_conn_num.max_conn_num > 4) {
-            return;
-        }
-        ap_config.ap.max_connection = param->softap_max_conn_num.max_conn_num;
-        esp_wifi_set_config(WIFI_IF_AP, &ap_config);
-        BLUFI_INFO("Recv SOFTAP MAX CONN NUM %d\n", ap_config.ap.max_connection);
-        break;
-	case ESP_BLUFI_EVENT_RECV_SOFTAP_AUTH_MODE:
-        if (param->softap_auth_mode.auth_mode >= WIFI_AUTH_MAX) {
-            return;
-        }
-        ap_config.ap.authmode = param->softap_auth_mode.auth_mode;
-        esp_wifi_set_config(WIFI_IF_AP, &ap_config);
-        BLUFI_INFO("Recv SOFTAP AUTH MODE %d\n", ap_config.ap.authmode);
-        break;
-	case ESP_BLUFI_EVENT_RECV_SOFTAP_CHANNEL:
-        if (param->softap_channel.channel > 13) {
-            return;
-        }
-        ap_config.ap.channel = param->softap_channel.channel;
-        esp_wifi_set_config(WIFI_IF_AP, &ap_config);
-        BLUFI_INFO("Recv SOFTAP CHANNEL %d\n", ap_config.ap.channel);
         break;
     case ESP_BLUFI_EVENT_GET_WIFI_LIST:{
         wifi_scan_config_t scanConf = {
@@ -464,44 +428,48 @@ static void example_event_callback(esp_blufi_cb_event_t event, esp_blufi_cb_para
         }
         break;
     }
-    case ESP_BLUFI_EVENT_RECV_CUSTOM_DATA:
+    case ESP_BLUFI_EVENT_RECV_CUSTOM_DATA: {
         BLUFI_INFO("Recv Custom Data %" PRIu32 "\n", param->custom_data.data_len);
         ESP_LOG_BUFFER_HEX("Custom Data", param->custom_data.data, param->custom_data.data_len);
+        char data[20] = {0};
+        strncpy(data, (const char*)param->custom_data.data, param->custom_data.data_len);
+        BLUFI_INFO("data: %s, %d", data, strcmp(data, "done"));
+        if (provstate && strcmp(data, "done") == 0) {
+            SsidManager::GetInstance().AddSsid((const char*)sta_config.sta.ssid, (const char*)sta_config.sta.password);
+            char done[] = "done";
+            esp_err_t ret = esp_blufi_send_custom_data((uint8_t *)done, strlen(done));
+            if (ret == ESP_OK) {
+                BLUFI_INFO("!!!done!!!");
+                authstate = true;
+            }
+        }
         break;
-	case ESP_BLUFI_EVENT_RECV_USERNAME:
-        /* Not handle currently */
-        break;
-	case ESP_BLUFI_EVENT_RECV_CA_CERT:
-        /* Not handle currently */
-        break;
-	case ESP_BLUFI_EVENT_RECV_CLIENT_CERT:
-        /* Not handle currently */
-        break;
-	case ESP_BLUFI_EVENT_RECV_SERVER_CERT:
-        /* Not handle currently */
-        break;
-	case ESP_BLUFI_EVENT_RECV_CLIENT_PRIV_KEY:
-        /* Not handle currently */
-        break;;
-	case ESP_BLUFI_EVENT_RECV_SERVER_PRIV_KEY:
-        /* Not handle currently */
-        break;
+    }
     default:
         break;
     }
 }
 
-void app_main(void)
+void blufi_start(void)
 {
     esp_err_t ret;
 
-    // Initialize NVS
-    ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ret = nvs_flash_init();
-    }
-    ESP_ERROR_CHECK( ret );
+    auto& application = Application::GetInstance();
+    application.SetDeviceState(kDeviceStateWifiConfiguring);
+
+    auto& assets = Assets::GetInstance();
+    assets.Apply();
+
+    provstate = false;
+    authstate = false;
+
+    uint8_t mac[6];
+#if CONFIG_IDF_TARGET_ESP32P4
+    esp_wifi_get_mac(WIFI_IF_AP, mac);
+#else
+    ESP_ERROR_CHECK(esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP));
+#endif
+    snprintf(ble_name, sizeof(ble_name), "Xiaoling-%02X%02X", mac[4], mac[5]);
 
     initialise_wifi();
 
@@ -520,4 +488,26 @@ void app_main(void)
     }
 
     BLUFI_INFO("BLUFI VERSION %04x\n", esp_blufi_get_version());
+
+    auto qrcode = std::make_unique<LvglRawImage>((void *)xl_ble_prov_png_start, (size_t)(xl_ble_prov_png_end - xl_ble_prov_png_start));
+
+    auto display = Board::GetInstance().GetDisplay();
+    display->ShowActivation(std::move(qrcode), "扫码或搜索“小聆AI”小程序\n选择ESP32 - 蓝牙配网");
+
+    // std::string msg = "扫码或搜索“小聆AI”小程序\n选择ESP32 - 蓝牙配网";
+    // application.Alert(Lang::Strings::WIFI_CONFIG_MODE, msg.c_str(), "xl_ble_prov", Lang::Sounds::OGG_WIFICONFIG);
+    application.PlaySound(Lang::Sounds::OGG_XL_BLE_PROV);
+
+    while (!provstate || !authstate) {
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
+    }
+
+    BLUFI_INFO("BLUFI config done");
+
+    BLUFI_INFO("Restarting...");
+    esp_restart();
+
+    while (1) {
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
+    }
 }

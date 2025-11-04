@@ -61,7 +61,7 @@ static int myrand( void *rng_state, unsigned char *output, size_t len )
     return( 0 );
 }
 
-extern void btc_blufi_report_error(esp_blufi_error_state_t state);
+extern "C" void btc_blufi_report_error(esp_blufi_error_state_t state);
 
 void blufi_dh_negotiate_data_handler(uint8_t *data, int len, uint8_t **output_data, int *output_len, bool *need_free)
 {
