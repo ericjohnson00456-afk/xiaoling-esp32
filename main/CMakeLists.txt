@@ -54,6 +54,12 @@ if(CONFIG_IDF_TARGET_ESP32S3)
     list(APPEND INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/boards/common_esp32s3)
 endif()
 
+# BluFi
+list(APPEND SOURCES "blufi/blufi_security.cc"
+                    "blufi/blufi_init.cc"
+                    "blufi/blufi_main.cc")
+list(APPEND INCLUDE_DIRS "blufi")
+
 idf_build_get_property(build_components BUILD_COMPONENTS)
 # Function to find component dynamically by pattern
 function(find_component_by_pattern PATTERN COMPONENT_VAR PATH_VAR)
