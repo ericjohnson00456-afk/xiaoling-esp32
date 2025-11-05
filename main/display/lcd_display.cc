@@ -1202,6 +1202,8 @@ void LcdDisplay::SetupActivationUI() {
 
     activation_qrcode_ = lv_image_create(activation_container_);
     lv_obj_set_size(activation_qrcode_, LV_HOR_RES, LV_SIZE_CONTENT);
+    lv_obj_set_flex_grow(activation_qrcode_, 1);
+    lv_image_set_align(activation_qrcode_, LV_IMAGE_ALIGN_CONTAIN);
 
     activation_message_ = lv_label_create(activation_container_);
     lv_obj_set_size(activation_message_, LV_HOR_RES, LV_SIZE_CONTENT);
@@ -1219,14 +1221,12 @@ void LcdDisplay::ShowActivation(std::unique_ptr<LvglImage> qrcode, const std::st
     auto qrcode_dsc = activation_qrcode_cached_->image_dsc();
 
     lv_obj_add_flag(content_, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(activation_container_, LV_OBJ_FLAG_HIDDEN);
 
     lv_image_set_src(activation_qrcode_, qrcode_dsc);
-    lv_image_set_scale(activation_qrcode_, 64);  // 256/4
-    lv_obj_set_size(activation_qrcode_, LV_HOR_RES, qrcode_dsc->header.h / 4);
-
     lv_label_set_text(activation_message_, message.c_str());
 
-    lv_obj_remove_flag(activation_container_, LV_OBJ_FLAG_HIDDEN);
+    lv_task_handler();
 }
 
 void LcdDisplay::DismissActivation() {
