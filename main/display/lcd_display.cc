@@ -1208,6 +1208,7 @@ void LcdDisplay::SetupActivationUI() {
     activation_message_ = lv_label_create(activation_container_);
     lv_obj_set_size(activation_message_, LV_HOR_RES, LV_SIZE_CONTENT);
     lv_obj_set_style_pad_hor(activation_message_, 16, LV_PART_MAIN);
+    lv_obj_set_style_text_align(activation_message_, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
     lv_label_set_long_mode(activation_message_, LV_LABEL_LONG_WRAP);
 }
 
