@@ -128,7 +128,10 @@ void WifiBoard::StartNetwork() {
         wifi_station.Stop();
         wifi_config_mode_ = true;
 #ifdef CONFIG_PROV_MODE_BLE
-        blufi_start();
+        // Since WifiStation::Stop() didn't really destroy the station netif, we
+        // can't do our provisioning here directly. Instead, clear config and
+        // reboot.
+        ResetWifiConfiguration();
 #else // !CONFIG_PROV_MODE_BLE
         EnterWifiConfigMode();
 #endif // CONFIG_PROV_MODE_BLE
