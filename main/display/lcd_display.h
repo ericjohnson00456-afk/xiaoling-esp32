@@ -20,10 +20,12 @@ protected:
     esp_lcd_panel_handle_t panel_ = nullptr;
     
     lv_draw_buf_t draw_buf_;
+    lv_obj_t* top_bar_ = nullptr;
     lv_obj_t* status_bar_ = nullptr;
     lv_obj_t* content_ = nullptr;
     lv_obj_t* container_ = nullptr;
     lv_obj_t* side_bar_ = nullptr;
+    lv_obj_t* bottom_bar_ = nullptr;
     lv_obj_t* preview_image_ = nullptr;
     lv_obj_t* emoji_label_ = nullptr;
     lv_obj_t* emoji_image_ = nullptr;
@@ -34,6 +36,7 @@ protected:
     esp_timer_handle_t preview_timer_ = nullptr;
 #endif // !CONFIG_USE_XIAOLING_MESSAGE_STYLE
     std::unique_ptr<LvglImage> preview_image_cached_ = nullptr;
+    bool hide_subtitle_ = false;  // Control whether to hide chat messages/subtitles
 
 #ifdef CONFIG_LSPLATFORM
     lv_obj_t* activation_container_ = nullptr;
@@ -52,7 +55,7 @@ protected:
     virtual void Unlock() override;
 
 protected:
-    // 添加protected构造函数
+    // Add protected constructor
     LcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_t panel, int width, int height);
     
 public:
@@ -63,6 +66,9 @@ public:
 
     // Add theme switching function
     virtual void SetTheme(Theme* theme) override;
+    
+    // Set whether to hide chat messages/subtitles
+    void SetHideSubtitle(bool hide);
 
 #ifdef CONFIG_LSPLATFORM
     void SetupActivationUI();
@@ -75,7 +81,7 @@ public:
 #endif // CONFIG_LSPLATFORM
 };
 
-// SPI LCD显示器
+// SPI LCD display
 class SpiLcdDisplay : public LcdDisplay {
 public:
     SpiLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_t panel,
@@ -83,7 +89,7 @@ public:
                   bool mirror_x, bool mirror_y, bool swap_xy);
 };
 
-// RGB LCD显示器
+// RGB LCD display
 class RgbLcdDisplay : public LcdDisplay {
 public:
     RgbLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_t panel,
@@ -91,7 +97,7 @@ public:
                   bool mirror_x, bool mirror_y, bool swap_xy);
 };
 
-// MIPI LCD显示器
+// MIPI LCD display
 class MipiLcdDisplay : public LcdDisplay {
 public:
     MipiLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_t panel,
