@@ -17,16 +17,16 @@
 #include "esp32_camera.h"
 
 #define TAG "esp32s3_korvo2_v3"
-
+/* ADC Buttons */
 typedef enum {
-    ADC_BUTTON_REC,
-    ADC_BUTTON_MUTE,
-    ADC_BUTTON_PLAY,
-    ADC_BUTTON_SET,
-    ADC_BUTTON_VOLUME_DOWN,
-    ADC_BUTTON_VOLUME_UP,
-    ADC_BUTTON_NUM,
-} adc_button_t;
+    BSP_ADC_BUTTON_REC,
+    BSP_ADC_BUTTON_VOL_MUTE,
+    BSP_ADC_BUTTON_PLAY,
+    BSP_ADC_BUTTON_SET,
+    BSP_ADC_BUTTON_VOL_DOWN,
+    BSP_ADC_BUTTON_VOL_UP,
+    BSP_ADC_BUTTON_NUM
+} bsp_adc_button_t;
 
 // Init ili9341 by custom cmd
 static const ili9341_lcd_init_cmd_t vendor_specific_init[] = {
@@ -236,7 +236,11 @@ private:
 
         auto rec_button = adc_button_[BSP_ADC_BUTTON_REC];
         rec_button->OnClick([this]() {
-             ESP_LOGI(TAG, "TODO %s:%d\n", __func__, __LINE__);
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateStarting && !WifiStation::GetInstance().IsConnected()) {
+                ResetWifiConfiguration();
+            }
+            app.ToggleChatState();
         });
         boot_button_.OnClick([this]() {});
         boot_button_.OnClick([this]() {
@@ -247,59 +251,14 @@ private:
             app.ToggleChatState();
         });
 
-        adc_cfg.button_index = ADC_BUTTON_SET;
-        adc_cfg.min = 1010;
-        adc_cfg.max = 1210;
-        adc_buttons_[ADC_BUTTON_SET] = new AdcButton(adc_cfg);
-
 #if CONFIG_USE_DEVICE_AEC
-        adc_buttons_[ADC_BUTTON_SET]->OnDoubleClick([this]() {
+        boot_button_.OnDoubleClick([this]() {
             auto& app = Application::GetInstance();
             if (app.GetDeviceState() == kDeviceStateIdle) {
                 app.SetAecMode(app.GetAecMode() == kAecOff ? kAecOnDeviceSide : kAecOff);
             }
         });
 #endif
-
-        adc_cfg.button_index = ADC_BUTTON_VOLUME_DOWN;
-        adc_cfg.min = 720;
-        adc_cfg.max = 920;
-        adc_buttons_[ADC_BUTTON_VOLUME_DOWN] = new AdcButton(adc_cfg);
-
-        adc_buttons_[ADC_BUTTON_VOLUME_DOWN]->OnClick([this]() {
-            auto codec = GetAudioCodec();
-            int volume = codec->output_volume() - 10;
-            if (volume < 0) {
-                volume = 0;
-            }
-            codec->SetOutputVolume(volume);
-            GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
-        });
-
-        adc_buttons_[ADC_BUTTON_VOLUME_DOWN]->OnLongPress([this]() {
-            GetAudioCodec()->SetOutputVolume(0);
-            GetDisplay()->ShowNotification(Lang::Strings::MUTED);
-        });
-
-        adc_cfg.button_index = ADC_BUTTON_VOLUME_UP;
-        adc_cfg.min = 280;
-        adc_cfg.max = 480;
-        adc_buttons_[ADC_BUTTON_VOLUME_UP] = new AdcButton(adc_cfg);
-
-        adc_buttons_[ADC_BUTTON_VOLUME_UP]->OnClick([this]() {
-            auto codec = GetAudioCodec();
-            int volume = codec->output_volume() + 10;
-            if (volume > 100) {
-                volume = 100;
-            }
-            codec->SetOutputVolume(volume);
-            GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
-        });
-
-        adc_buttons_[ADC_BUTTON_VOLUME_UP]->OnLongPress([this]() {
-            GetAudioCodec()->SetOutputVolume(100);
-            GetDisplay()->ShowNotification(Lang::Strings::MAX_VOLUME);
-        });
     }
 
     void InitializeIli9341Display() {
@@ -418,7 +377,7 @@ private:
     }
 
 public:
-    Esp32S3Korvo2V3Board() {
+    Esp32S3Korvo2V3Board() : boot_button_(BOOT_BUTTON_GPIO) {
         ESP_LOGI(TAG, "Initializing esp32s3_korvo2_v3 Board");
         InitializeI2c();
         I2cDetect();
