@@ -119,7 +119,6 @@ jobs:
     strategy:
       matrix:
         idf:
-          - v5.4
           - v5.5
         board:
           - atk-dnesp32s3-box
