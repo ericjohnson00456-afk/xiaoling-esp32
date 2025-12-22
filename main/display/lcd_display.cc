@@ -1364,6 +1364,7 @@ void LcdDisplay::ShowImage(std::unique_ptr<LvglImage> image) {
 
     SetHideSubtitle(1);
     lv_obj_add_flag(emoji_box_, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(preview_image_, LV_OBJ_FLAG_HIDDEN);
     lv_obj_remove_flag(image_container_, LV_OBJ_FLAG_HIDDEN);
 
     lv_image_set_src(image_, img_dsc);
