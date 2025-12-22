@@ -852,6 +852,9 @@ void Application::SetDeviceState(DeviceState state) {
         case kDeviceStateListening:
             display->SetStatus(Lang::Strings::LISTENING);
             display->SetEmotion("neutral");
+#ifdef CONFIG_LSPLATFORM
+            display->DismissImage();
+#endif // CONFIG_LSPLATFORM
 
             // Make sure the audio processor is running
             if (!audio_service_.IsAudioProcessorRunning()) {

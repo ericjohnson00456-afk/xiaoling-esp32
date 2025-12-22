@@ -102,7 +102,7 @@ esp_err_t Ota::CheckVersion() {
     http->SetContent(std::move(data));
 
     if (!http->Open(method, url)) {
-        int last_error = http->GetLastError();
+        int last_error = -1;
         ESP_LOGE(TAG, "Failed to open HTTP connection, code=0x%x", last_error);
         return last_error;
     }
