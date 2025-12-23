@@ -295,7 +295,9 @@ void Application::DismissAlert() {
 
 void Application::ToggleChatState() {
     if (device_state_ == kDeviceStateActivating) {
+#if !CONFIG_LSPLATFORM
         SetDeviceState(kDeviceStateIdle);
+#endif
         return;
     } else if (device_state_ == kDeviceStateWifiConfiguring) {
         audio_service_.EnableAudioTesting(true);
