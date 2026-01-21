@@ -56,7 +56,82 @@ void McpServer::AddCommonTools() {
         [&board](const PropertyList& properties) -> ReturnValue {
             return board.GetDeviceStatusJson();
         });
+        
+#ifdef CONFIG_LSPLATFORM
+    AddTool(
+        "ls.set_volume",
+        "音量控制与调节工具。当用户发出调节音量、控制声音大小的指令时调用。支持绝对值设置（如：调到50%）、相对值调节（如：大声点、调小2档）以及极值控制（如：静音、最大声）。",
+        PropertyList({
+            Property("text", kPropertyTypeString, {"用户输入的关于音量调节的意图"}),
+            Property("intent", kPropertyTypeString, {"调节类型：set（设定到具体值或极值，如：调到10档、最大声、最小声）；adjustUp（调大声、加两档）；adjustDown（调小声、小一点）"}),
+            Property("value", kPropertyTypeString, "", {"具体的数值或状态：1. 数字（如：1, 10, 50）；2. 标准状态位：max（最大声、满格）、min（最小声、静音）、mid（中等音量），如果没有明确参数，则留空，如（大点儿声音）"}),
+            Property("unit", kPropertyTypeString, "", {"描述数值的单位。若指令中提及'档'、'级'、'%'则对应填写，否则留空。"})
+        }),
+        [&board](const PropertyList& properties) -> ReturnValue {
+            std::string intent = properties["intent"].value<std::string>();
+            std::string value = properties["value"].value<std::string>();
+            std::string unit = properties["unit"].value<std::string>();
+            
+            auto codec = board.GetAudioCodec();
+            
+            int target_volume = 0;
+            int current_volume = codec->output_volume();
+            
+            if (intent == "set") {
+                if (value == "max") {
+                    target_volume = 100;
+                } else if (value == "min" || value == "静音") {
+                    target_volume = 0;
+                } else if (value == "mid") {
+                    target_volume = 50;
+                } else if (!value.empty()) {
+                    int num = std::stoi(value);
+                    if (unit == "档" || unit == "级") {
+                        target_volume = std::clamp(num * 10, 0, 100);
+                    } else { 
+                        target_volume = std::clamp(num, 0, 100);
+                    }
+                } else {
+                    throw std::runtime_error("Invalid value");
+                }
+            } else if (intent == "adjustUp" || intent == "adjustDown") {
+                int step = 10;
+                if (!value.empty()) {
+                    step = std::stoi(value) * 10; 
+                }
+                
+                target_volume = current_volume + (intent == "adjustUp" ? step : -step);
+                target_volume = std::clamp(target_volume, 0, 100);
+            } else {
+                throw std::runtime_error("Invalid intent");
+            }
 
+            codec->SetOutputVolume(target_volume);
+
+            return std::string("已完成操作");
+        });
+    AddTool(
+        "ls.get_volume",
+        "获取当前音量。",
+        PropertyList(),
+        [&board](const PropertyList& properties) -> ReturnValue {
+            auto codec = board.GetAudioCodec();
+            int current_vol = codec->output_volume();
+            
+            std::ostringstream oss;
+            oss << "当前音量为" << current_vol;
+            return oss.str();
+        });
+    
+    AddTool(
+        "ls.built_in.play_kuwo_music",
+        "播放酷我音乐",
+        PropertyList(),
+        [](const PropertyList& properties) -> ReturnValue {
+
+            return std::string("已完成操作");
+        });
+#else   // !CONFIG_LSPLATFORM
     AddTool("self.audio_speaker.set_volume", 
         "Set the volume of the audio speaker. If the current volume is unknown, you must call `self.get_device_status` tool first and then call this tool.",
         PropertyList({
@@ -67,9 +142,35 @@ void McpServer::AddCommonTools() {
             codec->SetOutputVolume(properties["volume"].value<int>());
             return true;
         });
+#endif  // CONFIG_LSPLATFORM
     
     auto backlight = board.GetBacklight();
     if (backlight) {
+#ifdef CONFIG_LSPLATFORM
+        AddTool(
+            "ls.display_set_brightness",
+            "设置显示器的亮度。亮度可以10%为步长进行设置 (0, 10, 20, ..., 100)。当用户无具体设置数值时,得先调用display_get_brightness工具获取当前亮度，再做调整。\n",
+            PropertyList({
+                Property("brightness", kPropertyTypeInteger, 0, 100, {"亮度值，以10%为步长 (0-100)"})
+            }),
+            [backlight](const PropertyList& properties) -> ReturnValue {
+                uint8_t brightness = static_cast<uint8_t>(properties["brightness"].value<int>());
+                backlight->SetBrightness(brightness, true);
+                return std::string("已完成操作");
+            }
+        );
+    AddTool(
+        "ls.display_get_brightness",
+        "获取显示器的当前亮度。",
+        PropertyList(),
+        [backlight](const PropertyList& properties) -> ReturnValue {
+            uint8_t current_bright = backlight->brightness();
+            
+            std::ostringstream oss;
+            oss << "当前显示器亮度为" << static_cast<int>(current_bright);
+            return oss.str();
+        });
+#else   // !CONFIG_LSPLATFORM
         AddTool("self.screen.set_brightness",
             "Set the brightness of the screen.",
             PropertyList({
@@ -80,6 +181,7 @@ void McpServer::AddCommonTools() {
                 backlight->SetBrightness(brightness, true);
                 return true;
             });
+#endif  // CONFIG_LSPLATFORM
     }
 
 #ifdef HAVE_LVGL
@@ -106,12 +208,30 @@ void McpServer::AddCommonTools() {
 
 #ifdef CONFIG_LSPLATFORM
     if (display) {
-        AddTool("self.show_image",
-            "Show an image on the screen. Use this tool if you want to show something to the user.\n"
-            "Args:\n"
-            "  `url`: The URL of the image to show.",
+        AddTool("ls.built_in.show_qrcode",
+            "显示二维码\n",
             PropertyList({
-                Property("url", kPropertyTypeString)
+                Property("url", kPropertyTypeString, {"二维码地址"}),
+                Property("message", kPropertyTypeString, "", {"文本提示"}),
+                Property("err_code", kPropertyTypeString, "", {"错误码"})   
+            }),
+            [&board, display](const PropertyList& properties) -> ReturnValue {
+                auto url = properties["url"].value<std::string>();
+                auto message = properties["message"].value<std::string>();
+                auto fetcher = board.GetImageFetcher();
+                auto image = fetcher->Fetch(url);
+                if (!image) {
+                    ESP_LOGE(TAG, "Failed to fetch image: %s", url.c_str());
+                    return false;
+                }
+                display->ShowActivation(std::move(image), message);
+                return std::string("已完成操作");
+            });
+
+        AddTool("ls.built_in.show_image",
+            "显示图片\n",
+            PropertyList({
+                Property("url", kPropertyTypeString, {"图片资源地址"})
             }),
             [&board, display](const PropertyList& properties) -> ReturnValue {
                 auto url = properties["url"].value<std::string>();
@@ -122,13 +242,45 @@ void McpServer::AddCommonTools() {
                     return false;
                 }
                 display->ShowImage(std::move(image));
-                return true;
+                return std::string("已完成操作");
             });
     }
 #endif // CONFIG_LSPLATFORM
 
     auto camera = board.GetCamera();
     if (camera) {
+#ifdef CONFIG_LSPLATFORM
+        AddTool("ls.built_in.take_photo",
+            "拍照\n",
+            PropertyList(),
+            [camera](const PropertyList& properties) -> ReturnValue {
+                // Lower the priority to do the camera capture
+                TaskPriorityReset priority_reset(1);
+
+                if (!camera->Capture()) {
+                    throw std::runtime_error("Failed to capture photo");
+                }
+                std::string upload_return = camera->Explain("");
+                cJSON* json = cJSON_Parse(upload_return.c_str());
+                if (json == NULL) {
+                    throw std::runtime_error("解析原始JSON失败");
+                }
+                cJSON* dataNode = cJSON_GetObjectItem(json, "data");
+                if (dataNode == NULL || !cJSON_IsObject(dataNode)) {
+                    throw std::runtime_error("未找到有效的data节点");
+                }
+
+                cJSON* urlNode = cJSON_GetObjectItem(dataNode, "url");
+                if (urlNode == NULL || !cJSON_IsString(urlNode)) {
+                    throw std::runtime_error("未找到有效的url字段");
+                }
+                const char* url = urlNode->valuestring;
+
+                ImageUrlContent raw(url);
+                
+                return raw;
+            });
+#else // !CONFIG_LSPLATFORM
         AddTool("self.camera.take_photo",
             "Take a photo and explain it. Use this tool after the user asks you to see something.\n"
             "Args:\n"
@@ -148,6 +300,7 @@ void McpServer::AddCommonTools() {
                 auto question = properties["question"].value<std::string>();
                 return camera->Explain(question);
             });
+#endif // CONFIG_LSPLATFORM
     }
 #endif
 

@@ -613,6 +613,7 @@ void Application::InitializeProtocol() {
                 Schedule([this, display, message = std::string(text->valuestring)]() {
 #ifdef CONFIG_LSPLATFORM
                     display->DismissImage();
+                    display->DismissActivation();
 #endif // CONFIG_LSPLATFORM
                     display->SetChatMessage("user", message.c_str());
                 });
@@ -941,6 +942,7 @@ void Application::HandleStateChangedEvent() {
             display->SetEmotion("neutral");
 #ifdef CONFIG_LSPLATFORM
             display->DismissImage();
+            display->DismissActivation();
 #endif // CONFIG_LSPLATFORM
             audio_service_.EnableVoiceProcessing(false);
             audio_service_.EnableWakeWordDetection(true);
@@ -959,6 +961,7 @@ void Application::HandleStateChangedEvent() {
             display->SetEmotion("neutral");
 #ifdef CONFIG_LSPLATFORM
             display->DismissImage();
+            display->DismissActivation();
 #endif // CONFIG_LSPLATFORM
 
             // Make sure the audio processor is running

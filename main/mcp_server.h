@@ -46,13 +46,40 @@ public:
     }
 };
 
+struct ImageUrlContent {
+    std::string type;
+    std::string data;
+    std::string mimeType;
+
+    ImageUrlContent(const std::string& data_url) 
+        : type("image"), data(data_url), mimeType("url") {}
+
+    cJSON* to_json() const {
+        cJSON* root = cJSON_CreateObject();
+        if (root == nullptr) {
+            throw std::runtime_error("创建 JSON 根对象失败！");
+            return nullptr;
+        }
+
+        cJSON_AddStringToObject(root, "type", this->type.c_str());
+        cJSON_AddStringToObject(root, "data", this->data.c_str());
+        cJSON_AddStringToObject(root, "mimeType", this->mimeType.c_str());
+
+        return root;
+    }
+};
+
 // 添加类型别名
-using ReturnValue = std::variant<bool, int, std::string, cJSON*, ImageContent*>;
+using ReturnValue = std::variant<bool, int, std::string, cJSON*, ImageContent*, ImageUrlContent>;
 
 enum PropertyType {
     kPropertyTypeBoolean,
     kPropertyTypeInteger,
     kPropertyTypeString
+};
+
+struct Description {
+    std::string description;
 };
 
 class Property {
@@ -63,27 +90,30 @@ private:
     bool has_default_value_;
     std::optional<int> min_value_;  // 新增：整数最小值
     std::optional<int> max_value_;  // 新增：整数最大值
+    std::string description_;       // 新增：属性描述
 
 public:
     // Required field constructor
-    Property(const std::string& name, PropertyType type)
-        : name_(name), type_(type), has_default_value_(false) {}
+    Property(const std::string& name, PropertyType type, const Description& desc = Description{})
+        : name_(name), type_(type), has_default_value_(false) { if (!desc.description.empty()) description_ = desc.description; }
 
     // Optional field constructor with default value
     template<typename T>
-    Property(const std::string& name, PropertyType type, const T& default_value)
+    Property(const std::string& name, PropertyType type, const T& default_value, const Description& desc = Description{})
         : name_(name), type_(type), has_default_value_(true) {
         value_ = default_value;
+        if (!desc.description.empty()) description_ = desc.description;
     }
 
-    Property(const std::string& name, PropertyType type, int min_value, int max_value)
+    Property(const std::string& name, PropertyType type, int min_value, int max_value, const Description& desc = Description{})
         : name_(name), type_(type), has_default_value_(false), min_value_(min_value), max_value_(max_value) {
         if (type != kPropertyTypeInteger) {
             throw std::invalid_argument("Range limits only apply to integer properties");
         }
+        if (!desc.description.empty()) description_ = desc.description;
     }
 
-    Property(const std::string& name, PropertyType type, int default_value, int min_value, int max_value)
+    Property(const std::string& name, PropertyType type, int default_value, int min_value, int max_value, const Description& desc = Description{})
         : name_(name), type_(type), has_default_value_(true), min_value_(min_value), max_value_(max_value) {
         if (type != kPropertyTypeInteger) {
             throw std::invalid_argument("Range limits only apply to integer properties");
@@ -92,6 +122,7 @@ public:
             throw std::invalid_argument("Default value must be within the specified range");
         }
         value_ = default_value;
+        if (!desc.description.empty()) description_ = desc.description;
     }
 
     inline const std::string& name() const { return name_; }
@@ -100,6 +131,9 @@ public:
     inline bool has_range() const { return min_value_.has_value() && max_value_.has_value(); }
     inline int min_value() const { return min_value_.value_or(0); }
     inline int max_value() const { return max_value_.value_or(0); }
+
+    inline const std::string& description() const { return description_; }
+    inline bool has_description() const { return !description_.empty(); }
 
     template<typename T>
     inline T value() const {
@@ -144,6 +178,10 @@ public:
             if (has_default_value_) {
                 cJSON_AddStringToObject(json, "default", value<std::string>().c_str());
             }
+        }
+
+        if (has_description()) {
+            cJSON_AddStringToObject(json, "description", description_.c_str());
         }
         
         char *json_str = cJSON_PrintUnformatted(json);
@@ -282,6 +320,9 @@ public:
             cJSON_AddStringToObject(image, "image", image_content->to_json().c_str());
             cJSON_AddItemToArray(content, image);
             delete image_content;
+        } else if (std::holds_alternative<ImageUrlContent>(return_value)) {
+            ImageUrlContent img_content = std::get<ImageUrlContent>(return_value);
+             cJSON_AddItemToArray(content, img_content.to_json());
         } else {
             cJSON* text = cJSON_CreateObject();
             cJSON_AddStringToObject(text, "type", "text");

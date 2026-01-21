@@ -220,6 +220,7 @@ std::string WebsocketProtocol::GetHelloMessage() {
     if (narrowband_mode_) {
         cJSON_AddNumberToObject(features, "ls_tts_prefer_bitrate", 8000);
     }
+    cJSON_AddStringToObject(features, "xiaoling_tool_protocol_version", "v2");
 #endif // CONFIG_LSPLATFORM
     cJSON_AddItemToObject(root, "features", features);
     cJSON_AddStringToObject(root, "transport", "websocket");
