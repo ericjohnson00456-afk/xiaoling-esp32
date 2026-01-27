@@ -17,7 +17,7 @@ private:
 
     gpio_num_t charging_pin_ = GPIO_NUM_NC;
     std::vector<uint16_t> adc_values_;
-    uint32_t battery_level_ = 0;
+    uint32_t battery_level_ = 100;
     bool is_charging_ = false;
     bool is_low_battery_ = false;
     int ticks_ = 0;
@@ -48,8 +48,9 @@ private:
         }
 
         // 如果电池电量数据充足，则每 kBatteryAdcInterval 个 tick 读取一次电池电量数据
+        // 或 上电20秒内，电量低于20%时 (缩短上电误报时长)
         ticks_++;
-        if (ticks_ % kBatteryAdcInterval == 0) {
+        if (ticks_ % kBatteryAdcInterval == 0 || (battery_level_ < 20 && ticks_ < 20)) {
             ReadBatteryAdcData();
         }
     }
