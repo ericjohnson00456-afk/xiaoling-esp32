@@ -230,6 +230,10 @@ void WifiBoard::EnterWifiConfigMode() {
     ESP_LOGI(TAG, "EnterWifiConfigMode called");
     GetDisplay()->ShowNotification(Lang::Strings::ENTERING_WIFI_CONFIG_MODE);
 
+#ifdef CONFIG_PROV_MODE_BLE
+    ResetWifiConfiguration();
+#else //!CONFIG_PROV_MODE_BLE
+
     auto& app = Application::GetInstance();
     auto state = app.GetDeviceState();
 
@@ -264,9 +268,6 @@ void WifiBoard::EnterWifiConfigMode() {
     esp_timer_stop(connect_timer_);
     WifiManager::GetInstance().StopStation();
 
-#ifdef CONFIG_PROV_MODE_BLE
-    ResetWifiConfiguration();
-#else //!CONFIG_PROV_MODE_BLE
     StartWifiConfigMode();
 #endif
 }
