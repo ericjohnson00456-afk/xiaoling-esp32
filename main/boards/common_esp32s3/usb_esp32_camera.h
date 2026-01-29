@@ -5,6 +5,7 @@
 #include <lvgl.h>
 #include <thread>
 #include <memory>
+#include <mutex> 
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
@@ -45,6 +46,11 @@ private:
     std::string explain_url_;
     std::string explain_token_;
     std::thread encoder_thread_;
+    bool is_stream_running_ = false;
+    std::mutex stream_mtx_;    
+
+    esp_err_t SuspendUvcStream();
+    esp_err_t ResumeUvcStream();
 
 public:
     USB_Esp32Camera();

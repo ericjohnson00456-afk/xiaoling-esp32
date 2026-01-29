@@ -312,8 +312,13 @@ static void usb_stream_state_changed_cd(usb_stream_state_t event,void *arg)
                 {
                     heap_caps_free(_frame_list);
                 }
-                /* 等待USB摄像头连接 */
-                usb_streaming_control(STREAM_UVC, CTRL_RESUME, NULL);
+
+                esp_err_t ret = usb_streaming_control(STREAM_UVC, CTRL_SUSPEND, NULL);
+                if (ret != ESP_OK) {
+                    ESP_LOGE(TAG, "Suspend UVC stream failed after connected, ret=%d", ret);
+                } else {
+                    ESP_LOGI(TAG, "UVC stream suspended after connected");
+                }
             }
             else
             {
@@ -379,7 +384,40 @@ void USB_Esp32Camera::SetExplainUrl(const std::string& url, const std::string& t
     explain_token_ = token;
 }
 
+esp_err_t USB_Esp32Camera::SuspendUvcStream() {
+    std::lock_guard<std::mutex> lock(stream_mtx_);
+    esp_err_t ret = usb_streaming_control(STREAM_UVC, CTRL_SUSPEND, NULL);
+    if (ret == ESP_OK) {
+        is_stream_running_ = false;
+        ESP_LOGI(TAG, "UVC stream suspended");
+    } else {
+        ESP_LOGE(TAG, "Failed to suspend UVC stream, ret=%d", ret);
+    }
+    return ret;
+}
+
+esp_err_t USB_Esp32Camera::ResumeUvcStream() {
+    std::lock_guard<std::mutex> lock(stream_mtx_);
+    esp_err_t ret = usb_streaming_control(STREAM_UVC, CTRL_RESUME, NULL);
+    if (ret == ESP_OK) {
+        is_stream_running_ = true;
+        ESP_LOGI(TAG, "UVC stream resumed");
+    } else {
+        ESP_LOGE(TAG, "Failed to resume UVC stream, ret=%d", ret);
+    }
+    return ret;
+}
+
 bool USB_Esp32Camera::Capture() {
+    esp_err_t ret = ResumeUvcStream();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Capture failed: resume stream error");
+        return false;
+    }
+
+    //等待流稳定
+    vTaskDelay(pdMS_TO_TICKS(500));
+    
     if (encoder_thread_.joinable()) {
         encoder_thread_.join();
     }
@@ -400,6 +438,9 @@ bool USB_Esp32Camera::Capture() {
         auto image = std::make_unique<LvglAllocatedImage>(data, size, 480, 320, 480 * 2, LV_COLOR_FORMAT_RGB565);
         display->SetPreviewImage(std::move(image));
     }
+
+    SuspendUvcStream();
+
     return true;
 }
 
