@@ -248,6 +248,11 @@ elseif(CONFIG_BOARD_TYPE_M5STACK_CORE_S3)
     set(BUILTIN_TEXT_FONT font_puhui_basic_20_4)
     set(BUILTIN_ICON_FONT font_awesome_20_4)
     set(DEFAULT_EMOJI_COLLECTION twemoji_64)
+elseif(CONFIG_BOARD_TYPE_M5STACK_STICK_S3)
+    set(BOARD_TYPE "m5stack-stick-s3")
+    set(BUILTIN_TEXT_FONT font_puhui_basic_16_4)
+    set(BUILTIN_ICON_FONT font_awesome_16_4)
+    set(DEFAULT_EMOJI_COLLECTION twemoji_32)
 elseif(CONFIG_BOARD_TYPE_M5STACK_CORE_S3_SE)
     set(BOARD_TYPE "m5stack-core-s3-se")
     set(BUILTIN_TEXT_FONT font_puhui_basic_20_4)
@@ -793,9 +798,15 @@ if(CONFIG_USE_MICRO_WAKE_WORD)
     list(APPEND MWW_EMBED_FILES "audio/wake_words/micro_wake_word/models/vad/vad.tflite")
 endif()
 
+set(MAIN_PRIV_REQUIRES_EXTRA "")
+if(CONFIG_BOARD_TYPE_M5STACK_STICK_S3)
+    list(APPEND MAIN_PRIV_REQUIRES_EXTRA m5stack__m5pm1)
+endif()
+
 idf_component_register(SRCS ${SOURCES}
                     INCLUDE_DIRS ${INCLUDE_DIRS}
                     REQUIRES lua esp_http_client mbedtls json nvs_flash espressif__adc_battery_estimation esp_adc efuse console spi_flash app_update esp_app_format esp_psram 78__esp-opus bt fatfs
+                    PRIV_REQUIRES ${MAIN_PRIV_REQUIRES_EXTRA}
                     WHOLE_ARCHIVE
                     EMBED_FILES ${MWW_EMBED_FILES}
                     )
