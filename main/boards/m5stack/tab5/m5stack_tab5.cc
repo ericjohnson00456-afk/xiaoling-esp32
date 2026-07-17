@@ -254,7 +254,7 @@ private:
 
         esp_lcd_panel_dev_config_t lcd_dev_config = {};
         lcd_dev_config.rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB;
-        lcd_dev_config.reset_gpio_num = -1;
+        lcd_dev_config.reset_gpio_num = GPIO_NUM_NC;
         lcd_dev_config.bits_per_pixel = 16;
         lcd_dev_config.vendor_config = &vendor_config;
 
@@ -332,7 +332,7 @@ private:
         vendor_config.mipi_config.dpi_config = &dpi_config;
         vendor_config.mipi_config.lane_num = 2;
 
-        lcd_dev_config.reset_gpio_num = -1;
+        lcd_dev_config.reset_gpio_num = GPIO_NUM_NC;
         lcd_dev_config.rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB;
         lcd_dev_config.data_endian = LCD_RGB_DATA_ENDIAN_LITTLE;
         lcd_dev_config.bits_per_pixel = 24;
@@ -406,11 +406,11 @@ private:
         esp_lcd_panel_io_handle_t tp_io_handle = NULL;
         esp_lcd_panel_io_i2c_config_t tp_io_config = {
             .dev_addr = 0x55,
+            .scl_speed_hz = 100000,
             .control_phase_bytes = 1,
             .dc_bit_offset = 0,
             .lcd_cmd_bits = 8,
             .lcd_param_bits = 8,
-            .scl_speed_hz = 100000,
         };
         ESP_ERROR_CHECK(esp_lcd_new_panel_io_i2c(i2c_bus_, &tp_io_config, &tp_io_handle));
         ESP_ERROR_CHECK(esp_lcd_touch_new_i2c_st7123(tp_io_handle, &tp_cfg, &touch_));

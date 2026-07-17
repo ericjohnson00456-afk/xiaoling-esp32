@@ -106,7 +106,7 @@ public:
         eth_mac_config_t mac_config = ETH_MAC_DEFAULT_CONFIG();
         eth_phy_config_t phy_config = ETH_PHY_DEFAULT_CONFIG();
         phy_config.phy_addr = 1;
-        phy_config.reset_gpio_num = -1;
+        phy_config.reset_gpio_num = GPIO_NUM_NC;
         phy_config.autonego_timeout_ms = 100;
         auto* mac = esp_eth_mac_new_openeth(&mac_config);
         auto* phy = esp_eth_phy_new_dp83848(&phy_config);
