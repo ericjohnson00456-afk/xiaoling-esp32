@@ -2,7 +2,7 @@
 #define _BOARD_CONFIG_H_
 
 #include <driver/gpio.h>
-#include <driver/adc.h>
+#include <hal/adc_types.h>
 
 struct HardwareConfig {
     gpio_num_t power_charge_detect_pin;

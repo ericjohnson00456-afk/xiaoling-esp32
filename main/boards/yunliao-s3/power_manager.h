@@ -2,6 +2,7 @@
 #define __POWERMANAGER_H__
 
 #include <functional>
+#include <esp_timer.h>
 #include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"

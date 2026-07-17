@@ -117,11 +117,6 @@ bool ConvertYuyvPreviewToRgb565(const uint8_t* source, size_t source_size,
 
 }  // 匿名命名空间
 
-#if defined(CONFIG_CAMERA_SENSOR_SWAP_PIXEL_BYTE_ORDER) || defined(CONFIG_XIAOZHI_ENABLE_CAMERA_ENDIANNESS_SWAP)
-#warning \
-    "CAMERA_SENSOR_SWAP_PIXEL_BYTE_ORDER or CONFIG_XIAOZHI_ENABLE_CAMERA_ENDIANNESS_SWAP is enabled, which may cause image corruption in YUV422 format!"
-#endif
-
 #if CONFIG_XIAOZHI_ENABLE_CAMERA_DEBUG_MODE
 #define CAM_PRINT_FOURCC(pixelformat)       \
     char fourcc[5];                         \
@@ -329,6 +324,11 @@ Esp32Camera::Esp32Camera(
     }
 
     ESP_LOGD(TAG, "selected pixel format: 0x%08lx", setformat.fmt.pix.pixelformat);
+#if defined(CONFIG_CAMERA_SENSOR_SWAP_PIXEL_BYTE_ORDER) || defined(CONFIG_XIAOZHI_ENABLE_CAMERA_ENDIANNESS_SWAP)
+    if (sensor_format_ == V4L2_PIX_FMT_YUYV || sensor_format_ == V4L2_PIX_FMT_YUV422P) {
+        ESP_LOGW(TAG, "Camera byte swapping is enabled for YUV422; verify image colors");
+    }
+#endif
 
     if (ioctl(video_fd_, VIDIOC_S_FMT, &setformat) != 0) {
         ESP_LOGE(TAG, "VIDIOC_S_FMT failed, errno=%d(%s)", errno, strerror(errno));

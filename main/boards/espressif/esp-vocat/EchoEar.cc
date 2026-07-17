@@ -526,7 +526,9 @@ private:
         esp_lcd_panel_io_handle_t panel_io = nullptr;
         esp_lcd_panel_handle_t panel = nullptr;
 
-        const esp_lcd_panel_io_spi_config_t io_config = ST77916_PANEL_IO_QSPI_CONFIG(QSPI_PIN_NUM_LCD_CS, NULL, NULL);
+        esp_lcd_panel_io_spi_config_t io_config = ST77916_PANEL_IO_SPI_CONFIG(QSPI_PIN_NUM_LCD_CS, GPIO_NUM_NC, NULL, NULL);
+        io_config.lcd_cmd_bits = 32;
+        io_config.flags.quad_mode = true;
         ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)QSPI_LCD_HOST, &io_config, &panel_io));
         st77916_vendor_config_t vendor_config = {
             .init_cmds = vendor_specific_init_yysj,
@@ -536,13 +538,13 @@ private:
             },
         };
         const esp_lcd_panel_dev_config_t panel_config = {
-            .reset_gpio_num = QSPI_PIN_NUM_LCD_RST,
             .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
             .bits_per_pixel = QSPI_LCD_BIT_PER_PIXEL,
+            .reset_gpio_num = QSPI_PIN_NUM_LCD_RST,
+            .vendor_config = &vendor_config,
             .flags = {
                 .reset_active_high = pcb_verison,
             },
-            .vendor_config = &vendor_config,
         };
         ESP_ERROR_CHECK(esp_lcd_new_panel_st77916(panel_io, &panel_config, &panel));
 

@@ -202,11 +202,9 @@ private:
 
         // 液晶屏控制IO初始化
         ESP_LOGD(TAG, "Install panel IO");
-        esp_lcd_panel_io_spi_config_t io_config = SH8601_PANEL_IO_QSPI_CONFIG(
-            EXAMPLE_PIN_NUM_LCD_CS,
-            nullptr,
-            nullptr
-        );
+        esp_lcd_panel_io_spi_config_t io_config = SH8601_PANEL_IO_SPI_CONFIG(EXAMPLE_PIN_NUM_LCD_CS, GPIO_NUM_NC, nullptr, nullptr);
+        io_config.lcd_cmd_bits = 32;
+        io_config.flags.quad_mode = true;
         ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi(SPI2_HOST, &io_config, &panel_io));
 
         // 初始化液晶屏驱动芯片

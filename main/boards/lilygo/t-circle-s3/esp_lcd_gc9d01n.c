@@ -67,11 +67,11 @@ esp_err_t esp_lcd_new_panel_gc9d01n(const esp_lcd_panel_io_handle_t io, const es
         break;
     }
 #else
-    switch (panel_dev_config->rgb_endian){
-    case LCD_RGB_ENDIAN_RGB:
+    switch (panel_dev_config->rgb_ele_order){
+    case LCD_RGB_ELEMENT_ORDER_RGB:
         gc9d01n->madctl_val = 0;
         break;
-    case LCD_RGB_ENDIAN_BGR:
+    case LCD_RGB_ELEMENT_ORDER_BGR:
         gc9d01n->madctl_val |= LCD_CMD_BGR_BIT;
         break;
     default:

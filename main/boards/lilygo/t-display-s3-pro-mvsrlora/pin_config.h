@@ -7,6 +7,8 @@
  */
 #pragma once
 
+#include <driver/gpio.h>
+
 // ST7796
 #define LCD_WIDTH 222
 #define LCD_HEIGHT 480
@@ -14,9 +16,9 @@
 #define LCD_MOSI 17
 #define LCD_MISO 8
 #define LCD_SCLK 18
-#define LCD_CS 39
-#define LCD_DC 9
-#define LCD_RST 47
+#define LCD_CS GPIO_NUM_39
+#define LCD_DC GPIO_NUM_9
+#define LCD_RST GPIO_NUM_47
 
 // IIC
 #define IIC_SDA 5

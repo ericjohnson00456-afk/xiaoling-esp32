@@ -282,7 +282,9 @@ private:
         esp_lcd_panel_handle_t panel = nullptr;
         ESP_LOGI(TAG, "Install panel IO");
         
-        esp_lcd_panel_io_spi_config_t io_config = ST77916_PANEL_IO_QSPI_CONFIG(DISPLAY_QSPI_CS_PIN, NULL, NULL);
+        esp_lcd_panel_io_spi_config_t io_config = ST77916_PANEL_IO_SPI_CONFIG(DISPLAY_QSPI_CS_PIN, GPIO_NUM_NC, NULL, NULL);
+        io_config.lcd_cmd_bits = 32;
+        io_config.flags.quad_mode = true;
         // io_config.pclk_hz = DISPLAY_SPI_SCLK_HZ;
         ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)DISPLAY_QSPI_HOST, &io_config, &panel_io));
 
@@ -296,9 +298,9 @@ private:
             },
         };
         const esp_lcd_panel_dev_config_t panel_config = {
-            .reset_gpio_num = DISPLAY_QSPI_RESET_PIN,
             .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
             .bits_per_pixel = DISPLAY_QSPI_BIT_PER_PIXEL,
+            .reset_gpio_num = DISPLAY_QSPI_RESET_PIN,
             .vendor_config = &vendor_config,
         };
         ESP_ERROR_CHECK(esp_lcd_new_panel_st77916(panel_io, &panel_config, &panel));

@@ -233,7 +233,7 @@ private:
         esp_lcd_panel_dev_config_t panel_config = {};
         panel_config.reset_gpio_num = GPIO_NUM_NC;
         panel_config.bits_per_pixel = 16;
-        panel_config.color_space = ESP_LCD_COLOR_SPACE_BGR;
+        panel_config.rgb_ele_order = LCD_RGB_ELEMENT_ORDER_BGR;
 
         ESP_ERROR_CHECK(esp_lcd_new_panel_ili9341(panel_io, &panel_config, &panel));
         ESP_ERROR_CHECK(esp_lcd_panel_reset(panel));

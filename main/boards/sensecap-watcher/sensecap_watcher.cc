@@ -261,7 +261,7 @@ private:
         ESP_LOGI(TAG, "Install panel IO");
         const esp_lcd_panel_io_spi_config_t io_config = {
             .cs_gpio_num = BSP_LCD_SPI_CS,
-            .dc_gpio_num = -1,
+            .dc_gpio_num = GPIO_NUM_NC,
             .spi_mode = 3,
             .pclk_hz = DRV_LCD_PIXEL_CLK_HZ,
             .trans_queue_depth = 2,
@@ -279,10 +279,9 @@ private:
         esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)BSP_LCD_SPI_NUM, &io_config, &panel_io_);
     
         ESP_LOGD(TAG, "Install LCD driver");
-        const esp_lcd_panel_dev_config_t panel_config = {
-            .reset_gpio_num = BSP_LCD_GPIO_RST, // Shared with Touch reset
-            .rgb_ele_order = DRV_LCD_RGB_ELEMENT_ORDER,
+        const esp_lcd_panel_dev_config_t panel_config = {            .rgb_ele_order = DRV_LCD_RGB_ELEMENT_ORDER,
             .bits_per_pixel = DRV_LCD_BITS_PER_PIXEL,
+            .reset_gpio_num = BSP_LCD_GPIO_RST, // Shared with Touch reset
             .vendor_config = &vendor_config,
         };
         esp_lcd_new_panel_spd2010(panel_io_, &panel_config, &panel_);

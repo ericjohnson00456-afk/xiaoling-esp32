@@ -7,6 +7,8 @@
  */
 #pragma once
 
+#include <driver/gpio.h>
+
 // MAX98357A
 #define MAX98357A_BCLK 5
 #define MAX98357A_LRCLK 4
@@ -27,9 +29,9 @@
 #define LCD_HEIGHT 160
 #define LCD_MOSI 17
 #define LCD_SCLK 15
-#define LCD_DC 16
-#define LCD_RST -1
-#define LCD_CS 13
+#define LCD_DC GPIO_NUM_16
+#define LCD_RST GPIO_NUM_NC
+#define LCD_CS GPIO_NUM_13
 #define LCD_BL 18
 
 // IIC

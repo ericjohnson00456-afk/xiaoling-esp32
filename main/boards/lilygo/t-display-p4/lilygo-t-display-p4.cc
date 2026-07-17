@@ -181,7 +181,8 @@ public:
             .virtual_channel = 0,
             .dpi_clk_src = MIPI_DSI_DPI_CLK_SRC_DEFAULT,
             .dpi_clock_freq_mhz = SCREEN_MIPI_DSI_DPI_CLK_MHZ,
-            .pixel_format = SCREEN_COLOR_RGB_PIXEL_FORMAT,
+            .in_color_format = SCREEN_COLOR_RGB_PIXEL_FORMAT,
+            .out_color_format = SCREEN_COLOR_RGB_PIXEL_FORMAT,
             .num_fbs = 0,
             .video_timing = {
                 .h_size = SCREEN_WIDTH,
@@ -193,9 +194,6 @@ public:
                 .vsync_back_porch = SCREEN_MIPI_DSI_VBP,
                 .vsync_front_porch = SCREEN_MIPI_DSI_VFP,
             },
-            .flags = {
-                .use_dma2d = true, // use DMA2D to copy draw buffer into frame buffer
-            }
         };
 
 #if defined CONFIG_SCREEN_TYPE_HI8561
@@ -206,9 +204,9 @@ public:
             },
         };
         esp_lcd_panel_dev_config_t dev_config = {
-            .reset_gpio_num = GPIO_NUM_NC,
             .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
             .bits_per_pixel = SCREEN_BITS_PER_PIXEL,
+            .reset_gpio_num = GPIO_NUM_NC,
             .vendor_config = &vendor_config,
         };
         esp_lcd_new_panel_hi8561(mipi_dbi_io, &dev_config, &mipi_dpi_panel_);
@@ -220,9 +218,9 @@ public:
             },
         };
         esp_lcd_panel_dev_config_t dev_config = {
-            .reset_gpio_num = GPIO_NUM_NC,
             .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
             .bits_per_pixel = SCREEN_BITS_PER_PIXEL,
+            .reset_gpio_num = GPIO_NUM_NC,
             .vendor_config = &vendor_config,
         };
         esp_lcd_new_panel_rm69a10(mipi_dbi_io, &dev_config, &mipi_dpi_panel_);
@@ -230,6 +228,7 @@ public:
 #error "unknown macro definition, please select the correct macro definition."
 #endif
 
+        ESP_ERROR_CHECK(esp_lcd_dpi_panel_enable_dma2d(mipi_dpi_panel_));
         esp_lcd_panel_init(mipi_dpi_panel_);
 
 #if defined CONFIG_SCREEN_TYPE_HI8561

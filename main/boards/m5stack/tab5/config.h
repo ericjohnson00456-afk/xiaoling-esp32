@@ -2,6 +2,8 @@
 #define _BOARD_CONFIG_H_
 
 #include <driver/gpio.h>
+#include "esp_lcd_ili9881c.h"
+#include "esp_lcd_st7123.h"
 
 /* ---------------------------------------------------------------- */
 // Audio CODEC ES7210 + ES8311

@@ -225,7 +225,8 @@ private:
             .virtual_channel = 0,
             .dpi_clk_src = MIPI_DSI_DPI_CLK_SRC_DEFAULT,
             .dpi_clock_freq_mhz = 60,
-            .pixel_format = LCD_COLOR_PIXEL_FORMAT_RGB565,
+            .in_color_format = LCD_COLOR_FMT_RGB565,
+            .out_color_format = LCD_COLOR_FMT_RGB565,
             .num_fbs = 2,
             .video_timing = {
                 .h_size = DISPLAY_WIDTH,
@@ -236,9 +237,6 @@ private:
                 .vsync_pulse_width = 4,
                 .vsync_back_porch  = 20,
                 .vsync_front_porch = 20,
-            },
-            .flags = {
-                .use_dma2d = false,
             },
         };
 
@@ -314,7 +312,8 @@ private:
         dpi_config.virtual_channel = 0;
         dpi_config.dpi_clk_src = MIPI_DSI_DPI_CLK_SRC_DEFAULT;
         dpi_config.dpi_clock_freq_mhz = 70;  // ST7123 DPI clock frequency
-        dpi_config.pixel_format = LCD_COLOR_PIXEL_FORMAT_RGB565;
+        dpi_config.in_color_format = LCD_COLOR_FMT_RGB565;
+        dpi_config.out_color_format = LCD_COLOR_FMT_RGB565;
         dpi_config.num_fbs = 1;
         dpi_config.video_timing.h_size = 720;
         dpi_config.video_timing.v_size = 1280;
@@ -324,7 +323,7 @@ private:
         dpi_config.video_timing.vsync_pulse_width = 2;
         dpi_config.video_timing.vsync_back_porch = 8;
         dpi_config.video_timing.vsync_front_porch = 220;
-        dpi_config.flags.use_dma2d = true;
+
 
         vendor_config.init_cmds = st7123_vendor_specific_init_default;
         vendor_config.init_cmds_size = sizeof(st7123_vendor_specific_init_default) / sizeof(st7123_vendor_specific_init_default[0]);
@@ -342,6 +341,12 @@ private:
         ret = esp_lcd_new_panel_st7123(io, &lcd_dev_config, &disp_panel);
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "New LCD panel ST7123 failed");
+            goto err;
+        }
+
+        ret = esp_lcd_dpi_panel_enable_dma2d(disp_panel);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Enable LCD DMA2D failed");
             goto err;
         }
 

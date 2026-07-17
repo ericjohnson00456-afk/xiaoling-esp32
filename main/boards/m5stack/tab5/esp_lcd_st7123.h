@@ -95,31 +95,32 @@
   * @note  refresh_rate = (dpi_clock_freq_mhz * 1000000) / (h_res + hsync_pulse_width + hsync_back_porch + hsync_front_porch)
   *                                                      / (v_res + vsync_pulse_width + vsync_back_porch + vsync_front_porch)
   *
-  * @param[in] px_format Pixel format of the panel
+  * @param[in] px_format Panel color format (LCD_COLOR_FMT_*)
+  * @note Enable DMA2D after creating the panel with esp_lcd_dpi_panel_enable_dma2d().
   *
   */
  #define ST7123_800_1280_PANEL_60HZ_DPI_CONFIG(px_format) \
      {                                                      \
+         .virtual_channel = 0,                              \
          .dpi_clk_src = MIPI_DSI_DPI_CLK_SRC_DEFAULT,       \
          .dpi_clock_freq_mhz = 80,                          \
-         .virtual_channel = 0,                              \
-         .pixel_format = px_format,                         \
+         .in_color_format = px_format,                      \
+         .out_color_format = px_format,                     \
          .num_fbs = 1,                                      \
          .video_timing = {                                  \
              .h_size = 800,                                 \
              .v_size = 1280,                                \
-             .hsync_back_porch = 140,                       \
              .hsync_pulse_width = 40,                       \
+             .hsync_back_porch = 140,                       \
              .hsync_front_porch = 40,                       \
-             .vsync_back_porch = 16,                        \
              .vsync_pulse_width = 4,                        \
+             .vsync_back_porch = 16,                        \
              .vsync_front_porch = 16,                       \
          },                                                 \
-         .flags.use_dma2d = true,                           \
      }
  #endif
  
  #ifdef __cplusplus
  }
  #endif
- 
+
