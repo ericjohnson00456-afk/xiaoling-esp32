@@ -6,6 +6,8 @@
 
 class Camera {
 public:
+    virtual ~Camera() = default;
+
     // 版型即使探测硬件或配置视频流失败，也可能已经创建摄像头对象；
     // 具体实现应重写此接口，返回真实的运行时可用状态。
     virtual bool IsAvailable() const { return true; }

@@ -45,7 +45,7 @@ private:
 public:
     Esp32Camera(const esp_video_init_config_t& config,
                 const esp_cam_sensor_format_t* custom_sensor_format = nullptr);
-    ~Esp32Camera();
+    ~Esp32Camera() override;
 
     virtual bool IsAvailable() const override;
     virtual void SetExplainUrl(const std::string& url, const std::string& token);

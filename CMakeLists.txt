@@ -49,6 +49,18 @@ set(XIAOLING_PROJECT_NAME "xiaoling_v${XIAOLING_VER}")
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(${XIAOLING_PROJECT_NAME})
 
+# cpp_bus_driver 1.1.0 still declares only the legacy driver umbrella.
+# Add the IDF 6 split dependencies without editing managed component sources.
+if(IDF_TARGET STREQUAL "esp32p4")
+    idf_component_get_property(XIAOLING_CPP_BUS_LIB llgok__cpp_bus_driver COMPONENT_LIB)
+    target_link_libraries(${XIAOLING_CPP_BUS_LIB} PUBLIC
+        idf::esp_driver_gpio idf::esp_driver_i2c idf::esp_driver_spi
+        idf::esp_driver_uart idf::esp_driver_i2s idf::esp_driver_ledc
+        idf::esp_driver_sdmmc idf::sdmmc)
+    target_compile_options(${XIAOLING_CPP_BUS_LIB} PUBLIC
+        "-include${CMAKE_CURRENT_LIST_DIR}/main/boards/lilygo/t-display-p4/idf6_compat.h")
+endif()
+
 if(XIAOLING_MATRIX_STRIP_DEBUG)
     include("${CMAKE_CURRENT_LIST_DIR}/main/boards/common/qemu/matrix.cmake")
 endif()
