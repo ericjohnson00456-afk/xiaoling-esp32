@@ -430,6 +430,10 @@ python scripts/build.py myvendor/my-custom-board
 - Light (灯光控制)
 - 等...
 
+字符串参数可通过 `Property(...).SetMaxLength(n)` 声明该工具的长度上限。
+上限随 `maxLength` 发布到工具 schema，并在调度前校验，按 Unicode 字符计数。
+按参数的实际用途选择上限；JSON 参数和小应用输入使用各自的预算。
+
 ## 开发板类继承关系
 
 - `Board` - 基础板级类

@@ -2,6 +2,7 @@
 #define MCP_SERVER_H
 
 #include <cstdint>
+#include <algorithm>
 #include <string>
 #include <vector>
 #include <map>
@@ -134,6 +135,7 @@ private:
     bool has_default_value_;
     std::optional<int> min_value_;  // 新增：整数最小值
     std::optional<int> max_value_;  // 新增：整数最大值
+    std::optional<size_t> max_length_;
     std::string description_;       // 新增：属性描述
     std::string json_schema_;
 
@@ -193,6 +195,15 @@ public:
     inline const std::string& description() const { return description_; }
     inline bool has_description() const { return !description_.empty(); }
 
+    // JSON Schema maxLength counts Unicode code points, not UTF-8 bytes.
+    Property& SetMaxLength(size_t maximum) {
+        if (type_ != kPropertyTypeString) {
+            throw std::invalid_argument("Length limits only apply to string properties");
+        }
+        max_length_ = maximum;
+        return *this;
+    }
+
     template<typename T>
     inline T value() const {
         return std::get<T>(value_);
@@ -207,6 +218,14 @@ public:
             }
             if (max_value_.has_value() && value > max_value_.value()) {
                 throw std::invalid_argument("Value exceeds maximum allowed: " + std::to_string(max_value_.value()));
+            }
+        } else if constexpr (std::is_same_v<T, std::string>) {
+            if (max_length_.has_value()) {
+                const auto length = std::count_if(value.begin(), value.end(),
+                    [](unsigned char byte) { return (byte & 0xc0) != 0x80; });
+                if (static_cast<size_t>(length) > *max_length_) {
+                    throw std::invalid_argument("String exceeds maxLength: " + name_);
+                }
             }
         }
         value_ = value;
@@ -233,6 +252,9 @@ public:
             }
         } else if (type_ == kPropertyTypeString) {
             cJSON_AddStringToObject(json, "type", "string");
+            if (max_length_.has_value()) {
+                cJSON_AddNumberToObject(json, "maxLength", *max_length_);
+            }
             if (has_default_value_) {
                 cJSON_AddStringToObject(json, "default", value<std::string>().c_str());
             }

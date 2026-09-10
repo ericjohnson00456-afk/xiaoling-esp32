@@ -17,7 +17,7 @@ MCP_REGISTER_TOOL(RegisterShowEmoji, McpToolGroup::kCommon, 130) {
   }
   server.AddTool("set_emotion", "显示一次指定表情。",
                  PropertyList({Property("emotion", kPropertyTypeString,
-                                         {names_description})}),
+                                         {names_description}).SetMaxLength(64)}),
                  [](const PropertyList &properties) -> ReturnValue {
                    const auto emotion = properties["emotion"].value<std::string>();
                    if (emotion.empty()) throw std::runtime_error("emotion 不能为空");

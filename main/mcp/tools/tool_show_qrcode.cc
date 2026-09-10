@@ -16,9 +16,9 @@ MCP_REGISTER_TOOL(RegisterShowQrcode, McpToolGroup::kCommon, 60) {
   if (fetcher == nullptr) return;
   server.AddTool(
       "ls.built_in.show_qrcode", "显示二维码。",
-      PropertyList({Property("url", kPropertyTypeString, {"二维码图片地址"}),
-                    Property("message", kPropertyTypeString, "", {"文本提示"}),
-                    Property("err_code", kPropertyTypeString, "", {"错误码"})}),
+      PropertyList({Property("url", kPropertyTypeString, {"二维码图片地址"}).SetMaxLength(2047),
+                    Property("message", kPropertyTypeString, "", {"文本提示"}).SetMaxLength(1024),
+                    Property("err_code", kPropertyTypeString, "", {"错误码"}).SetMaxLength(64)}),
       [fetcher](const PropertyList &properties) -> ReturnValue {
         const auto url = properties["url"].value<std::string>();
         auto image = fetcher->Fetch(url);

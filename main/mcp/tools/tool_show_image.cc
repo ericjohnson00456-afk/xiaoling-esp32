@@ -16,7 +16,7 @@ MCP_REGISTER_TOOL(RegisterShowImage, McpToolGroup::kCommon, 70) {
   auto *fetcher = board.GetImageFetcher();
   if (fetcher == nullptr) return;
   server.AddTool("ls.built_in.show_image", "显示网络图片，参数为图片 URL。",
-                 PropertyList({Property("url", kPropertyTypeString, {"http/https 图片地址"})}),
+                 PropertyList({Property("url", kPropertyTypeString, {"http/https 图片地址"}).SetMaxLength(2047)}),
                  [fetcher](const PropertyList &properties) -> ReturnValue {
                    const auto url = properties["url"].value<std::string>();
                    if (url.rfind("http://", 0) != 0 && url.rfind("https://", 0) != 0)

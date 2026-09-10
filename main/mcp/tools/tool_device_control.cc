@@ -13,7 +13,7 @@ MCP_REGISTER_TOOL(RegisterDeviceControl, McpToolGroup::kCommon, 90) {
   server.AddTool(
       "ls.built_in.device_control", "设备控制，当前支持重启。",
       PropertyList({
-          Property("command", kPropertyTypeString, {"目前只支持 reboot"}),
+          Property("command", kPropertyTypeString, {"目前只支持 reboot"}).SetMaxLength(32),
           Property("delay_ms", kPropertyTypeInteger, 0, 0, INT32_MAX, {"重启前等待时间（毫秒，最少 200 毫秒）"})}),
       [](const PropertyList &properties) -> ReturnValue {
         const auto command = properties["command"].value<std::string>();
