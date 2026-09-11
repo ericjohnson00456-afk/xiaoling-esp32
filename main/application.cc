@@ -3,8 +3,7 @@
 #include "display.h"
 #include "system_info.h"
 #include "audio_codec.h"
-#include "mqtt_protocol.h"
-#include "websocket_protocol.h"
+#include "xiaoling/xiaoling_client.h"
 #include "assets/lang_config.h"
 #include "mcp_server.h"
 #include "assets.h"
@@ -20,8 +19,46 @@
 #include <driver/gpio.h>
 #include <arpa/inet.h>
 #include <font_awesome.h>
+#include <mbedtls/base64.h>
 
 #define TAG "Application"
+
+namespace {
+
+bool DecodeTtsUrl(const cJSON* data, std::string& url) {
+    const auto* content = cJSON_IsObject(data)
+                              ? cJSON_GetObjectItemCaseSensitive(data, "content")
+                              : nullptr;
+    if (!cJSON_IsString(content) || content->valuestring == nullptr || content->valuestring[0] == '\0') {
+        return false;
+    }
+
+    const auto* encoded = reinterpret_cast<const unsigned char*>(content->valuestring);
+    const size_t encoded_size = std::strlen(content->valuestring);
+    size_t required_size = 0;
+    const int size_result = mbedtls_base64_decode(nullptr, 0, &required_size, encoded, encoded_size);
+    if (size_result != MBEDTLS_ERR_BASE64_BUFFER_TOO_SMALL || required_size == 0) {
+        return false;
+    }
+
+    std::vector<unsigned char> decoded(required_size + 1, 0);
+    size_t decoded_size = 0;
+    if (mbedtls_base64_decode(decoded.data(), required_size, &decoded_size, encoded, encoded_size) != 0 ||
+        decoded_size == 0) {
+        return false;
+    }
+    if (decoded[decoded_size - 1] == '\0') {
+        --decoded_size;
+    }
+    if (decoded_size == 0 || std::memchr(decoded.data(), '\0', decoded_size) != nullptr) {
+        return false;
+    }
+
+    url.assign(reinterpret_cast<const char*>(decoded.data()), decoded_size);
+    return true;
+}
+
+}  // namespace
 
 
 #ifdef CONFIG_LSPLATFORM
@@ -82,6 +119,27 @@ void Application::Initialize() {
     audio_service_.Initialize(codec);
     audio_service_.Start();
 
+    if (!audio_player_.Initialize(&audio_service_)) {
+        ESP_LOGE(TAG, "TTS 播放器初始化失败");
+    }
+    audio_player_.SetEventCallback([this](const PlaybackEvent& event) {
+        if (event.channel != PlaybackChannel::kTts ||
+            (event.state != PlaybackState::kCompleted &&
+             event.state != PlaybackState::kStopped &&
+             event.state != PlaybackState::kFailed)) {
+            return;
+        }
+        Schedule([this, event]() {
+            if (active_tts_session_id_ != event.session_id) {
+                return;
+            }
+            active_tts_session_id_ = 0;
+            if (GetDeviceState() == kDeviceStateSpeaking) {
+                SetDeviceState(kDeviceStateIdle);
+            }
+        });
+    });
+
     AudioServiceCallbacks callbacks;
     callbacks.on_send_queue_available = [this]() {
         xEventGroupSetBits(event_group_, MAIN_EVENT_SEND_AUDIO);
@@ -105,7 +163,6 @@ void Application::Initialize() {
     // Add MCP common tools (only once during initialization)
     auto& mcp_server = McpServer::GetInstance();
     mcp_server.AddCommonTools();
-    mcp_server.AddUserOnlyTools();
 
     // Set network event callback for UI updates and network state handling
     board.SetNetworkEventCallback([this](NetworkEvent event, const std::string& data) {
@@ -224,20 +281,33 @@ void Application::Run() {
             HandleStopListeningEvent();
         }
 
+        if (bits & MAIN_EVENT_SCHEDULE) {
+            std::unique_lock<std::mutex> lock(mutex_);
+            auto tasks = std::move(main_tasks_);
+            lock.unlock();
+            for (auto& task : tasks) {
+                task();
+            }
+        }
+
         if (bits & MAIN_EVENT_SEND_AUDIO) {
-            while (auto packet = audio_service_.PopPacketFromSendQueue()) {
+            // 每轮只发送一个音频包，避免持续录音时饿死 IAT 字幕等主任务事件。
+            if (auto packet = audio_service_.PopPacketFromSendQueue()) {
 #ifdef CONFIG_LSPLATFORM
                 auto duration = packet->frame_duration;
                 if (protocol_ && protocol_->SendAudio(std::move(packet))) {
                     uplink_watchdog_.Feed(duration);
-                } else {
-                    break;
                 }
 #else // !CONFIG_LSPLATFORM
-                if (protocol_ && !protocol_->SendAudio(std::move(packet))) {
-                    break;
+                if (protocol_) {
+                    protocol_->SendAudio(std::move(packet));
                 }
 #endif // CONFIG_LSPLATFORM
+            }
+
+            // EventGroup 位会合并；队列仍有积压时主动安排下一轮发送。
+            if (audio_service_.HasPendingSendPackets()) {
+                xEventGroupSetBits(event_group_, MAIN_EVENT_SEND_AUDIO);
             }
         }
 
@@ -249,15 +319,6 @@ void Application::Run() {
             if (GetDeviceState() == kDeviceStateListening) {
                 auto led = Board::GetInstance().GetLed();
                 led->OnStateChanged();
-            }
-        }
-
-        if (bits & MAIN_EVENT_SCHEDULE) {
-            std::unique_lock<std::mutex> lock(mutex_);
-            auto tasks = std::move(main_tasks_);
-            lock.unlock();
-            for (auto& task : tasks) {
-                task();
             }
         }
 
@@ -308,10 +369,11 @@ void Application::HandleNetworkConnectedEvent() {
 }
 
 void Application::HandleNetworkDisconnectedEvent() {
-    // Close current conversation when network disconnected
-    auto state = GetDeviceState();
-    if (state == kDeviceStateConnecting || state == kDeviceStateListening || state == kDeviceStateSpeaking) {
-        ESP_LOGI(TAG, "Closing audio channel due to network disconnection");
+    audio_player_.Stop(PlaybackEndReason::kCancelled);
+
+    // 网络断开时关闭预先建立的 WebSocket，避免恢复网络后继续使用失效连接。
+    if (protocol_ != nullptr) {
+        ESP_LOGI(TAG, "Closing lschat WebSocket due to network disconnection");
         protocol_->CloseAudioChannel();
     }
 
@@ -343,19 +405,17 @@ void Application::HandleActivationDoneEvent() {
 }
 
 void Application::ActivationTask() {
-    // Create OTA object for activation process
+    // OTA 对象仍用于版本检查，但小聆端云鉴权不依赖 OTA 激活流程。
     ota_ = std::make_unique<Ota>();
 
-    // Check for new assets version
-    CheckAssetsVersion();
+    // Wi-Fi 就绪后优先完成小聆鉴权，避免 OTA 或旧激活流程阻塞端云连接。
+    InitializeCloudClient();
 
-    // Check for new firmware version
+    // 检查资源和固件更新。
+    CheckAssetsVersion();
     CheckNewVersion();
 
-    // Initialize the protocol
-    InitializeProtocol();
-
-    // Signal completion to main loop
+    // 通知主循环启动流程已完成。
     xEventGroupSetBits(event_group_, MAIN_EVENT_ACTIVATION_DONE);
 }
 
@@ -437,8 +497,7 @@ void Application::CheckNewVersion() {
             if (retry_count >= MAX_RETRY) {
                 ESP_LOGE(TAG, "Too many retries, exit version check");
 #ifdef CONFIG_LSPLATFORM
-                vTaskDelay(pdMS_TO_TICKS(3000));
-                Reboot();
+                ESP_LOGW(TAG, "OTA version check failed, continue Xiaoling startup");
 #endif // CONFIG_LSPLATFORM
                 return;
             }
@@ -471,6 +530,13 @@ void Application::CheckNewVersion() {
 
         // No new version, mark the current version as valid
         ota_->MarkCurrentVersionValid();
+#ifdef CONFIG_LSPLATFORM
+        // 小聆使用独立的 lschat 鉴权，不处理旧 OTA 接口返回的设备激活信息。
+        if (ota_->HasActivationCode() || ota_->HasActivationChallenge()) {
+            ESP_LOGI(TAG, "Ignoring legacy OTA activation data in Xiaoling mode");
+        }
+        break;
+#else // !CONFIG_LSPLATFORM
         if (!ota_->HasActivationCode() && !ota_->HasActivationChallenge()) {
             // Exit the loop if done checking new version
             break;
@@ -505,24 +571,19 @@ void Application::CheckNewVersion() {
                 break;
             }
         }
+#endif // CONFIG_LSPLATFORM
     }
 }
 
-void Application::InitializeProtocol() {
+void Application::InitializeCloudClient() {
     auto& board = Board::GetInstance();
     auto display = board.GetDisplay();
     auto codec = board.GetAudioCodec();
 
     display->SetStatus(Lang::Strings::LOADING_PROTOCOL);
 
-    if (ota_->HasMqttConfig()) {
-        protocol_ = std::make_unique<MqttProtocol>();
-    } else if (ota_->HasWebsocketConfig()) {
-        protocol_ = std::make_unique<WebsocketProtocol>();
-    } else {
-        ESP_LOGW(TAG, "No protocol specified in the OTA config, using MQTT");
-        protocol_ = std::make_unique<MqttProtocol>();
-    }
+    // 小聆只使用 HTTP 鉴权和 WebSocket 会话。
+    protocol_ = std::make_unique<XiaolingClient>();
 
 #ifdef CONFIG_LSPLATFORM
     {
@@ -567,109 +628,107 @@ void Application::InitializeProtocol() {
         Schedule([this]() {
             auto display = Board::GetInstance().GetDisplay();
             display->SetChatMessage("system", "");
-            SetDeviceState(kDeviceStateIdle);
+            if (!audio_player_.IsPlaying()) {
+                SetDeviceState(kDeviceStateIdle);
+            }
         });
     });
     
     protocol_->OnIncomingJson([this, display](const cJSON* root) {
-        // Parse JSON data
-        auto type = cJSON_GetObjectItem(root, "type");
-        if (strcmp(type->valuestring, "tts") == 0) {
-            auto state = cJSON_GetObjectItem(root, "state");
-            if (strcmp(state->valuestring, "start") == 0) {
-                Schedule([this]() {
-                    aborted_ = false;
-                    SetDeviceState(kDeviceStateSpeaking);
-#ifdef CONFIG_LSPLATFORM
-                        downlink_watchdog_.Start();
-#endif // CONFIG_LSPLATFORM
-                });
-            } else if (strcmp(state->valuestring, "stop") == 0) {
-                Schedule([this]() {
-                    if (GetDeviceState() == kDeviceStateSpeaking) {
-                        if (listening_mode_ == kListeningModeManualStop) {
+        const auto* action = cJSON_GetObjectItemCaseSensitive(root, "action");
+        if (!cJSON_IsString(action) || action->valuestring == nullptr) {
+            ESP_LOGW(TAG, "lschat message has no valid action");
+            return;
+        }
+
+        if (strcmp(action->valuestring, "mcp") == 0) {
+            const auto* data = cJSON_GetObjectItemCaseSensitive(root, "data");
+            if (cJSON_IsObject(data)) {
+                McpServer::GetInstance().ParseMessage(data);
+            } else {
+                ESP_LOGW(TAG, "Invalid lschat MCP message");
+            }
+            return;
+        }
+
+        if (strcmp(action->valuestring, "result") == 0) {
+            const auto* data = cJSON_GetObjectItemCaseSensitive(root, "data");
+            const auto* sub = cJSON_IsObject(data)
+                                  ? cJSON_GetObjectItemCaseSensitive(data, "sub")
+                                  : nullptr;
+            if (!cJSON_IsString(sub) || sub->valuestring == nullptr) {
+                ESP_LOGW(TAG, "Invalid lschat result message");
+                return;
+            }
+
+            if (strcmp(sub->valuestring, "iat") == 0) {
+                const auto* text = cJSON_GetObjectItemCaseSensitive(data, "text");
+                if (cJSON_IsString(text) && text->valuestring != nullptr) {
+                    ESP_LOGI(TAG, ">> %s", text->valuestring);
+                    Schedule([display, message = std::string(text->valuestring)]() {
+                        display->DismissImage();
+                        display->DismissActivation();
+                        display->SetChatMessage("user", message.c_str());
+                    });
+                }
+            } else if (strcmp(sub->valuestring, "tts") == 0) {
+                std::string tts_url;
+                if (!DecodeTtsUrl(data, tts_url)) {
+                    ESP_LOGE(TAG, "小聆 TTS URL Base64 解码失败");
+                    return;
+                }
+                ESP_LOGI(TAG, "收到小聆 TTS URL: decoded_bytes=%u",
+                         static_cast<unsigned>(tts_url.size()));
+                Schedule([this, url = std::move(tts_url)]() {
+                    const auto session_id = audio_player_.PlayTtsUrl(url);
+                    if (session_id == 0) {
+                        ESP_LOGE(TAG, "提交 TTS 流式播放失败");
+                        if (GetDeviceState() == kDeviceStateListening ||
+                            GetDeviceState() == kDeviceStateSpeaking) {
                             SetDeviceState(kDeviceStateIdle);
-                        } else {
-                            SetDeviceState(kDeviceStateListening);
                         }
-#ifdef CONFIG_LSPLATFORM
-                        downlink_watchdog_.Stop();
-#endif // CONFIG_LSPLATFORM
+                        return;
+                    }
+
+                    active_tts_session_id_ = session_id;
+                    if (!SetDeviceState(kDeviceStateSpeaking)) {
+                        ESP_LOGE(TAG, "当前设备状态不允许播放 TTS");
+                        active_tts_session_id_ = 0;
+                        audio_player_.Stop(PlaybackEndReason::kCancelled);
                     }
                 });
-            } else if (strcmp(state->valuestring, "sentence_start") == 0) {
-                auto text = cJSON_GetObjectItem(root, "text");
-                if (cJSON_IsString(text)) {
-                    ESP_LOGI(TAG, "<< %s", text->valuestring);
-                    Schedule([this, display, message = std::string(text->valuestring)]() {
-                        display->SetChatMessage("assistant", message.c_str());
-                    });
+            }
+            return;
+        }
+
+        if (strcmp(action->valuestring, "finish") == 0 ||
+            strcmp(action->valuestring, "closed") == 0) {
+            Schedule([this]() {
+                if (GetDeviceState() == kDeviceStateListening) {
+                    SetDeviceState(kDeviceStateIdle);
                 }
-            }
-        } else if (strcmp(type->valuestring, "stt") == 0) {
-            auto text = cJSON_GetObjectItem(root, "text");
-            if (cJSON_IsString(text)) {
-                ESP_LOGI(TAG, ">> %s", text->valuestring);
-                Schedule([this, display, message = std::string(text->valuestring)]() {
-#ifdef CONFIG_LSPLATFORM
-                    display->DismissImage();
-                    display->DismissActivation();
-#endif // CONFIG_LSPLATFORM
-                    display->SetChatMessage("user", message.c_str());
-                });
-            }
-        } else if (strcmp(type->valuestring, "llm") == 0) {
-            auto emotion = cJSON_GetObjectItem(root, "emotion");
-            if (cJSON_IsString(emotion)) {
-                Schedule([this, display, emotion_str = std::string(emotion->valuestring)]() {
-                    display->SetEmotion(emotion_str.c_str());
-                });
-            }
-        } else if (strcmp(type->valuestring, "mcp") == 0) {
-            auto payload = cJSON_GetObjectItem(root, "payload");
-            if (cJSON_IsObject(payload)) {
-                McpServer::GetInstance().ParseMessage(payload);
-            }
-        } else if (strcmp(type->valuestring, "system") == 0) {
-            auto command = cJSON_GetObjectItem(root, "command");
-            if (cJSON_IsString(command)) {
-                ESP_LOGI(TAG, "System command: %s", command->valuestring);
-                if (strcmp(command->valuestring, "reboot") == 0) {
-                    // Do a reboot if user requests a OTA update
-                    Schedule([this]() {
-                        Reboot();
-                    });
-                } else {
-                    ESP_LOGW(TAG, "Unknown system command: %s", command->valuestring);
-                }
-            }
-        } else if (strcmp(type->valuestring, "alert") == 0) {
-            auto status = cJSON_GetObjectItem(root, "status");
-            auto message = cJSON_GetObjectItem(root, "message");
-            auto emotion = cJSON_GetObjectItem(root, "emotion");
-            if (cJSON_IsString(status) && cJSON_IsString(message) && cJSON_IsString(emotion)) {
-                Alert(status->valuestring, message->valuestring, emotion->valuestring, Lang::Sounds::OGG_VIBRATION);
-            } else {
-                ESP_LOGW(TAG, "Alert command requires status, message and emotion");
-            }
-#if CONFIG_RECEIVE_CUSTOM_MESSAGE
-        } else if (strcmp(type->valuestring, "custom") == 0) {
-            auto payload = cJSON_GetObjectItem(root, "payload");
-            ESP_LOGI(TAG, "Received custom message: %s", cJSON_PrintUnformatted(root));
-            if (cJSON_IsObject(payload)) {
-                Schedule([this, display, payload_str = std::string(cJSON_PrintUnformatted(payload))]() {
-                    display->SetChatMessage("system", payload_str.c_str());
-                });
-            } else {
-                ESP_LOGW(TAG, "Invalid custom message format: missing payload");
-            }
-#endif
-        } else {
-            ESP_LOGW(TAG, "Unknown message type: %s", type->valuestring);
+            });
+        } else if (strcmp(action->valuestring, "error") == 0) {
+            const auto* code = cJSON_GetObjectItemCaseSensitive(root, "code");
+            ESP_LOGE(TAG, "lschat session error: %s",
+                     cJSON_IsString(code) && code->valuestring != nullptr ? code->valuestring : "unknown");
         }
     });
     
-    protocol_->Start();
+    if (protocol_->Start()) {
+        ESP_LOGI(TAG, "Xiaoling client authentication ready");
+
+        // 鉴权成功后立即建立长连接。音频会话仍由唤醒流程通过 start 消息开启，
+        // 这里只建立 WebSocket 传输层，避免首次唤醒时再等待握手。
+        if (!protocol_->IsAudioChannelOpened()) {
+            ESP_LOGI(TAG, "Opening lschat WebSocket after authentication");
+            if (!protocol_->OpenAudioChannel()) {
+                ESP_LOGW(TAG, "Initial lschat WebSocket connection failed; wake-up will retry");
+            }
+        }
+    } else {
+        ESP_LOGE(TAG, "Xiaoling client authentication failed");
+    }
 
 #if CONFIG_LSPLATFORM_BANNERS
     auto banners = board.GetBanners();
@@ -862,13 +921,12 @@ void Application::HandleWakeWordDetectedEvent() {
 
         auto wake_word = audio_service_.GetLastWakeWord();
         ESP_LOGI(TAG, "Wake word detected: %s", wake_word.c_str());
+        protocol_->SendWakeWordDetected(wake_word);
 #if CONFIG_SEND_WAKE_WORD_DATA
-        // Encode and send the wake word data to the server
+        // lschat 在 started 前不接收音频，客户端会暂存这些唤醒词数据。
         while (auto packet = audio_service_.PopWakeWordPacket()) {
             protocol_->SendAudio(std::move(packet));
         }
-        // Set the chat state to wake word detected
-        protocol_->SendWakeWordDetected(wake_word);
         SetListeningMode(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
 #else
         // Set flag to play popup sound after state changes to listening
@@ -887,6 +945,9 @@ void Application::HandleWakeWordDetectedEvent() {
 void Application::AbortSpeaking(AbortReason reason) {
     ESP_LOGI(TAG, "Abort speaking");
     aborted_ = true;
+    audio_player_.Stop(reason == kAbortReasonWakeWordDetected
+                           ? PlaybackEndReason::kPreempted
+                           : PlaybackEndReason::kCancelled);
     if (protocol_) {
         protocol_->SendAbortSpeaking(reason);
     }
@@ -992,7 +1053,10 @@ void Application::HandleStateChangedEvent() {
                 uplink_watchdog_.Stop();
 #endif // CONFIG_LSPLATFORM
             }
-            audio_service_.ResetDecoder();
+            // URL 播放器启动前已经清理旧队列，避免状态回调误删刚解码出的 MP3 PCM。
+            if (!audio_player_.IsPlaying()) {
+                audio_service_.ResetDecoder();
+            }
             break;
         case kDeviceStateWifiConfiguring:
             audio_service_.EnableVoiceProcessing(false);
@@ -1097,13 +1161,12 @@ void Application::WakeWordInvoke(const std::string& wake_word) {
         }
 
         ESP_LOGI(TAG, "Wake word detected: %s", wake_word.c_str());
+        protocol_->SendWakeWordDetected(wake_word);
 #if CONFIG_USE_AFE_WAKE_WORD || CONFIG_USE_CUSTOM_WAKE_WORD
-        // Encode and send the wake word data to the server
+        // lschat 在 started 前不接收音频，客户端会暂存这些唤醒词数据。
         while (auto packet = audio_service_.PopWakeWordPacket()) {
             protocol_->SendAudio(std::move(packet));
         }
-        // Set the chat state to wake word detected
-        protocol_->SendWakeWordDetected(wake_word);
         SetListeningMode(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
 #else
         // Set flag to play popup sound after state changes to listening
@@ -1181,7 +1244,7 @@ void Application::PlaySound(const std::string_view& sound) {
     audio_service_.PlaySound(sound);
 }
 
-void Application::ResetProtocol() {
+void Application::ResetCloudClient() {
     Schedule([this]() {
         // Close audio channel if opened
         if (protocol_ && protocol_->IsAudioChannelOpened()) {

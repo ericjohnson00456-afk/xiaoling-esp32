@@ -6,7 +6,7 @@ NOTICE: AI 辅助生成, 在实现后台服务时, 请参照代码确认细节!!
 
 ## 协议格式
 
-根据代码 (`main/protocols/protocol.cc`, `main/mcp_server.cc`)，MCP 消息是封装在基础通信协议（如 WebSocket 或 MQTT）的消息体中的。其内部结构遵循 [JSON-RPC 2.0](https://www.jsonrpc.org/specification) 规范。
+根据代码 (`main/xiaoling/xiaoling_client.cc`, `main/mcp/mcp_server.cc`)，MCP 消息通过小聆 WebSocket 链路传输，内部负载遵循 [JSON-RPC 2.0](https://www.jsonrpc.org/specification) 规范。
 
 整体消息结构示例：
 
@@ -266,4 +266,4 @@ sequenceDiagram
     end
 ```
 
-这份文档概述了该项目中 MCP 协议的主要交互流程。具体的参数细节和工具功能需要参考 `main/mcp_server.cc` 中 `McpServer::AddCommonTools` 以及各个工具的实现。
+这份文档概述了该项目中 MCP 协议的主要交互流程。分发和回包逻辑位于 `main/mcp/mcp_server.cc`；通用工具位于 `main/mcp/tools/`，板级专属工具仍由对应 Board 的 `InitializeTools()` 注册。

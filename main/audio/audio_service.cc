@@ -39,7 +39,7 @@ void AudioService::Initialize(AudioCodec* codec) {
 
     /* Setup the audio codec */
     opus_decoder_ = std::make_unique<OpusDecoderWrapper>(codec->output_sample_rate(), 1, OPUS_FRAME_DURATION_MS);
-    opus_encoder_ = std::make_unique<OpusEncoderWrapper>(16000, 1, OPUS_FRAME_DURATION_MS);
+    opus_encoder_ = std::make_unique<OpusWbEncoder>(16000, 1, OPUS_FRAME_DURATION_MS);
     opus_encoder_->SetComplexity(0);
 
     if (codec->input_sample_rate() != 16000) {
@@ -280,6 +280,7 @@ void AudioService::AudioOutputTask() {
 
         auto task = std::move(audio_playback_queue_.front());
         audio_playback_queue_.pop_front();
+        audio_output_busy_ = true;
         audio_queue_cv_.notify_all();
         lock.unlock();
 
@@ -289,6 +290,11 @@ void AudioService::AudioOutputTask() {
             codec_->EnableOutput(true);
         }
         codec_->OutputData(task->pcm);
+
+        lock.lock();
+        audio_output_busy_ = false;
+        audio_queue_cv_.notify_all();
+        lock.unlock();
 
         /* Update the last output time */
         last_output_time_ = std::chrono::steady_clock::now();
@@ -361,15 +367,27 @@ void AudioService::OpusCodecTask() {
             packet->sample_rate = 16000;
             packet->timestamp = task->timestamp;
 #ifdef CONFIG_LSPLATFORM
-            if (opus_encoder_->sample_rate() != 16000) {
+            const bool raw_uplink = task->type == kAudioTaskTypeEncodeToSendQueue &&
+                                    std::strcmp(CONFIG_LSCHAT_UPLINK_AUE, "raw") == 0;
+            if (raw_uplink) {
+                // raw 协议要求 16 kHz、16-bit LE、单声道 PCM。
+                packet->payload.resize(task->pcm.size() * sizeof(int16_t));
+                for (size_t i = 0; i < task->pcm.size(); ++i) {
+                    const auto sample = static_cast<uint16_t>(task->pcm[i]);
+                    packet->payload[i * 2] = static_cast<uint8_t>(sample & 0xff);
+                    packet->payload[i * 2 + 1] = static_cast<uint8_t>(sample >> 8);
+                }
+            } else if (opus_encoder_->sample_rate() != 16000) {
                 int target_size = uplink_resampler_.GetOutputSamples(task->pcm.size());
                 std::vector<int16_t> resampled(target_size);
                 uplink_resampler_.Process(task->pcm.data(), task->pcm.size(), resampled.data());
                 task->pcm = std::move(resampled);
                 packet->sample_rate = opus_encoder_->sample_rate();
             }
-#endif // CONFIG_LSPLATFORM
+            if (!raw_uplink && !opus_encoder_->Encode(std::move(task->pcm), packet->payload)) {
+#else
             if (!opus_encoder_->Encode(std::move(task->pcm), packet->payload)) {
+#endif // CONFIG_LSPLATFORM
                 ESP_LOGE(TAG, "Failed to encode audio");
                 continue;
             }
@@ -409,7 +427,7 @@ void AudioService::SetEncodeSampleRate(int sample_rate, int frame_duration) {
     }
 
     opus_encoder_.reset();
-    opus_encoder_ = std::make_unique<OpusEncoderWrapper>(sample_rate, 1, frame_duration);
+    opus_encoder_ = std::make_unique<OpusWbEncoder>(sample_rate, 1, frame_duration);
 
     if (opus_encoder_->sample_rate() != 16000) {
         ESP_LOGI(TAG, "Resampling uplink audio to %d", opus_encoder_->sample_rate());
@@ -456,6 +474,49 @@ void AudioService::PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t
     audio_queue_cv_.notify_all();
 }
 
+bool AudioService::PushPcmToPlaybackQueue(const uint8_t* data, size_t size, bool wait) {
+    if (data == nullptr || size == 0 || (size % sizeof(int16_t)) != 0) {
+        ESP_LOGE(TAG, "无效的播放器 PCM 数据: data=%p, bytes=%u", data,
+                 static_cast<unsigned>(size));
+        return false;
+    }
+
+    auto task = std::make_unique<AudioTask>();
+    task->type = kAudioTaskTypeDecodeToPlaybackQueue;
+    task->timestamp = 0;
+    task->pcm.resize(size / sizeof(int16_t));
+    std::memcpy(task->pcm.data(), data, size);
+
+    std::unique_lock<std::mutex> lock(audio_queue_mutex_);
+    if (wait) {
+        audio_queue_cv_.wait(lock, [this]() {
+            return service_stopped_ || audio_playback_queue_.size() < MAX_PLAYBACK_TASKS_IN_QUEUE;
+        });
+    } else if (audio_playback_queue_.size() >= MAX_PLAYBACK_TASKS_IN_QUEUE) {
+        return false;
+    }
+
+    if (service_stopped_) {
+        return false;
+    }
+    audio_playback_queue_.push_back(std::move(task));
+    audio_queue_cv_.notify_all();
+    return true;
+}
+
+void AudioService::ClearPlaybackQueue() {
+    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    audio_playback_queue_.clear();
+    audio_queue_cv_.notify_all();
+}
+
+void AudioService::WaitForPlaybackComplete() {
+    std::unique_lock<std::mutex> lock(audio_queue_mutex_);
+    audio_queue_cv_.wait(lock, [this]() {
+        return service_stopped_ || (audio_playback_queue_.empty() && !audio_output_busy_);
+    });
+}
+
 bool AudioService::PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> packet, bool wait) {
     std::unique_lock<std::mutex> lock(audio_queue_mutex_);
     if (audio_decode_queue_.size() >= MAX_DECODE_PACKETS_IN_QUEUE) {
@@ -481,6 +542,11 @@ std::unique_ptr<AudioStreamPacket> AudioService::PopPacketFromSendQueue() {
     return packet;
 }
 
+bool AudioService::HasPendingSendPackets() {
+    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    return !audio_send_queue_.empty();
+}
+
 void AudioService::EncodeWakeWord() {
     if (wake_word_) {
         wake_word_->EncodeWakeWordData();
@@ -494,6 +560,8 @@ const std::string& AudioService::GetLastWakeWord() const {
 std::unique_ptr<AudioStreamPacket> AudioService::PopWakeWordPacket() {
     auto packet = std::make_unique<AudioStreamPacket>();
     if (wake_word_->GetWakeWordOpus(packet->payload)) {
+        packet->sample_rate = 16000;
+        packet->frame_duration = OPUS_FRAME_DURATION_MS;
         return packet;
     }
     return nullptr;

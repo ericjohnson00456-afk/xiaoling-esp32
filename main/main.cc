@@ -4,6 +4,7 @@
 #include <nvs_flash.h>
 #include <driver/gpio.h>
 #include <esp_event.h>
+#include <esp_ota_ops.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
@@ -22,6 +23,14 @@ extern "C" void app_main(void)
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
+
+    const auto* running_partition = esp_ota_get_running_partition();
+    if (running_partition != nullptr) {
+        ESP_LOGI(TAG, "Running partition: label=%s, address=0x%lx, size=0x%lx",
+                 running_partition->label,
+                 static_cast<unsigned long>(running_partition->address),
+                 static_cast<unsigned long>(running_partition->size));
+    }
 
     // Initialize and run the application
     auto& app = Application::GetInstance();

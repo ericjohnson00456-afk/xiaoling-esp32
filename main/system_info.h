@@ -16,6 +16,8 @@ public:
     static std::string GetUserAgent();
 #ifdef CONFIG_LSPLATFORM
     static std::string GetProductId();
+    static std::string GetSecretId();
+    static std::string GetCloudDeviceId();
 #endif // CONFIG_LSPLATFORM
     static esp_err_t PrintTaskCpuUsage(TickType_t xTicksToWait);
     static void PrintTaskList();

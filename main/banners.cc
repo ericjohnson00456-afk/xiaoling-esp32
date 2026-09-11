@@ -3,58 +3,41 @@
 #include <cstring>
 #include <esp_log.h>
 
-#include "board.h"
-#include "settings.h"
+#include "cloud/cloud_http.h"
 #include "cJSON.h"
+#include "xiaoling/xiaoling_auth.h"
 
 #define TAG "Banners"
 
 bool Banners::Fetch(std::string url) {
-    Settings settings("websocket", false);
-    std::string token = settings.GetString("token");
-    if (token.empty()) {
-        ESP_LOGE(TAG, "Failed to get authorization token from settings");
+    const auto auth = XiaolingAuth::GetInstance().Load();
+    if (auth.access_token.empty()) {
+        ESP_LOGE(TAG, "Failed to get cloud authorization token");
         return false;
     }
 
-    auto network = board_->GetNetwork();
-    if (!network) {
-        ESP_LOGE(TAG, "Failed to get network instance");
-        return false;
-    }
-
-    auto http = network->CreateHttp();
-    if (!http) {
-        ESP_LOGE(TAG, "Failed to create HTTP instance");
-        return false;
-    }
-
-    http->SetTimeout(5000);
-
-    http->SetHeader("Authorization", "Bearer " + token);
-    http->SetHeader("Content-Type", "application/json");
-
-    if (!http->Open("GET", url)) {
+    const CloudHttpHeaders headers = {
+        {"Authorization", XiaolingAuth::NormalizeBearerToken(auth.access_token)},
+        {"Content-Type", "application/json"},
+    };
+    CloudHttpResponse response;
+    CloudHttp http;
+    if (!http.Get(url, response, headers, 5000)) {
         ESP_LOGE(TAG, "Failed to open HTTP connection to %s", url.c_str());
         return false;
     }
 
-    int statusCode = http->GetStatusCode();
-    if (statusCode != 200) {
-        ESP_LOGE(TAG, "HTTP request failed with status code: %d", statusCode);
-        http->Close();
+    if (response.status_code != 200) {
+        ESP_LOGE(TAG, "HTTP request failed with status code: %d", response.status_code);
         return false;
     }
 
-    std::string body = http->ReadAll();
-    http->Close();
-
-    if (body.empty()) {
+    if (response.body.empty()) {
         ESP_LOGE(TAG, "Failed to read response body");
         return false;
     }
 
-    cJSON* root = cJSON_Parse(body.c_str());
+    cJSON* root = cJSON_Parse(response.body.c_str());
     if (!root) {
         ESP_LOGE(TAG, "Failed to parse JSON response: %s", cJSON_GetErrorPtr());
         return false;

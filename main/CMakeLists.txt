@@ -1,6 +1,9 @@
 # Define source files
 set(SOURCES "audio/audio_codec.cc"
             "audio/audio_service.cc"
+            "audio/opus_wb_encoder.cc"
+            "audio/player/audio_player.cc"
+            "audio/player/engine/gmf_player_engine.cc"
             "audio/codecs/no_audio_codec.cc"
             "audio/codecs/box_audio_codec.cc"
             "audio/codecs/es8311_audio_codec.cc"
@@ -25,10 +28,11 @@ set(SOURCES "audio/audio_codec.cc"
             "display/lvgl_display/gif/gifdec.c"
             "display/lvgl_display/jpg/image_to_jpeg.cpp"
             "display/lvgl_display/jpg/jpeg_to_image.c"
-            "protocols/protocol.cc"
-            "protocols/mqtt_protocol.cc"
-            "protocols/websocket_protocol.cc"
-            "mcp_server.cc"
+            "cloud/cloud_http.cc"
+            "cloud/cloud_websocket.cc"
+            "xiaoling/xiaoling_auth.cc"
+            "xiaoling/xiaoling_client.cc"
+            "mcp/mcp_server.cc"
             "system_info.cc"
             "application.cc"
             "ota.cc"
@@ -41,7 +45,14 @@ set(SOURCES "audio/audio_codec.cc"
             "watchdog.cc"
             )
 
-set(INCLUDE_DIRS "." "display" "display/lvgl_display" "display/lvgl_display/jpg" "audio" "protocols")
+# MCP tools self-register through mcp_server.cc. Keep the source list automatic
+# so adding a new tool_xx.cc does not require a CMake edit.
+file(GLOB MCP_TOOL_SOURCES
+     "${CMAKE_CURRENT_SOURCE_DIR}/mcp/tools/tool_*.cc")
+list(APPEND SOURCES ${MCP_TOOL_SOURCES})
+
+set(INCLUDE_DIRS "." "display" "display/lvgl_display" "display/lvgl_display/jpg" "audio"
+                 "audio/player" "audio/player/core" "audio/player/engine" "cloud" "xiaoling" "mcp")
 
 # Add board common files
 file(GLOB BOARD_COMMON_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/boards/common/*.cc)
@@ -748,6 +759,17 @@ idf_component_register(SRCS ${SOURCES}
                     INCLUDE_DIRS ${INCLUDE_DIRS}
                     WHOLE_ARCHIVE
                     )
+
+# espressif2022__esp_emote_gfx 2.0.0 has source-level warnings that become
+# errors under ESP-IDF's -Werror build flags (missing string.h and printf
+# format-width mismatches). Keep the compatibility adjustment local to that
+# third-party component instead of weakening warnings for the whole project.
+if(TARGET __idf_espressif2022__esp_emote_gfx)
+    target_compile_options(__idf_espressif2022__esp_emote_gfx PRIVATE
+        -include string.h
+        -Wno-error=format
+    )
+endif()
 
 if(CONFIG_USE_MICRO_WAKE_WORD)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE

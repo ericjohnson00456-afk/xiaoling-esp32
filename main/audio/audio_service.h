@@ -13,15 +13,15 @@
 #include <esp_timer.h>
 #include <model_path.h>
 
-#include <opus_encoder.h>
 #include <opus_decoder.h>
 #include <opus_resampler.h>
 
 #include "audio_codec.h"
 #include "audio_processor.h"
+#include "opus_wb_encoder.h"
 #include "processors/audio_debugger.h"
 #include "wake_word.h"
-#include "protocol.h"
+#include "xiaoling/xiaoling_types.h"
 
 
 /*
@@ -35,7 +35,8 @@
  * 
  */
 
-#define OPUS_FRAME_DURATION_MS 60
+// lschat 的 opus-wb 使用 20 ms 分包，每包包含 320 个 16 kHz 样本。
+#define OPUS_FRAME_DURATION_MS 20
 #define MAX_ENCODE_TASKS_IN_QUEUE 2
 #define MAX_PLAYBACK_TASKS_IN_QUEUE 2
 #define MAX_DECODE_PACKETS_IN_QUEUE (2400 / OPUS_FRAME_DURATION_MS)
@@ -104,7 +105,11 @@ public:
     void SetCallbacks(AudioServiceCallbacks& callbacks);
 
     bool PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> packet, bool wait = false);
+    bool PushPcmToPlaybackQueue(const uint8_t* data, size_t size, bool wait = true);
+    void ClearPlaybackQueue();
+    void WaitForPlaybackComplete();
     std::unique_ptr<AudioStreamPacket> PopPacketFromSendQueue();
+    bool HasPendingSendPackets();
     void PlaySound(const std::string_view& sound);
     bool ReadAudioData(std::vector<int16_t>& data, int sample_rate, int samples);
     void ResetDecoder();
@@ -124,7 +129,7 @@ private:
     std::unique_ptr<AudioProcessor> audio_processor_;
     std::unique_ptr<WakeWord> wake_word_;
     std::unique_ptr<AudioDebugger> audio_debugger_;
-    std::unique_ptr<OpusEncoderWrapper> opus_encoder_;
+    std::unique_ptr<OpusWbEncoder> opus_encoder_;
     std::unique_ptr<OpusDecoderWrapper> opus_decoder_;
     OpusResampler input_resampler_;
     OpusResampler reference_resampler_;
@@ -148,6 +153,7 @@ private:
     std::deque<std::unique_ptr<AudioStreamPacket>> audio_testing_queue_;
     std::deque<std::unique_ptr<AudioTask>> audio_encode_queue_;
     std::deque<std::unique_ptr<AudioTask>> audio_playback_queue_;
+    bool audio_output_busy_ = false;
     // For server AEC
     std::deque<uint32_t> timestamp_queue_;
 

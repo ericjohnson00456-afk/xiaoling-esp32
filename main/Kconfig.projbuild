@@ -1,28 +1,10 @@
-menu "Xiaozhi Assistant"
+menu "Xiaoling Device"
 
-choice
-    prompt "服务提供方"
-    default SERVICE_PROVIDER_XIAOZHI
-    help
-        选择服务提供方
-    config SERVICE_PROVIDER_XIAOZHI
-        bool "小智"
-    config SERVICE_PROVIDER_LSPLATFORM
-        bool "LSPlatform"
-endchoice
+config LSPLATFORM
+    bool
+    default y
 
-if SERVICE_PROVIDER_XIAOZHI
-    config OTA_URL
-        string "Default OTA URL"
-        default "https://api.tenclass.net/xiaozhi/ota/"
-        help
-            The application will access this URL to check for new firmwares and server address.
-endif
-
-if SERVICE_PROVIDER_LSPLATFORM
-    config LSPLATFORM
-        bool
-        default y
+if LSPLATFORM
     config LSPLATFORM_BANNERS
         bool
         default y
@@ -66,7 +48,40 @@ if SERVICE_PROVIDER_LSPLATFORM
         config LSPLATFORM_CUSTOM_PRODUCT_ID
             string "自定义 Product ID"
             depends on LSPLATFORM_PRODUCT_ID_CUSTOM
+
+        config LSCHAT_SECRET_ID
+            string "lschat Secret ID"
+            default ""
+            help
+                用于获取 lschat token 的产品 Secret ID。生产固件应改由安全存储提供。
+
+        config LSCHAT_DEVICE_ID
+            string "lschat Device ID"
+            default ""
+            help
+                小聆平台登记的设备 ID。留空时使用去除分隔符后的 Wi-Fi MAC 地址。
+
+        config LSCHAT_TOKEN_URL
+            string "lschat Token URL"
+            default "http://api.listenai.com/v1/auth/tokens"
+
+        config LSCHAT_WEBSOCKET_URL
+            string "lschat WebSocket 基础 URL"
+            default "ws://api.listenai.com"
+
+        config LSCHAT_UPLINK_AUE
+            string "lschat 上行音频编码名称"
+            default "opus-wb"
+            help
+                必须与实际发送的音频数据以及云端协议枚举一致。
+                opus-wb 对应 16 kHz、单声道 Opus 包；raw 对应 16 kHz、16-bit LE、单声道 PCM。
     endmenu
+
+    # gmf_io 1.0.x 的后续候选使用该条件选择 USB Audio 依赖，
+    # esp_codec_dev 1.5.x 尚未声明此符号；当前板型不使用 UAC。
+    config CODEC_UAC_SUPPORT
+        bool
+        default y
 
     choice
         prompt "配网模式"
@@ -92,7 +107,7 @@ if SERVICE_PROVIDER_LSPLATFORM
         config MBEDTLS_HARDWARE_MPI
             default n  
     endif # PROV_MODE_BLE
-endif
+endif # LSPLATFORM
 
 choice
     prompt "Flash Assets"

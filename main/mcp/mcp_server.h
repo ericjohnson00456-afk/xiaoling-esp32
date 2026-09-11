@@ -1,6 +1,7 @@
 #ifndef MCP_SERVER_H
 #define MCP_SERVER_H
 
+#include <cstdint>
 #include <string>
 #include <vector>
 #include <map>
@@ -12,6 +13,44 @@
 #include <mbedtls/base64.h>
 
 #include <cJSON.h>
+
+class McpServer;
+
+// Tool groups control tools/list visibility and keep the advertised order stable.
+enum class McpToolGroup : uint8_t {
+    kCommon,
+    kUserOnly,
+};
+
+using McpToolRegister = void (*)(McpServer& server);
+
+// A tool file creates one of these objects. Static initialization only records
+// the callback; the callback is invoked later by McpServer initialization.
+class McpToolRegistrar {
+public:
+    McpToolRegistrar(McpToolGroup group, uint8_t order, McpToolRegister callback);
+
+    McpToolRegistrar(const McpToolRegistrar&) = delete;
+    McpToolRegistrar& operator=(const McpToolRegistrar&) = delete;
+
+    McpToolGroup group() const { return group_; }
+    uint8_t order() const { return order_; }
+    McpToolRegister callback() const { return callback_; }
+    McpToolRegistrar* next() const { return next_; }
+
+private:
+    McpToolGroup group_;
+    uint8_t order_;
+    McpToolRegister callback_;
+    McpToolRegistrar* next_ = nullptr;
+};
+
+// Defines a self-contained MCP tool registration in tool_xx.cc.
+#define MCP_REGISTER_TOOL(function_name, tool_group, tool_order) \
+    static void function_name(McpServer& server); \
+    static McpToolRegistrar function_name##_registrar( \
+        tool_group, tool_order, function_name); \
+    static void function_name(McpServer& server)
 
 class ImageContent {
 private:
@@ -373,11 +412,11 @@ private:
 
     void ParseCapabilities(const cJSON* capabilities);
 
-    void ReplyResult(int id, const std::string& result);
-    void ReplyError(int id, const std::string& message);
+    void ReplyResult(const std::string& method, const std::string& id, const std::string& result);
+    void ReplyError(const std::string& method, const std::string& id, const std::string& message);
 
-    void GetToolsList(int id, const std::string& cursor, bool list_user_only_tools);
-    void DoToolCall(int id, const std::string& tool_name, const cJSON* tool_arguments);
+    void GetToolsList(const std::string& id, const std::string& cursor, bool list_user_only_tools);
+    void DoToolCall(const std::string& id, const std::string& tool_name, const cJSON* tool_arguments);
 
     std::vector<McpTool*> tools_;
 };

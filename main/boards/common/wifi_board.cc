@@ -239,7 +239,7 @@ void WifiBoard::EnterWifiConfigMode() {
 
     if (state == kDeviceStateSpeaking || state == kDeviceStateListening || state == kDeviceStateIdle) {
         // Reset protocol (close audio channel, reset protocol)
-        Application::GetInstance().ResetProtocol();
+        Application::GetInstance().ResetCloudClient();
 
         xTaskCreate([](void* arg) {
             auto* board = static_cast<WifiBoard*>(arg);

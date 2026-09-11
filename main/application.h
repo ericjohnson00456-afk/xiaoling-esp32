@@ -11,9 +11,10 @@
 #include <deque>
 #include <memory>
 
-#include "protocol.h"
+#include "xiaoling/xiaoling_client.h"
 #include "ota.h"
 #include "audio_service.h"
+#include "audio/player/audio_player.h"
 #include "device_state.h"
 #include "device_state_machine.h"
 #include "watchdog.h"
@@ -119,7 +120,7 @@ public:
      * Can be called from any task to release resources allocated after network connected
      * This includes closing audio channel, resetting protocol and ota objects
      */
-    void ResetProtocol();
+    void ResetCloudClient();
 
 private:
     Application();
@@ -127,7 +128,7 @@ private:
 
     std::mutex mutex_;
     std::deque<std::function<void()>> main_tasks_;
-    std::unique_ptr<Protocol> protocol_;
+    std::unique_ptr<XiaolingClient> protocol_;
     EventGroupHandle_t event_group_ = nullptr;
     esp_timer_handle_t clock_timer_handle_ = nullptr;
     DeviceStateMachine state_machine_;
@@ -135,6 +136,8 @@ private:
     AecMode aec_mode_ = kAecOff;
     std::string last_error_message_;
     AudioService audio_service_;
+    AudioPlayer audio_player_;
+    uint32_t active_tts_session_id_ = 0;
     std::unique_ptr<Ota> ota_;
 #ifdef CONFIG_LSPLATFORM
     Watchdog uplink_watchdog_{5000, "uplink"};
@@ -167,7 +170,7 @@ private:
     // Helper methods
     void CheckAssetsVersion();
     void CheckNewVersion();
-    void InitializeProtocol();
+    void InitializeCloudClient();
     void ShowActivationCode(const std::string& code, const std::string& message, const std::string& qrcode = "");
     void SetListeningMode(ListeningMode mode);
     

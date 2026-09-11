@@ -54,6 +54,9 @@ dependencies:
     - if: target in [esp32s3]
   espressif/adc_battery_estimation: ^0.2.0
   espressif/esp_new_jpeg: ^0.6.1
+  espressif/esp_audio_simple_player: ==1.0.0~2
+  # 1.0.1 需要 esp_codec_dev 2.x；当前工程的音频驱动仍使用 1.5.x。
+  espressif/gmf_io: ==1.0.0
 
   # SenseCAP Watcher Board
   wvirgil123/sscma_client:

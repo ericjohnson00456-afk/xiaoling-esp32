@@ -8,6 +8,7 @@
 #include <esp_partition.h>
 #include <esp_app_desc.h>
 #include <esp_ota_ops.h>
+#include <algorithm>
 #if CONFIG_IDF_TARGET_ESP32P4
 #include "esp_wifi_remote.h"
 #endif
@@ -60,6 +61,22 @@ std::string SystemInfo::GetProductId() {
 #elif defined(CONFIG_LSPLATFORM_PRODUCT_ID_CUSTOM)
     return std::string(CONFIG_LSPLATFORM_CUSTOM_PRODUCT_ID);
 #endif
+}
+
+std::string SystemInfo::GetSecretId() {
+    return std::string(CONFIG_LSCHAT_SECRET_ID);
+}
+
+std::string SystemInfo::GetCloudDeviceId() {
+    std::string device_id = CONFIG_LSCHAT_DEVICE_ID;
+    if (!device_id.empty()) {
+        return device_id;
+    }
+
+    // 平台设备 ID 使用连续十六进制字符，默认由 Wi-Fi MAC 派生。
+    device_id = GetMacAddress();
+    device_id.erase(std::remove(device_id.begin(), device_id.end(), ':'), device_id.end());
+    return device_id;
 }
 #endif // CONFIG_LSPLATFORM
 
