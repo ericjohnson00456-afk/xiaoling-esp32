@@ -105,7 +105,7 @@ public:
     void SetCallbacks(AudioServiceCallbacks& callbacks);
 
     bool PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> packet, bool wait = false);
-    bool PushPcmToPlaybackQueue(const uint8_t* data, size_t size, bool wait = true);
+    bool PushPcmToPlaybackQueue(const uint8_t* data, size_t size, int sample_rate, bool wait = true);
     void ClearPlaybackQueue();
     void WaitForPlaybackComplete();
     std::unique_ptr<AudioStreamPacket> PopPacketFromSendQueue();
@@ -137,6 +137,9 @@ private:
     OpusResampler uplink_resampler_;
 #endif // CONFIG_LSPLATFORM
     OpusResampler output_resampler_;
+    /* TTS URL 播放器等外部 PCM 源的采样率与 codec 输出采样率可能不一致，由它按需重采样 */
+    OpusResampler player_resampler_;
+    int player_resampler_input_rate_ = 0; // 0 表示尚未配置
     DebugStatistics debug_statistics_;
     srmodel_list_t* models_list_ = nullptr;
 

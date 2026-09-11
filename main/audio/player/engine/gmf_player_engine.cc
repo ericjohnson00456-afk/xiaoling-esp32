@@ -152,7 +152,10 @@ int GmfPlayerEngine::HandleOutput(uint8_t* data, int data_size) {
     if (data_size <= 0 || audio_service_ == nullptr) {
         return ESP_FAIL;
     }
-    return audio_service_->PushPcmToPlaybackQueue(data, static_cast<size_t>(data_size), true)
+    /* 播放器固定输出 CONFIG_AUDIO_SIMPLE_PLAYER_RESAMPLE_DEST_RATE，
+       由 AudioService 在入播放队列前重采样到 codec 实际输出采样率 */
+    return audio_service_->PushPcmToPlaybackQueue(data, static_cast<size_t>(data_size),
+                                                  CONFIG_AUDIO_SIMPLE_PLAYER_RESAMPLE_DEST_RATE, true)
                ? ESP_OK
                : ESP_FAIL;
 }

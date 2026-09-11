@@ -474,7 +474,7 @@ void AudioService::PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t
     audio_queue_cv_.notify_all();
 }
 
-bool AudioService::PushPcmToPlaybackQueue(const uint8_t* data, size_t size, bool wait) {
+bool AudioService::PushPcmToPlaybackQueue(const uint8_t* data, size_t size, int sample_rate, bool wait) {
     if (data == nullptr || size == 0 || (size % sizeof(int16_t)) != 0) {
         ESP_LOGE(TAG, "无效的播放器 PCM 数据: data=%p, bytes=%u", data,
                  static_cast<unsigned>(size));
@@ -486,6 +486,20 @@ bool AudioService::PushPcmToPlaybackQueue(const uint8_t* data, size_t size, bool
     task->timestamp = 0;
     task->pcm.resize(size / sizeof(int16_t));
     std::memcpy(task->pcm.data(), data, size);
+
+    /* 外部 PCM 源（如 TTS URL 播放器）的采样率可能与 codec 输出采样率不一致，按需重采样。
+       该函数只会被播放器任务调用，重采样器状态无并发竞争。 */
+    if (codec_ != nullptr && sample_rate > 0 && sample_rate != codec_->output_sample_rate()) {
+        if (player_resampler_input_rate_ != sample_rate ||
+            player_resampler_.output_sample_rate() != codec_->output_sample_rate()) {
+            player_resampler_.Configure(sample_rate, codec_->output_sample_rate());
+            player_resampler_input_rate_ = sample_rate;
+        }
+        int target_size = player_resampler_.GetOutputSamples(task->pcm.size());
+        std::vector<int16_t> resampled(target_size);
+        player_resampler_.Process(task->pcm.data(), task->pcm.size(), resampled.data());
+        task->pcm = std::move(resampled);
+    }
 
     std::unique_lock<std::mutex> lock(audio_queue_mutex_);
     if (wait) {
@@ -742,6 +756,8 @@ bool AudioService::IsIdle() {
 void AudioService::ResetDecoder() {
     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
     opus_decoder_->ResetState();
+    /* 新播放会话以干净的重采样状态开始，避免上一段音频的残留相位 */
+    player_resampler_input_rate_ = 0;
     timestamp_queue_.clear();
     audio_decode_queue_.clear();
     audio_playback_queue_.clear();
