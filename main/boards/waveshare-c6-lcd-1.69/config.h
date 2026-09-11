@@ -4,8 +4,8 @@
 #include <driver/gpio.h>
 #include <driver/spi_master.h>
 
-#define AUDIO_INPUT_SAMPLE_RATE 24000
-#define AUDIO_OUTPUT_SAMPLE_RATE 24000
+#define AUDIO_INPUT_SAMPLE_RATE 16000
+#define AUDIO_OUTPUT_SAMPLE_RATE 16000
 
 #define AUDIO_I2S_GPIO_MCLK GPIO_NUM_19
 #define AUDIO_I2S_GPIO_WS GPIO_NUM_22

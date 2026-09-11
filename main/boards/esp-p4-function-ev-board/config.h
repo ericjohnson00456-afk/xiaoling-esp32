@@ -3,8 +3,8 @@
 
 #include "bsp/esp32_p4_function_ev_board.h"  // Library for board configs and pins
 
-#define AUDIO_INPUT_SAMPLE_RATE  24000
-#define AUDIO_OUTPUT_SAMPLE_RATE 24000
+#define AUDIO_INPUT_SAMPLE_RATE  16000
+#define AUDIO_OUTPUT_SAMPLE_RATE 16000
 
 #define DISPLAY_BACKLIGHT_OUTPUT_INVERT false
 

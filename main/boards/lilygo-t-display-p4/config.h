@@ -48,8 +48,8 @@
 #error "unknown macro definition, please select the correct macro definition."
 #endif
 
-#define AUDIO_INPUT_SAMPLE_RATE 24000
-#define AUDIO_OUTPUT_SAMPLE_RATE 24000
+#define AUDIO_INPUT_SAMPLE_RATE 16000
+#define AUDIO_OUTPUT_SAMPLE_RATE 16000
 
 #define AUDIO_INPUT_REFERENCE true
 

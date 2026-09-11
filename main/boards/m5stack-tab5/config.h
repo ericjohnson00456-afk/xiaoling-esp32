@@ -5,8 +5,8 @@
 
 /* ---------------------------------------------------------------- */
 // Audio CODEC ES7210 + ES8311
-#define AUDIO_INPUT_SAMPLE_RATE  24000
-#define AUDIO_OUTPUT_SAMPLE_RATE 24000
+#define AUDIO_INPUT_SAMPLE_RATE  16000
+#define AUDIO_OUTPUT_SAMPLE_RATE 16000
 
 #define AUDIO_INPUT_REFERENCE    true
 

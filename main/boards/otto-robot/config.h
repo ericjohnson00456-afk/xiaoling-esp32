@@ -95,7 +95,7 @@ constexpr HardwareConfig NON_CAMERA_VERSION_CONFIG = {
     .right_hand_pin = GPIO_NUM_12,
     
     .audio_input_sample_rate = 16000,
-    .audio_output_sample_rate = 24000,
+    .audio_output_sample_rate = 16000,
     .audio_use_simplex = true,
     
     .audio_i2s_gpio_ws = GPIO_NUM_NC,

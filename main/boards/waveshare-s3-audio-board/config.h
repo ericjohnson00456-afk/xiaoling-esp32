@@ -4,8 +4,8 @@
 #include <driver/gpio.h>
 #include <driver/spi_master.h>
 
-#define AUDIO_INPUT_SAMPLE_RATE     24000
-#define AUDIO_OUTPUT_SAMPLE_RATE    24000
+#define AUDIO_INPUT_SAMPLE_RATE     16000
+#define AUDIO_OUTPUT_SAMPLE_RATE    16000
 
 #define BOOT_BUTTON_GPIO            GPIO_NUM_0
 #define BUILTIN_LED_GPIO            GPIO_NUM_38

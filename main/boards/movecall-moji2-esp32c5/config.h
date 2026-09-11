@@ -10,8 +10,8 @@ enum PowerSupply {
     kDeviceBatterySupply,
 };
 
-#define AUDIO_INPUT_SAMPLE_RATE  24000
-#define AUDIO_OUTPUT_SAMPLE_RATE 24000
+#define AUDIO_INPUT_SAMPLE_RATE  16000
+#define AUDIO_OUTPUT_SAMPLE_RATE 16000
 
 #define AUDIO_I2S_GPIO_MCLK         GPIO_NUM_25
 #define AUDIO_I2S_GPIO_WS           GPIO_NUM_24

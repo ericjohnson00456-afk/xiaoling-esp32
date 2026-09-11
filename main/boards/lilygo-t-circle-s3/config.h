@@ -5,8 +5,8 @@
 #include "pin_config.h"
 
 #define AUDIO_INPUT_REFERENCE true
-#define AUDIO_INPUT_SAMPLE_RATE 24000
-#define AUDIO_OUTPUT_SAMPLE_RATE 24000
+#define AUDIO_INPUT_SAMPLE_RATE 16000
+#define AUDIO_OUTPUT_SAMPLE_RATE 16000
 
 #define AUDIO_MIC_I2S_GPIO_BCLK static_cast<gpio_num_t>(MSM261_BCLK)
 #define AUDIO_MIC_I2S_GPIO_WS static_cast<gpio_num_t>(MSM261_WS)
