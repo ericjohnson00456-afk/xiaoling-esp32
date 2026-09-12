@@ -1,12 +1,7 @@
 #ifndef DISPLAY_H
 #define DISPLAY_H
 
-#include "emoji_collection.h"
-
-#ifndef CONFIG_USE_EMOTE_MESSAGE_STYLE
-#define HAVE_LVGL 1
-#include <lvgl.h>
-#endif
+#include "theme.h"
 
 #include <esp_timer.h>
 #include <esp_log.h>
@@ -14,16 +9,9 @@
 
 #include <string>
 #include <chrono>
+#include <memory>
 
-class Theme {
-public:
-    Theme(const std::string& name) : name_(name) {}
-    virtual ~Theme() = default;
-
-    inline std::string name() const { return name_; }
-private:
-    std::string name_;
-};
+class LvglImage;
 
 class Display {
 public:
@@ -35,10 +23,18 @@ public:
     virtual void ShowNotification(const std::string &notification, int duration_ms = 3000);
     virtual void SetEmotion(const char* emotion);
     virtual void SetChatMessage(const char* role, const char* content);
+    virtual void SetNetworkIcon(const char* icon);
+    virtual void SetClockText(const char* text);
+    virtual void SetHomeVisible(bool visible);
     virtual void SetTheme(Theme* theme);
     virtual Theme* GetTheme() { return current_theme_; }
     virtual void UpdateStatusBar(bool update_all = false);
     virtual void SetPowerSaveMode(bool on);
+
+    /* 背光亮度控制（0-100），默认实现经 Board::GetBacklight() 下发；
+       无背光硬件的板子保持空操作 */
+    virtual void SetBrightness(uint8_t brightness);
+    virtual uint8_t GetBrightness();
 
 #ifdef CONFIG_LSPLATFORM
     virtual void ShowActivation(std::unique_ptr<LvglImage> qrcode, const std::string& message) {};

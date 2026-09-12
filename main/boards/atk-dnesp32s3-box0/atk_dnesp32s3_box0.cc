@@ -7,7 +7,7 @@
 #include "config.h"
 #include "power_save_timer.h"
 #include "led/single_led.h"
-#include "assets/lang_config.h"
+#include "i18n/lang_config.h"
 #include "power_manager.h"
 
 #include "i2c_device.h"

@@ -19,6 +19,8 @@ import json
 import struct
 from datetime import datetime
 
+from romfs import pack_image
+
 
 # =============================================================================
 # Pack model functions (from pack_model.py)
@@ -240,7 +242,7 @@ def process_emoji_collection(emoji_collection_dir, assets_dir):
     # Copy each image from input directory to build/assets directory
     for root, dirs, files in os.walk(emoji_collection_dir):
         for file in files:
-            if file.lower().endswith(('.png', '.gif')):
+            if file.lower().endswith('.png'):
                 # Copy file
                 src_file = os.path.join(root, file)
                 dst_file = os.path.join(assets_dir, file)
@@ -327,7 +329,7 @@ def generate_config_json(build_dir, assets_dir):
         "image_file": os.path.join(build_dir, "output", "assets.bin"),
         "lvgl_ver": "9.3.0",
         "assets_size": "0x400000",
-        "support_format": ".png, .gif, .jpg, .bin, .json",
+        "support_format": ".png, .jpg, .bin, .json",
         "name_length": "32",
         "split_height": "0",
         "support_qoi": False,
@@ -758,7 +760,9 @@ def get_emoji_collection_path(default_emoji_collection, emoji_path):
         return None
 
 
-def build_assets_integrated(wakenet_model_paths, multinet_model_paths, microwakeword_model_path, text_font_path, emoji_collection_path, extra_files_path, output_path, multinet_model_info=None):
+def build_assets_integrated(wakenet_model_paths, multinet_model_paths, microwakeword_model_path, text_font_path,
+                            emoji_collection_path, extra_files_path, romfs_resources_path, output_path,
+                            use_romfs=False, multinet_model_info=None):
     """
     Build assets using integrated functions (no external dependencies)
     """
@@ -781,6 +785,17 @@ def build_assets_integrated(wakenet_model_paths, multinet_model_paths, microwake
         text_font = process_text_font(text_font_path, assets_dir) if text_font_path else None
         emoji_collection = process_emoji_collection(emoji_collection_path, assets_dir) if emoji_collection_path else None
         extra_files = process_extra_files(extra_files_path, assets_dir) if extra_files_path else None
+        if use_romfs and romfs_resources_path:
+            # ROMFS 只收纳动态资源目录；语言音频仍由 locales 机制单独处理。
+            for entry in os.scandir(romfs_resources_path):
+                if entry.name not in ("emoji", "tone"):
+                    if entry.name != "locales":
+                        continue
+                destination = os.path.join(assets_dir, entry.name)
+                if entry.is_dir():
+                    shutil.copytree(entry.path, destination, dirs_exist_ok=True)
+                elif entry.is_file():
+                    shutil.copy2(entry.path, destination)
         
         # Generate index.json
         generate_index_json(assets_dir, srmodels, mwwmodel, text_font, emoji_collection, extra_files, multinet_model_info)
@@ -792,10 +807,14 @@ def build_assets_integrated(wakenet_model_paths, multinet_model_paths, microwake
         with open(config_path, 'r') as f:
             config_data = json.load(f)
         
-        # Use simplified packing function
+        # ROMFS 用于小聆表情/tone；其他板型继续使用旧资源格式。
         include_path = config_data['include_path']
         image_file = config_data['image_file']
-        pack_assets_simple(assets_dir, include_path, image_file, "assets", int(config_data['name_length']))
+        if use_romfs:
+            os.makedirs(os.path.dirname(image_file), exist_ok=True)
+            pack_image(assets_dir, image_file, "xiaoling-resources")
+        else:
+            pack_assets_simple(assets_dir, include_path, image_file, "assets", int(config_data['name_length']))
         
         # Copy final assets.bin to output location
         if os.path.exists(image_file):
@@ -830,6 +849,8 @@ def main():
     parser.add_argument('--esp_sr_model_path', help='Path to ESP-SR model directory')
     parser.add_argument('--xiaozhi_fonts_path', help='Path to xiaozhi-fonts component directory')
     parser.add_argument('--extra_files', help='Path to extra files directory to be included in assets')
+    parser.add_argument('--romfs_resources', help='Path to ROMFS resources directory')
+    parser.add_argument('--romfs', action='store_true', help='Pack the assets directory as ROMFS')
     
     args = parser.parse_args()
     
@@ -907,6 +928,7 @@ def main():
     
     # Get extra files path if provided
     extra_files_path = args.extra_files
+    romfs_resources_path = args.romfs_resources
     
     # Read custom wake word configuration
     custom_wake_word_config = read_custom_wake_word_from_sdkconfig(args.sdkconfig)
@@ -934,7 +956,7 @@ def main():
         print(f"  wake word threshold: {custom_wake_word_config['threshold']}")
     
     # Check if we have anything to build
-    if not wakenet_model_paths and not multinet_model_paths and not text_font_path and not emoji_collection_path and not extra_files_path and not multinet_model_info:
+    if not wakenet_model_paths and not multinet_model_paths and not text_font_path and not emoji_collection_path and not extra_files_path and not romfs_resources_path and not multinet_model_info:
         print("Warning: No assets to build (no SR models, text font, emoji collection, extra files, or custom wake word)")
         # Create an empty assets.bin file
         os.makedirs(os.path.dirname(args.output), exist_ok=True)
@@ -944,8 +966,9 @@ def main():
         return
     
     # Build the assets
-    success = build_assets_integrated(wakenet_model_paths, multinet_model_paths, microwakeword_model_path, text_font_path, emoji_collection_path, 
-                                     extra_files_path, args.output, multinet_model_info)
+    success = build_assets_integrated(wakenet_model_paths, multinet_model_paths, microwakeword_model_path,
+                                     text_font_path, emoji_collection_path, extra_files_path,
+                                     romfs_resources_path, args.output, args.romfs, multinet_model_info)
     
     if not success:
         sys.exit(1)

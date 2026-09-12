@@ -3,7 +3,7 @@
 #include "settings.h"
 #include "display/display.h"
 #include "display/oled_display.h"
-#include "assets/lang_config.h"
+#include "i18n/lang_config.h"
 
 #include <esp_log.h>
 #include <esp_ota_ops.h>
@@ -23,9 +23,6 @@ Board::Board() {
 
 #if CONFIG_LSPLATFORM
     image_fetcher_ = new ImageFetcher(this);
-#if CONFIG_LSPLATFORM_BANNERS
-    banners_ = new Banners(this);
-#endif
 #endif // CONFIG_LSPLATFORM
 }
 
@@ -73,12 +70,6 @@ Camera* Board::GetCamera() {
 ImageFetcher* Board::GetImageFetcher() {
     return image_fetcher_;
 }
-
-#if CONFIG_LSPLATFORM_BANNERS
-Banners* Board::GetBanners() {
-    return banners_;
-}
-#endif
 #endif // CONFIG_LSPLATFORM
 
 Led* Board::GetLed() {

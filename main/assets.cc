@@ -1,10 +1,11 @@
 #include "assets.h"
+#include "resource/romfs/romfs.h"
 #include "board.h"
 #include "display.h"
 #include "application.h"
 #include "lvgl_theme.h"
 #include "emote_display.h"
-#ifdef HAVE_LVGL
+#ifndef CONFIG_USE_EMOTE_MESSAGE_STYLE
 #include "display/lcd_display.h"
 #endif
 
@@ -12,6 +13,8 @@
 #include <spi_flash_mmap.h>
 #include <esp_timer.h>
 #include <cbin_font.h>
+
+#include <cstring>
 
 
 #define TAG "Assets"
@@ -31,6 +34,9 @@ Assets::Assets() {
 }
 
 Assets::~Assets() {
+    if (romfs_ != nullptr) {
+        romfs_deinit(&romfs_);
+    }
     if (mmap_handle_ != 0) {
         esp_partition_munmap(mmap_handle_);
     }
@@ -39,12 +45,20 @@ Assets::~Assets() {
 uint32_t Assets::CalculateChecksum(const char* data, uint32_t length) {
     uint32_t checksum = 0;
     for (uint32_t i = 0; i < length; i++) {
-        checksum += data[i];
+        checksum += static_cast<unsigned char>(data[i]);
     }
     return checksum & 0xFFFF;
 }
 
 bool Assets::InitializePartition() {
+    if (romfs_ != nullptr) {
+        romfs_deinit(&romfs_);
+    }
+    if (mmap_handle_ != 0) {
+        esp_partition_munmap(mmap_handle_);
+        mmap_handle_ = 0;
+        mmap_root_ = nullptr;
+    }
     partition_valid_ = false;
     checksum_valid_ = false;
     assets_.clear();
@@ -68,6 +82,21 @@ bool Assets::InitializePartition() {
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to mmap assets partition: %s", esp_err_to_name(err));
         return false;
+    }
+
+    // ROMFS 资源包以固定魔数开头，优先识别新格式。
+    if (partition_->size >= 8 && std::memcmp(mmap_root_, "-rom1fs-", 8) == 0) {
+        if (romfs_init(&romfs_, mmap_root_, partition_->size) != 0) {
+            ESP_LOGE(TAG, "ROMFS 资源分区初始化失败");
+            esp_partition_munmap(mmap_handle_);
+            mmap_handle_ = 0;
+            mmap_root_ = nullptr;
+            return false;
+        }
+        partition_valid_ = true;
+        checksum_valid_ = true;
+        ESP_LOGI(TAG, "已使用 ROMFS 资源包");
+        return true;
     }
 
     partition_valid_ = true;
@@ -161,7 +190,7 @@ bool Assets::Apply() {
     }
 #endif // CONFIG_USE_MICRO_WAKE_WORD
 
-#ifdef HAVE_LVGL
+#ifndef CONFIG_USE_EMOTE_MESSAGE_STYLE
     auto& theme_manager = LvglThemeManager::GetInstance();
     auto light_theme = theme_manager.GetTheme("light");
     auto dark_theme = theme_manager.GetTheme("dark");
@@ -188,7 +217,7 @@ bool Assets::Apply() {
 
     cJSON* emoji_collection = cJSON_GetObjectItem(root, "emoji_collection");
     if (cJSON_IsArray(emoji_collection)) {
-        auto custom_emoji_collection = std::make_shared<EmojiCollection>();
+        auto custom_emoji_model = std::make_shared<EmojiModel>();
         int emoji_count = cJSON_GetArraySize(emoji_collection);
         for (int i = 0; i < emoji_count; i++) {
             cJSON* emoji = cJSON_GetArrayItem(emoji_collection, i);
@@ -201,15 +230,15 @@ bool Assets::Apply() {
                         ESP_LOGE(TAG, "Emoji %s image file %s is not found", name->valuestring, file->valuestring);
                         continue;
                     }
-                    custom_emoji_collection->AddEmoji(name->valuestring, new LvglRawImage(ptr, size));
+                    custom_emoji_model->AddEmoji(name->valuestring, new LvglRawImage(ptr, size));
                 }
             }
         }
         if (light_theme != nullptr) {
-            light_theme->set_emoji_collection(custom_emoji_collection);
+            light_theme->set_emoji_model(custom_emoji_model);
         }
         if (dark_theme != nullptr) {
-            dark_theme->set_emoji_collection(custom_emoji_collection);
+            dark_theme->set_emoji_model(custom_emoji_model);
         }
     }
 
@@ -531,6 +560,21 @@ bool Assets::Download(std::string url, std::function<void(int progress, size_t s
 }
 
 bool Assets::GetAssetData(const std::string& name, void*& ptr, size_t& size) {
+    if (romfs_ != nullptr) {
+        std::string path = name;
+        if (path.empty() || path.front() != '/') {
+            path.insert(path.begin(), '/');
+        }
+        uint8_t* data = nullptr;
+        uint32_t data_size = 0;
+        if (romfs_info_get(romfs_, path.c_str(), &data, &data_size) != 0) {
+            return false;
+        }
+        ptr = data;
+        size = data_size;
+        return true;
+    }
+
     auto asset = assets_.find(name);
     if (asset == assets_.end()) {
         return false;
@@ -544,4 +588,39 @@ bool Assets::GetAssetData(const std::string& name, void*& ptr, size_t& size) {
     ptr = static_cast<void*>(const_cast<char*>(data + 2));
     size = asset->second.size;
     return true;
+}
+
+bool Assets::ListAssetFiles(const std::string& directory, std::vector<std::string>& paths) {
+    paths.clear();
+    if (romfs_ != nullptr) {
+        romfs_dir_iter iter{};
+        if (romfs_dir_iter_start(romfs_, directory.c_str(), &iter) != 0) {
+            return false;
+        }
+        char path[ROMFS_PATH_MAX] = {};
+        uint8_t* data = nullptr;
+        uint32_t size = 0;
+        bool is_dir = false;
+        while (romfs_dir_iter_next(&iter, path, sizeof(path), &data, &size, &is_dir) == 0) {
+            if (!is_dir && data != nullptr && size > 0) {
+                paths.emplace_back(path);
+            }
+        }
+        return true;
+    }
+
+    // 旧格式没有目录层级，只能按文件名前缀提供兼容结果。
+    std::string prefix = directory;
+    if (!prefix.empty() && prefix.front() == '/') {
+        prefix.erase(prefix.begin());
+    }
+    if (!prefix.empty() && prefix.back() != '/') {
+        prefix.push_back('/');
+    }
+    for (const auto& item : assets_) {
+        if (item.first.rfind(prefix, 0) == 0) {
+            paths.emplace_back("/" + item.first);
+        }
+    }
+    return !paths.empty();
 }

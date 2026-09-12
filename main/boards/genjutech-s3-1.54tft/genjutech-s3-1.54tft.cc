@@ -15,7 +15,7 @@
 #include <freertos/task.h>
 #include "power_save_timer.h"
 
-#include "assets/lang_config.h"
+#include "i18n/lang_config.h"
 #include "power_manager.h"
 
 #define TAG "GenJuTech_s3_1_54TFT"

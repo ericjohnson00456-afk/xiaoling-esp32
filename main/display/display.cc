@@ -10,7 +10,7 @@
 #include "application.h"
 #include "audio_codec.h"
 #include "settings.h"
-#include "assets/lang_config.h"
+#include "i18n/lang_config.h"
 
 #define TAG "Display"
 
@@ -45,6 +45,18 @@ void Display::SetChatMessage(const char* role, const char* content) {
     ESP_LOGW(TAG, "     %s", content);
 }
 
+void Display::SetNetworkIcon(const char* icon) {
+    (void)icon;
+}
+
+void Display::SetClockText(const char* text) {
+    (void)text;
+}
+
+void Display::SetHomeVisible(bool visible) {
+    (void)visible;
+}
+
 void Display::SetTheme(Theme* theme) {
     current_theme_ = theme;
     Settings settings("display", true);
@@ -53,4 +65,16 @@ void Display::SetTheme(Theme* theme) {
 
 void Display::SetPowerSaveMode(bool on) {
     ESP_LOGW(TAG, "SetPowerSaveMode: %d", on);
+}
+
+void Display::SetBrightness(uint8_t brightness) {
+    auto backlight = Board::GetInstance().GetBacklight();
+    if (backlight != nullptr) {
+        backlight->SetBrightness(brightness, true);
+    }
+}
+
+uint8_t Display::GetBrightness() {
+    auto backlight = Board::GetInstance().GetBacklight();
+    return backlight != nullptr ? backlight->brightness() : 0;
 }

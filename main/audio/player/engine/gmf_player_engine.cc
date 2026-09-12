@@ -1,17 +1,42 @@
 #include "gmf_player_engine.h"
 
 #include "audio_service.h"
+#include "audio/tone/tone_model.h"
 
 #include <esp_err.h>
 #include <esp_log.h>
 #include <sdkconfig.h>
+#include <esp_audio_simple_player_advance.h>
+#include <esp_gmf_io_embed_flash.h>
+#include <esp_gmf_pipeline.h>
 
 #include <cstring>
+#include <strings.h>
 #include <utility>
 
 #define TAG "GmfPlayerEngine"
 
 namespace {
+
+int ConfigureRomfsToneIo(esp_asp_handle_t handle, void*) {
+    auto& tones = ToneModel::GetInstance();
+    if (!tones.initialized() || tones.EmbedItemCount() == 0) {
+        return ESP_GMF_ERR_OK;
+    }
+
+    esp_gmf_pipeline_handle_t pipeline = nullptr;
+    if (esp_audio_simple_player_get_pipeline(handle, &pipeline) != ESP_GMF_ERR_OK || pipeline == nullptr) {
+        return ESP_GMF_ERR_FAIL;
+    }
+    esp_gmf_io_handle_t input = nullptr;
+    if (esp_gmf_pipeline_get_in(pipeline, &input) != ESP_GMF_ERR_OK || input == nullptr) {
+        return ESP_GMF_ERR_FAIL;
+    }
+    if (strcasecmp(OBJ_GET_TAG(input), "io_embed_flash") != 0) {
+        return ESP_GMF_ERR_OK;
+    }
+    return esp_gmf_io_embed_flash_set_context(input, tones.EmbedItems(), tones.EmbedItemCount());
+}
 
 std::string UrlHostForLog(const std::string& url) {
     const auto scheme_end = url.find("://");
@@ -51,6 +76,7 @@ bool GmfPlayerEngine::Initialize(AudioService* audio_service, EventCallback call
     config.task_stack = 6 * 1024;
     config.task_core = 1;
     config.task_stack_in_ext = false;
+    config.prev = ConfigureRomfsToneIo;
 
     const auto result = esp_audio_simple_player_new(&config, &handle_);
     if (result != ESP_GMF_ERR_OK || handle_ == nullptr) {
@@ -76,7 +102,8 @@ bool GmfPlayerEngine::Initialize(AudioService* audio_service, EventCallback call
 }
 
 bool GmfPlayerEngine::Play(const PlaybackRequest& request) {
-    if (!initialized_ || handle_ == nullptr || request.source_type != PlaybackSourceType::kUrl) {
+    if (!initialized_ || handle_ == nullptr ||
+        (request.source_type != PlaybackSourceType::kUrl && request.source_type != PlaybackSourceType::kRomfs)) {
         return false;
     }
 

@@ -21,7 +21,7 @@
 
 // Project headers
 #include "assets.h"
-#include "assets/lang_config.h"
+#include "i18n/lang_config.h"
 #include "board.h"
 #include "gfx.h"
 

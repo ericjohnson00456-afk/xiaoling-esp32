@@ -7,7 +7,7 @@
 #include "config.h"
 #include "power_save_timer.h"
 #include "axp2101.h"
-#include "assets/lang_config.h"
+#include "i18n/lang_config.h"
 
 #include <esp_log.h>
 #include <driver/gpio.h>

@@ -11,7 +11,7 @@
 #include <driver/i2c_master.h>
 #include <driver/spi_common.h>
 #include "led/single_led.h"
-#include "assets/lang_config.h"
+#include "i18n/lang_config.h"
 #include "esp_lcd_panel_gc9301.h"
 
 #include "power_save_timer.h"

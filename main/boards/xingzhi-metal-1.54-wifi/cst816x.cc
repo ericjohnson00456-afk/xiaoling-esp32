@@ -2,7 +2,7 @@
 #include "board.h"
 #include "application.h"
 #include "display.h"
-#include "assets/lang_config.h"
+#include "i18n/lang_config.h"
 #include "wifi_board.h"
 #include "power_save_timer.h"
 #include "codecs/es8311_audio_codec.h"

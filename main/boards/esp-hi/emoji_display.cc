@@ -2,7 +2,7 @@
 #include "display/lcd_display.h"
 #include <esp_log.h>
 #include "emoji_display.h"
-#include "assets/lang_config.h"
+#include "i18n/lang_config.h"
 #include "assets.h"
 
 #include <esp_lcd_panel_io.h>

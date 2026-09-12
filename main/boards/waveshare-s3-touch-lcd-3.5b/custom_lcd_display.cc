@@ -2,7 +2,7 @@
 #include "config.h"
 #include "custom_lcd_display.h"
 #include "lcd_display.h"
-#include "assets/lang_config.h"
+#include "i18n/lang_config.h"
 #include "settings.h"
 #include "board.h"
 

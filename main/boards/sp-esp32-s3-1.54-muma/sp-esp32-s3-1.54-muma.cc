@@ -5,7 +5,7 @@
 #include "button.h"
 #include "config.h"
 #include "led/single_led.h"
-#include "assets/lang_config.h"
+#include "i18n/lang_config.h"
 #include <esp_log.h>
 #include <driver/i2c_master.h>
 #include "system_reset.h"

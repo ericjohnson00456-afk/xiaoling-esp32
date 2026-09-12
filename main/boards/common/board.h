@@ -13,7 +13,6 @@
 #include "backlight.h"
 #include "camera.h"
 #include "image_fetcher.h"
-#include "banners.h"
 #include "assets.h"
 
 /**
@@ -77,9 +76,6 @@ public:
     virtual Camera* GetCamera();
 #if CONFIG_LSPLATFORM
     virtual ImageFetcher* GetImageFetcher();
-#if CONFIG_LSPLATFORM_BANNERS
-    virtual Banners *GetBanners();
-#endif
 #endif // CONFIG_LSPLATFORM
     virtual NetworkInterface* GetNetwork() = 0;
     virtual void StartNetwork() = 0;
@@ -94,9 +90,6 @@ public:
 private:
 #if CONFIG_LSPLATFORM
     ImageFetcher* image_fetcher_ = nullptr;
-#if CONFIG_LSPLATFORM_BANNERS
-    Banners* banners_ = nullptr;
-#endif
 #endif // CONFIG_LSPLATFORM
 };
 

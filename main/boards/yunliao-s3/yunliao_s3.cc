@@ -2,7 +2,7 @@
 #include <esp_log.h>
 #include "settings.h"
 #include "application.h"
-#include "assets/lang_config.h"
+#include "i18n/lang_config.h"
 #include "button.h"
 #include "codecs/es8388_audio_codec.h"
 #include "config.h"

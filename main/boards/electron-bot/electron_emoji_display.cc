@@ -4,10 +4,10 @@
 
 #include <cstring>
 
-#include "assets/lang_config.h"
-#include "display/lvgl_display/emoji_collection.h"
-#include "display/lvgl_display/lvgl_image.h"
-#include "display/lvgl_display/lvgl_theme.h"
+#include "i18n/lang_config.h"
+#include "ui/models/emoji_model.h"
+#include "ui/tools/image/lvgl_image.h"
+#include "ui/themes/lvgl_theme.h"
 #include "otto_emoji_gif.h"
 
 #define TAG "ElectronEmojiDisplay"
@@ -21,45 +21,45 @@ ElectronEmojiDisplay::ElectronEmojiDisplay(esp_lcd_panel_io_handle_t panel_io, e
 void ElectronEmojiDisplay::InitializeElectronEmojis() {
     ESP_LOGI(TAG, "初始化Electron GIF表情");
 
-    auto otto_emoji_collection = std::make_shared<EmojiCollection>();
+    auto otto_emoji_model = std::make_shared<EmojiModel>();
 
     // 中性/平静类表情 -> staticstate
-    otto_emoji_collection->AddEmoji("staticstate", new LvglRawImage((void*)staticstate.data, staticstate.data_size));
-    otto_emoji_collection->AddEmoji("neutral", new LvglRawImage((void*)staticstate.data, staticstate.data_size));
-    otto_emoji_collection->AddEmoji("relaxed", new LvglRawImage((void*)staticstate.data, staticstate.data_size));
-    otto_emoji_collection->AddEmoji("sleepy", new LvglRawImage((void*)staticstate.data, staticstate.data_size));
-    otto_emoji_collection->AddEmoji("idle", new LvglRawImage((void*)staticstate.data, staticstate.data_size));
+    otto_emoji_model->AddEmoji("staticstate", new LvglRawImage((void*)staticstate.data, staticstate.data_size));
+    otto_emoji_model->AddEmoji("neutral", new LvglRawImage((void*)staticstate.data, staticstate.data_size));
+    otto_emoji_model->AddEmoji("relaxed", new LvglRawImage((void*)staticstate.data, staticstate.data_size));
+    otto_emoji_model->AddEmoji("sleepy", new LvglRawImage((void*)staticstate.data, staticstate.data_size));
+    otto_emoji_model->AddEmoji("idle", new LvglRawImage((void*)staticstate.data, staticstate.data_size));
 
     // 积极/开心类表情 -> happy
-    otto_emoji_collection->AddEmoji("happy", new LvglRawImage((void*)happy.data, happy.data_size));
-    otto_emoji_collection->AddEmoji("laughing", new LvglRawImage((void*)happy.data, happy.data_size));
-    otto_emoji_collection->AddEmoji("funny", new LvglRawImage((void*)happy.data, happy.data_size));
-    otto_emoji_collection->AddEmoji("loving", new LvglRawImage((void*)happy.data, happy.data_size));
-    otto_emoji_collection->AddEmoji("confident", new LvglRawImage((void*)happy.data, happy.data_size));
-    otto_emoji_collection->AddEmoji("winking", new LvglRawImage((void*)happy.data, happy.data_size));
-    otto_emoji_collection->AddEmoji("cool", new LvglRawImage((void*)happy.data, happy.data_size));
-    otto_emoji_collection->AddEmoji("delicious", new LvglRawImage((void*)happy.data, happy.data_size));
-    otto_emoji_collection->AddEmoji("kissy", new LvglRawImage((void*)happy.data, happy.data_size));
-    otto_emoji_collection->AddEmoji("silly", new LvglRawImage((void*)happy.data, happy.data_size));
+    otto_emoji_model->AddEmoji("happy", new LvglRawImage((void*)happy.data, happy.data_size));
+    otto_emoji_model->AddEmoji("laughing", new LvglRawImage((void*)happy.data, happy.data_size));
+    otto_emoji_model->AddEmoji("funny", new LvglRawImage((void*)happy.data, happy.data_size));
+    otto_emoji_model->AddEmoji("loving", new LvglRawImage((void*)happy.data, happy.data_size));
+    otto_emoji_model->AddEmoji("confident", new LvglRawImage((void*)happy.data, happy.data_size));
+    otto_emoji_model->AddEmoji("winking", new LvglRawImage((void*)happy.data, happy.data_size));
+    otto_emoji_model->AddEmoji("cool", new LvglRawImage((void*)happy.data, happy.data_size));
+    otto_emoji_model->AddEmoji("delicious", new LvglRawImage((void*)happy.data, happy.data_size));
+    otto_emoji_model->AddEmoji("kissy", new LvglRawImage((void*)happy.data, happy.data_size));
+    otto_emoji_model->AddEmoji("silly", new LvglRawImage((void*)happy.data, happy.data_size));
 
     // 悲伤类表情 -> sad
-    otto_emoji_collection->AddEmoji("sad", new LvglRawImage((void*)sad.data, sad.data_size));
-    otto_emoji_collection->AddEmoji("crying", new LvglRawImage((void*)sad.data, sad.data_size));
+    otto_emoji_model->AddEmoji("sad", new LvglRawImage((void*)sad.data, sad.data_size));
+    otto_emoji_model->AddEmoji("crying", new LvglRawImage((void*)sad.data, sad.data_size));
 
     // 愤怒类表情 -> anger
-    otto_emoji_collection->AddEmoji("anger", new LvglRawImage((void*)anger.data, anger.data_size));
-    otto_emoji_collection->AddEmoji("angry", new LvglRawImage((void*)anger.data, anger.data_size));
+    otto_emoji_model->AddEmoji("anger", new LvglRawImage((void*)anger.data, anger.data_size));
+    otto_emoji_model->AddEmoji("angry", new LvglRawImage((void*)anger.data, anger.data_size));
 
     // 惊讶类表情 -> scare
-    otto_emoji_collection->AddEmoji("scare", new LvglRawImage((void*)scare.data, scare.data_size));
-    otto_emoji_collection->AddEmoji("surprised", new LvglRawImage((void*)scare.data, scare.data_size));
-    otto_emoji_collection->AddEmoji("shocked", new LvglRawImage((void*)scare.data, scare.data_size));
+    otto_emoji_model->AddEmoji("scare", new LvglRawImage((void*)scare.data, scare.data_size));
+    otto_emoji_model->AddEmoji("surprised", new LvglRawImage((void*)scare.data, scare.data_size));
+    otto_emoji_model->AddEmoji("shocked", new LvglRawImage((void*)scare.data, scare.data_size));
 
     // 思考/困惑类表情 -> buxue
-    otto_emoji_collection->AddEmoji("buxue", new LvglRawImage((void*)buxue.data, buxue.data_size));
-    otto_emoji_collection->AddEmoji("thinking", new LvglRawImage((void*)buxue.data, buxue.data_size));
-    otto_emoji_collection->AddEmoji("confused", new LvglRawImage((void*)buxue.data, buxue.data_size));
-    otto_emoji_collection->AddEmoji("embarrassed", new LvglRawImage((void*)buxue.data, buxue.data_size));
+    otto_emoji_model->AddEmoji("buxue", new LvglRawImage((void*)buxue.data, buxue.data_size));
+    otto_emoji_model->AddEmoji("thinking", new LvglRawImage((void*)buxue.data, buxue.data_size));
+    otto_emoji_model->AddEmoji("confused", new LvglRawImage((void*)buxue.data, buxue.data_size));
+    otto_emoji_model->AddEmoji("embarrassed", new LvglRawImage((void*)buxue.data, buxue.data_size));
 
     // 将表情集合添加到主题中
     auto& theme_manager = LvglThemeManager::GetInstance();
@@ -67,10 +67,10 @@ void ElectronEmojiDisplay::InitializeElectronEmojis() {
     auto dark_theme = theme_manager.GetTheme("dark");
 
     if (light_theme != nullptr) {
-        light_theme->set_emoji_collection(otto_emoji_collection);
+        light_theme->set_emoji_model(otto_emoji_model);
     }
     if (dark_theme != nullptr) {
-        dark_theme->set_emoji_collection(otto_emoji_collection);
+        dark_theme->set_emoji_model(otto_emoji_model);
     }
 
     // 设置默认表情为staticstate

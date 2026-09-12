@@ -4,7 +4,7 @@
 #include "application.h"
 #include "system_info.h"
 #include "settings.h"
-#include "assets/lang_config.h"
+#include "i18n/lang_config.h"
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -199,7 +199,7 @@ void WifiBoard::StartWifiConfigMode() {
         hint += Lang::Strings::ACCESS_VIA_BROWSER;
         hint += wifi_manager.GetApWebUrl();
 
-        Application::GetInstance().Alert(Lang::Strings::WIFI_CONFIG_MODE, hint.c_str(), "gear", Lang::Sounds::OGG_WIFICONFIG);
+        Application::GetInstance().Alert(Lang::Strings::WIFI_CONFIG_MODE, hint.c_str(), "gear", 70);
     });
 #endif
 #if CONFIG_USE_ESP_BLUFI_WIFI_PROVISIONING
@@ -239,7 +239,7 @@ void WifiBoard::EnterWifiConfigMode() {
 
     if (state == kDeviceStateSpeaking || state == kDeviceStateListening || state == kDeviceStateIdle) {
         // Reset protocol (close audio channel, reset protocol)
-        Application::GetInstance().ResetCloudClient();
+        Application::GetInstance().ResetXiaolingConn();
 
         xTaskCreate([](void* arg) {
             auto* board = static_cast<WifiBoard*>(arg);

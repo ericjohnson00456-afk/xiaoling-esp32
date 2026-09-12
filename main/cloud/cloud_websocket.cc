@@ -116,6 +116,14 @@ bool CloudWebSocket::SendBinary(const uint8_t* data, size_t size) {
     return true;
 }
 
+bool CloudWebSocket::Ping() {
+    if (!IsConnected()) {
+        return false;
+    }
+    websocket_->Ping();
+    return true;
+}
+
 void CloudWebSocket::OnText(std::function<void(std::string)> callback) {
     on_text_ = std::move(callback);
 }

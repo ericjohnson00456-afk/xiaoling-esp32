@@ -10,8 +10,8 @@
 #include "application.h"
 #include "audio_codec.h"
 #include "settings.h"
-#include "assets/lang_config.h"
-#include "jpg/image_to_jpeg.h"
+#include "i18n/lang_config.h"
+#include "image_to_jpeg.h"
 
 #define TAG "Display"
 
@@ -120,7 +120,8 @@ void LvglDisplay::UpdateStatusBar(bool update_all) {
         }
     }
 
-    // Update time
+#ifndef CONFIG_USE_XIAOLING_MESSAGE_STYLE
+    // 非小聆界面仍由 Display 自行更新时间；小聆 Home 页暂不显示时钟。
     if (app.GetDeviceState() == kDeviceStateIdle) {
         if (last_status_update_time_ + std::chrono::seconds(10) < std::chrono::system_clock::now()) {
             // Set status to clock "HH:MM"
@@ -136,6 +137,7 @@ void LvglDisplay::UpdateStatusBar(bool update_all) {
             }
         }
     }
+#endif
 
     esp_pm_lock_acquire(pm_lock_);
     // Update battery icon
@@ -166,7 +168,7 @@ void LvglDisplay::UpdateStatusBar(bool update_all) {
             if (strcmp(icon, FONT_AWESOME_BATTERY_EMPTY) == 0 && discharging) {
                 if (lv_obj_has_flag(low_battery_popup_, LV_OBJ_FLAG_HIDDEN)) { // Show if low battery popup is hidden
                     lv_obj_remove_flag(low_battery_popup_, LV_OBJ_FLAG_HIDDEN);
-                    app.PlaySound(Lang::Sounds::OGG_LOW_BATTERY);
+                    app.PlayTone(95);
                 }
             } else {
                 // Hide the low battery popup when the battery is not empty
@@ -177,7 +179,8 @@ void LvglDisplay::UpdateStatusBar(bool update_all) {
         }
     }
 
-    // Update network icon every 10 seconds
+#ifndef CONFIG_USE_XIAOLING_MESSAGE_STYLE
+    // 非小聆界面仍由 Display 轮询网络图标；小聆 Home 页由 WifiModel 驱动。
     static int seconds_counter = 0;
     if (update_all || seconds_counter++ % 10 == 0) {
         // Don't read 4G network status during firmware upgrade to avoid occupying UART resources
@@ -194,12 +197,29 @@ void LvglDisplay::UpdateStatusBar(bool update_all) {
             if (network_label_ != nullptr && icon != nullptr && network_icon_ != icon) {
                 DisplayLockGuard lock(this);
                 network_icon_ = icon;
-                lv_label_set_text(network_label_, network_icon_);
+                lv_label_set_text(network_label_, network_icon_.c_str());
             }
         }
     }
+#endif
 
     esp_pm_lock_release(pm_lock_);
+}
+
+void LvglDisplay::SetNetworkIcon(const char* icon) {
+    const std::string value = icon != nullptr ? icon : "";
+    DisplayLockGuard lock(this);
+    if (network_label_ != nullptr && network_icon_ != value) {
+        network_icon_ = value;
+        lv_label_set_text(network_label_, network_icon_.c_str());
+    }
+}
+
+void LvglDisplay::SetClockText(const char* text) {
+    DisplayLockGuard lock(this);
+    if (clock_label_ != nullptr) {
+        lv_label_set_text(clock_label_, text != nullptr ? text : "");
+    }
 }
 
 void LvglDisplay::SetPreviewImage(std::unique_ptr<LvglImage> image) {

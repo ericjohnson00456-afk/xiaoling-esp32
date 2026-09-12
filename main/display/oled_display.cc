@@ -1,5 +1,5 @@
 #include "oled_display.h"
-#include "assets/lang_config.h"
+#include "i18n/lang_config.h"
 #include "lvgl_theme.h"
 #include "lvgl_font.h"
 

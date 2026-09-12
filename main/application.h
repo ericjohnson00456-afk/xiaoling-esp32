@@ -10,9 +10,10 @@
 #include <mutex>
 #include <deque>
 #include <memory>
+#include <cstdint>
 
-#include "xiaoling/xiaoling_client.h"
-#include "ota.h"
+#include "xiaoling/xiaoling_conn.h"
+#include "ota/ota.h"
 #include "audio_service.h"
 #include "audio/player/audio_player.h"
 #include "device_state.h"
@@ -80,9 +81,10 @@ public:
     void Schedule(std::function<void()>&& callback);
 
     /**
-     * Alert with status, message, emotion and optional sound
+     * Alert with status, message, emotion and optional localized tone name.
      */
     void Alert(const char* status, const char* message, const char* emotion = "", const std::string_view& sound = "");
+    void Alert(const char* status, const char* message, const char* emotion, uint16_t tone_id);
     void DismissAlert();
 
     void AbortSpeaking(AbortReason reason);
@@ -113,6 +115,8 @@ public:
     void SetAecMode(AecMode mode);
     AecMode GetAecMode() const { return aec_mode_; }
     void PlaySound(const std::string_view& sound);
+    void PlayLocalizedTone(const char* name);
+    void PlayTone(uint16_t tone_id);
     AudioService& GetAudioService() { return audio_service_; }
     
     /**
@@ -120,7 +124,7 @@ public:
      * Can be called from any task to release resources allocated after network connected
      * This includes closing audio channel, resetting protocol and ota objects
      */
-    void ResetCloudClient();
+    void ResetXiaolingConn();
 
 private:
     Application();
@@ -128,7 +132,7 @@ private:
 
     std::mutex mutex_;
     std::deque<std::function<void()>> main_tasks_;
-    std::unique_ptr<XiaolingClient> protocol_;
+    std::unique_ptr<XiaolingConn> xiaoling_conn_;
     EventGroupHandle_t event_group_ = nullptr;
     esp_timer_handle_t clock_timer_handle_ = nullptr;
     DeviceStateMachine state_machine_;
@@ -146,7 +150,6 @@ private:
     bool narrowband_mode_ = false;
 #endif // CONFIG_LSPLATFORM
 
-    bool has_server_time_ = false;
     bool aborted_ = false;
     bool assets_version_checked_ = false;
     bool play_popup_on_listening_ = false;  // Flag to play popup sound after state changes to listening
@@ -169,8 +172,8 @@ private:
 
     // Helper methods
     void CheckAssetsVersion();
-    void CheckNewVersion();
-    void InitializeCloudClient();
+    bool CheckNewVersion();
+    void InitializeXiaolingConn();
     void ShowActivationCode(const std::string& code, const std::string& message, const std::string& qrcode = "");
     void SetListeningMode(ListeningMode mode);
     

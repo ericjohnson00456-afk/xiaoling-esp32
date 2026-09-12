@@ -5,7 +5,7 @@
 #include "button.h"
 #include "config.h"
 #include "i2c_device.h"
-#include "assets/lang_config.h"
+#include "i18n/lang_config.h"
 
 #include <esp_log.h>
 #include <esp_lcd_panel_vendor.h>

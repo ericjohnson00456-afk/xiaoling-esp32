@@ -30,7 +30,7 @@
 
 #include "ssid_manager.h"
 #include "settings.h"
-#include "assets/lang_config.h"
+#include "i18n/lang_config.h"
 #include "board.h"
 #include "display.h"
 #include "application.h"
@@ -495,8 +495,8 @@ void blufi_start(void)
     display->ShowActivation(std::move(qrcode), "扫码或搜索“小聆AI”小程序\n选择ESP32 - 蓝牙配网");
 
     // std::string msg = "扫码或搜索“小聆AI”小程序\n选择ESP32 - 蓝牙配网";
-    // application.Alert(Lang::Strings::WIFI_CONFIG_MODE, msg.c_str(), "xl_ble_prov", Lang::Sounds::OGG_WIFICONFIG);
-    application.PlaySound(Lang::Sounds::OGG_XL_BLE_PROV);
+    // 配网提示音由应用层根据当前语言从 ROMFS 加载。
+    application.PlayTone(70);
 
     while (!provstate || !authstate) {
         vTaskDelay(1000 / portTICK_PERIOD_MS);

@@ -22,6 +22,7 @@ public:
 
     bool SendText(const std::string& text);
     bool SendBinary(const uint8_t* data, size_t size);
+    bool Ping();
 
     void OnText(std::function<void(std::string)> callback);
     void OnBinary(std::function<void(std::vector<uint8_t>)> callback);

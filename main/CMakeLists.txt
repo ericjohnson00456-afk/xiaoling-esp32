@@ -3,6 +3,7 @@ set(SOURCES "audio/audio_codec.cc"
             "audio/audio_service.cc"
             "audio/opus_wb_encoder.cc"
             "audio/player/audio_player.cc"
+            "audio/tone/tone_model.cc"
             "audio/player/engine/gmf_player_engine.cc"
             "audio/codecs/no_audio_codec.cc"
             "audio/codecs/box_audio_codec.cc"
@@ -20,28 +21,31 @@ set(SOURCES "audio/audio_codec.cc"
             "display/oled_display.cc"
             "display/lvgl_display/lvgl_display.cc"
             "display/emote_display.cc"
-            "display/lvgl_display/emoji_collection.cc"
-            "display/lvgl_display/lvgl_theme.cc"
-            "display/lvgl_display/lvgl_font.cc"
-            "display/lvgl_display/lvgl_image.cc"
-            "display/lvgl_display/gif/lvgl_gif.cc"
-            "display/lvgl_display/gif/gifdec.c"
-            "display/lvgl_display/jpg/image_to_jpeg.cpp"
-            "display/lvgl_display/jpg/jpeg_to_image.c"
+            "ui/themes/lvgl_theme.cc"
+            "ui/themes/lvgl_theme_setup.cc"
+            "ui/tools/font/lvgl_font.cc"
+            "ui/tools/image/lvgl_image.cc"
+            "ui/tools/image/image_fetcher.cc"
+            "ui/tools/image/png_animation_player.cc"
+            "media/image/image_to_jpeg.cpp"
+            "media/image/jpeg_to_image.c"
+            "resource/romfs/romfs.c"
             "cloud/cloud_http.cc"
             "cloud/cloud_websocket.cc"
-            "xiaoling/xiaoling_auth.cc"
-            "xiaoling/xiaoling_client.cc"
+            "xiaoling/xiaoling_conn.cc"
+            "xiaoling/xiaoling_conn_auth.cc"
+            "xiaoling/xiaoling_conn_protocol.cc"
+            "xiaoling/xiaoling_events.cc"
+            "xiaoling/xiaoling_voice.cc"
             "mcp/mcp_server.cc"
             "system_info.cc"
             "application.cc"
-            "ota.cc"
+            "ota/ota.cc"
+            "time_sync.cc"
             "settings.cc"
             "device_state_machine.cc"
             "assets.cc"
             "main.cc"
-            "image_fetcher.cc"
-            "banners.cc"
             "watchdog.cc"
             )
 
@@ -51,8 +55,18 @@ file(GLOB MCP_TOOL_SOURCES
      "${CMAKE_CURRENT_SOURCE_DIR}/mcp/tools/tool_*.cc")
 list(APPEND SOURCES ${MCP_TOOL_SOURCES})
 
-set(INCLUDE_DIRS "." "display" "display/lvgl_display" "display/lvgl_display/jpg" "audio"
-                 "audio/player" "audio/player/core" "audio/player/engine" "cloud" "xiaoling" "mcp")
+# UI 层：包含 Model、Presenter、View 和导航栈，位于硬件显示层之上
+file(GLOB UI_SOURCES
+     "${CMAKE_CURRENT_SOURCE_DIR}/ui/*.cc"
+     "${CMAKE_CURRENT_SOURCE_DIR}/ui/models/*.cc"
+     "${CMAKE_CURRENT_SOURCE_DIR}/ui/presenters/*.cc"
+     "${CMAKE_CURRENT_SOURCE_DIR}/ui/views/*.cc")
+list(APPEND SOURCES ${UI_SOURCES})
+
+set(INCLUDE_DIRS "." "display" "display/lvgl_display" "resource/romfs"
+                 "ui/themes" "ui/tools/font" "ui/tools/image" "media/image" "audio"
+                 "audio/player" "audio/player/core" "audio/player/engine" "cloud" "xiaoling" "mcp"
+                 "ui" "ui/models" "ui/presenters" "ui/views" "ota")
 
 # Add board common files
 file(GLOB BOARD_COMMON_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/boards/common/*.cc)
@@ -71,7 +85,7 @@ list(APPEND SOURCES "blufi/blufi_security.cc"
                     "blufi/blufi_init.cc"
                     "blufi/blufi_main.cc")
 list(APPEND INCLUDE_DIRS "blufi")
-set(BLUFI_ASSETS ${CMAKE_CURRENT_SOURCE_DIR}/assets/common/xl_ble_prov.png)
+set(BLUFI_ASSETS ${CMAKE_CURRENT_SOURCE_DIR}/assets/provisioning/xl_ble_prov.png)
 endif() # CONFIG_PROV_MODE_BLE
 
 idf_build_get_property(build_components BUILD_COMPONENTS)
@@ -712,33 +726,7 @@ endif()
 
 # Define generation path
 set(LANG_JSON "${CMAKE_CURRENT_SOURCE_DIR}/assets/locales/${LANG_DIR}/language.json")
-set(LANG_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/assets/lang_config.h")
-
-# Collect current language audio files
-file(GLOB LANG_SOUNDS ${CMAKE_CURRENT_SOURCE_DIR}/assets/locales/${LANG_DIR}/*.ogg)
-
-# If not en-US, collect en-US audio files as fallback for missing files
-if(NOT LANG_DIR STREQUAL "en-US")
-    file(GLOB EN_US_SOUNDS ${CMAKE_CURRENT_SOURCE_DIR}/assets/locales/en-US/*.ogg)
-    
-    # Extract filenames (without path) from current language
-    set(EXISTING_NAMES "")
-    foreach(SOUND_FILE ${LANG_SOUNDS})
-        get_filename_component(FILENAME ${SOUND_FILE} NAME)
-        list(APPEND EXISTING_NAMES ${FILENAME})
-    endforeach()
-    
-    # Only add en-US audio files that are missing in current language
-    foreach(EN_SOUND ${EN_US_SOUNDS})
-        get_filename_component(FILENAME ${EN_SOUND} NAME)
-        if(NOT ${FILENAME} IN_LIST EXISTING_NAMES)
-            list(APPEND LANG_SOUNDS ${EN_SOUND})
-            message(STATUS "Using en-US fallback for missing audio: ${FILENAME}")
-        endif()
-    endforeach()
-endif()
-
-file(GLOB COMMON_SOUNDS ${CMAKE_CURRENT_SOURCE_DIR}/assets/common/*.ogg)
+set(LANG_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/i18n/lang_config.h")
 
 # If target chip is ESP32, exclude specific files to avoid build errors
 if(CONFIG_IDF_TARGET_ESP32)
@@ -747,15 +735,15 @@ if(CONFIG_IDF_TARGET_ESP32)
                              "audio/codecs/es8389_audio_codec.cc"
                              "led/gpio_led.cc"
                              "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/esp32_camera.cc"
-                             "display/lvgl_display/jpg/image_to_jpeg.cpp"
-                             "display/lvgl_display/jpg/jpeg_to_image.c"
+                             "media/image/image_to_jpeg.cpp"
+                             "media/image/jpeg_to_image.c"
                              )
 endif()
 
 include(${PROJECT_DIR}/main/audio/wake_words/micro_wake_word/models/models.cmake)
 
 idf_component_register(SRCS ${SOURCES}
-                    EMBED_FILES ${LANG_SOUNDS} ${COMMON_SOUNDS} ${BLUFI_ASSETS}
+                    EMBED_FILES ${BLUFI_ASSETS}
                     INCLUDE_DIRS ${INCLUDE_DIRS}
                     WHOLE_ARCHIVE
                     )
@@ -866,6 +854,9 @@ function(build_default_assets_bin)
         "--sdkconfig" "${SDKCONFIG}"
         "--output" "${GENERATED_ASSETS_BIN}"
     )
+
+    file(GLOB_RECURSE ROMFS_RESOURCE_FILES
+         "${CMAKE_CURRENT_SOURCE_DIR}/assets/*")
     
     # Add builtin text font if defined
     if(BUILTIN_TEXT_FONT)
@@ -874,13 +865,9 @@ function(build_default_assets_bin)
     
     # Add default emoji collection if defined
     if(CONFIG_USE_XIAOLING_MESSAGE_STYLE)
-        set(EMOJI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/assets/xl_emoji")
-        if(DEFAULT_EMOJI_COLLECTION STREQUAL "twemoji_64")
-            list(APPEND BUILD_ARGS "--emoji_path" ${EMOJI_DIR})
-            set(DEFAULT_EMOJI_COLLECTION "240")
-        endif()
-    endif()
-    if(DEFAULT_EMOJI_COLLECTION)
+        list(APPEND BUILD_ARGS "--romfs_resources" "${CMAKE_CURRENT_SOURCE_DIR}/assets" "--romfs")
+    elseif(DEFAULT_EMOJI_COLLECTION)
+        # 非小聆板型使用 xiaozhi-fonts/png 下的静态 PNG 集合。
         list(APPEND BUILD_ARGS "--emoji_collection" "${DEFAULT_EMOJI_COLLECTION}")
     endif()
     
@@ -899,6 +886,8 @@ function(build_default_assets_bin)
         DEPENDS
             ${SDKCONFIG}
             ${PROJECT_DIR}/scripts/build_default_assets.py
+            ${PROJECT_DIR}/scripts/romfs.py
+            ${ROMFS_RESOURCE_FILES}
         COMMENT "Building default assets.bin based on configuration"
         VERBATIM
     )

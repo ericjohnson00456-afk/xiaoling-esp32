@@ -16,7 +16,7 @@
 #include <esp_lcd_panel_ops.h>
 #include "esp_lcd_ili9341.h"
 
-#include "assets/lang_config.h"
+#include "i18n/lang_config.h"
 #include "anim_player.h"
 #include "emoji_display.h"
 #include "servo_dog_ctrl.h"

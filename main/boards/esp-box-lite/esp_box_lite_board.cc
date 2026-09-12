@@ -5,7 +5,7 @@
 #include "application.h"
 #include "button.h"
 #include "config.h"
-#include "assets/lang_config.h"
+#include "i18n/lang_config.h"
 
 #include <esp_log.h>
 #include <button_adc.h>

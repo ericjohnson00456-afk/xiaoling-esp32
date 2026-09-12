@@ -29,7 +29,7 @@
 #include <nvs_flash.h>
 #include <esp_app_desc.h>
 
-#include "assets/lang_config.h"
+#include "i18n/lang_config.h"
 
 #define TAG "sensecap_watcher"
 

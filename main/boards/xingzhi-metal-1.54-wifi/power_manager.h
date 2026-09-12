@@ -9,7 +9,7 @@
 #include "button.h"
 #include "board.h"
 #include "config.h"
-#include "assets/lang_config.h"
+#include "i18n/lang_config.h"
 #include <esp_sleep.h>
 
 class PowerManager {

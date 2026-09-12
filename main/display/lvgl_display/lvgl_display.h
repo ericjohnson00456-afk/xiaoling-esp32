@@ -21,15 +21,21 @@ public:
     virtual void ShowNotification(const char* notification, int duration_ms = 3000);
     virtual void ShowNotification(const std::string &notification, int duration_ms = 3000);
     virtual void SetPreviewImage(std::unique_ptr<LvglImage> image);
+    virtual void SetNetworkIcon(const char* icon) override;
+    virtual void SetClockText(const char* text) override;
     virtual void UpdateStatusBar(bool update_all = false);
     virtual void SetPowerSaveMode(bool on);
     virtual bool SnapshotToJpeg(std::string& jpeg_data, int quality = 80);
+
+    /* 暴露底层 lv_display_t 给 UI 层（页面需要挂到具体的 LVGL display 上） */
+    lv_display_t* GetLvglDisplay() const { return display_; }
 
 protected:
     esp_pm_lock_handle_t pm_lock_ = nullptr;
     lv_display_t *display_ = nullptr;
 
     lv_obj_t *network_label_ = nullptr;
+    lv_obj_t *clock_label_ = nullptr;
     lv_obj_t *status_label_ = nullptr;
     lv_obj_t *notification_label_ = nullptr;
     lv_obj_t *mute_label_ = nullptr;
@@ -38,7 +44,7 @@ protected:
     lv_obj_t* low_battery_label_ = nullptr;
     
     const char* battery_icon_ = nullptr;
-    const char* network_icon_ = nullptr;
+    std::string network_icon_;
     bool muted_ = false;
 
     std::chrono::system_clock::time_point last_status_update_time_;

@@ -8,7 +8,7 @@
 #include "led/single_led.h"
 #include "i2c_device.h"
 #include "usb_esp32_camera.h"
-#include "assets/lang_config.h"
+#include "i18n/lang_config.h"
 
 #include <esp_log.h>
 #include <driver/i2c_master.h>

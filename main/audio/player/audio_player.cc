@@ -1,6 +1,8 @@
 #include "audio_player.h"
 
 #include "engine/gmf_player_engine.h"
+#include "xiaoling_events.h"
+#include "audio/tone/tone_model.h"
 
 #include <esp_log.h>
 
@@ -33,7 +35,9 @@ bool IsHttpUrl(const std::string& url) {
 }  // namespace
 
 AudioPlayer::AudioPlayer() = default;
-AudioPlayer::~AudioPlayer() = default;
+AudioPlayer::~AudioPlayer() {
+    XiaolingEventBus::GetInstance().Unsubscribe(xiaoling_tts_subscription_id_);
+}
 
 bool AudioPlayer::Initialize(AudioService* audio_service) {
     if (engine_ != nullptr) {
@@ -48,6 +52,14 @@ bool AudioPlayer::Initialize(AudioService* audio_service) {
         return false;
     }
     engine_ = std::move(engine);
+    if (xiaoling_tts_subscription_id_ == 0) {
+        xiaoling_tts_subscription_id_ = XiaolingEventBus::GetInstance().Subscribe(
+            XIAOLING_TTS_URL, [this](const XiaolingEvent& event) {
+                if (PlayTtsUrl(event.text) == 0) {
+                    ESP_LOGE(TAG, "订阅到 TTS URL，但提交流式播放失败");
+                }
+            });
+    }
     return true;
 }
 
@@ -70,6 +82,32 @@ uint32_t AudioPlayer::PlayTtsUrl(const std::string& url) {
     request.resumable = false;
     request.loop = false;
 
+    if (!engine_->Play(request)) {
+        return 0;
+    }
+    return request.session_id;
+}
+
+uint32_t AudioPlayer::PlayTone(uint16_t tone_id) {
+    if (engine_ == nullptr) {
+        ESP_LOGE(TAG, "播放器尚未初始化");
+        return 0;
+    }
+
+    const char* url = ToneModel::GetInstance().GetUrl(tone_id);
+    if (url == nullptr) {
+        ESP_LOGW(TAG, "tone 不存在: id=%u", static_cast<unsigned>(tone_id));
+        return 0;
+    }
+
+    PlaybackRequest request;
+    request.session_id = next_session_id_.fetch_add(1);
+    request.source_type = PlaybackSourceType::kRomfs;
+    request.channel = PlaybackChannel::kPrompt;
+    request.source = url;
+    request.priority = 80;
+    request.resumable = false;
+    request.loop = false;
     if (!engine_->Play(request)) {
         return 0;
     }

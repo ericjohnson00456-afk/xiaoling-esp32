@@ -6,7 +6,7 @@
 #include <esp_log.h>
 #include <esp_err.h>
 #include <esp_lvgl_port.h>
-#include "assets/lang_config.h"
+#include "i18n/lang_config.h"
 #include <cstring>
 #include "settings.h"
 

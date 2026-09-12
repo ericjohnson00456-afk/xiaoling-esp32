@@ -2,7 +2,7 @@
 
 #include "application.h"
 #include "display.h"
-#include "assets/lang_config.h"
+#include "i18n/lang_config.h"
 
 #include <esp_log.h>
 #include <esp_timer.h>

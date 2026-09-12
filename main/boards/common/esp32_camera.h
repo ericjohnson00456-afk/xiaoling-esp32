@@ -11,7 +11,7 @@
 #include <freertos/queue.h>
 
 #include "camera.h"
-#include "jpg/image_to_jpeg.h"
+#include "image_to_jpeg.h"
 #include "esp_video_init.h"
 
 struct JpegChunk {

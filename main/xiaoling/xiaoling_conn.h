@@ -1,0 +1,103 @@
+#ifndef XIAOLING_CONN_H
+#define XIAOLING_CONN_H
+
+#include "cloud/cloud_websocket.h"
+#include "xiaoling_types.h"
+
+#include <atomic>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <vector>
+
+#include <cJSON.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/event_groups.h>
+#include <freertos/task.h>
+
+class XiaolingVoice;
+
+// 小聆连接入口：负责鉴权、长连接、心跳、重连和语音模块接入。
+class XiaolingConn final {
+public:
+    XiaolingConn();
+    ~XiaolingConn();
+
+    // 启动即完成鉴权和连接；连接成功后语音模块可以直接开始会话。
+    bool Start();
+    bool Connect();
+    void Disconnect();
+    bool IsConnected() const;
+
+    bool SendAudio(std::unique_ptr<AudioStreamPacket> packet);
+    void SendWakeWordDetected(const std::string& wake_word);
+    void SendStartListening(ListeningMode mode);
+    void SendStopListening();
+    void SendAbortSpeaking(AbortReason reason);
+    void SendMcpMessage(const std::string& message);
+    void SetNarrowbandMode(bool enabled);
+
+    int server_sample_rate() const;
+    int server_frame_duration() const;
+    const std::string& session_id() const;
+
+    void OnIncomingAudio(std::function<void(std::unique_ptr<AudioStreamPacket>)> callback);
+    void OnIncomingJson(std::function<void(const cJSON*)> callback);
+    void OnNetworkError(std::function<void(const std::string&)> callback);
+    void OnConnected(std::function<void()> callback);
+    void OnDisconnected(std::function<void()> callback);
+
+private:
+    static constexpr uint32_t kHeartbeatIntervalMs = 30000;
+    static constexpr uint32_t kReconnectIntervalMs = 3000;
+    static constexpr uint32_t kProtocolConnectTimeoutMs = 10000;
+    static constexpr EventBits_t kProtocolConnectedBit = BIT0;
+
+    std::unique_ptr<XiaolingVoice> voice_;
+    EventGroupHandle_t event_group_ = nullptr;
+
+    mutable std::mutex websocket_mutex_;
+    std::unique_ptr<CloudWebSocket> websocket_;
+    std::atomic_bool running_{false};
+    std::atomic_bool desired_connected_{false};
+    std::atomic_bool transport_connected_{false};
+    std::atomic_bool protocol_connected_{false};
+    std::atomic_bool session_active_{false};
+    std::atomic<uint32_t> generation_{0};
+    TaskHandle_t task_handle_ = nullptr;
+    int64_t last_heartbeat_us_ = 0;
+
+    mutable std::mutex auth_mutex_;
+    std::string access_token_;
+    bool error_occurred_ = false;
+
+    std::function<void(const cJSON*)> on_incoming_json_;
+    std::function<void(const std::string&)> on_network_error_;
+    std::function<void()> on_connected_;
+    std::function<void()> on_disconnected_;
+
+    bool StartSupervisor();
+    void StopSupervisor();
+    static void TaskEntry(void* arg);
+    void Run();
+    bool ConnectOnce();
+    void HandleTransportDisconnected(uint32_t generation);
+    void SetSessionActive(bool active);
+
+    bool EnsureAuthenticated();
+    bool Authenticate(const std::string& extra_code = "");
+    void ClearAuthentication();
+    std::string LoadAccessToken() const;
+    static std::string NormalizeBearerToken(const std::string& token);
+
+    bool SendText(const std::string& text);
+    bool SendBinary(const uint8_t* data, size_t size);
+    std::string BuildWebSocketUrl() const;
+    void HandleIncomingText(const std::string& text);
+    bool IsCurrentSessionMessage(const cJSON* root) const;
+    void SetError(const std::string& message);
+};
+
+#endif  // XIAOLING_CONN_H

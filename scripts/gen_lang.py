@@ -7,8 +7,6 @@ HEADER_TEMPLATE = """// Auto-generated language config
 // Language: {lang_code} with en-US fallback
 #pragma once
 
-#include <string_view>
-
 #ifndef {lang_code_for_font}
     #define {lang_code_for_font}  // 預設語言
 #endif
@@ -52,9 +50,9 @@ def get_sound_files(directory):
 
 def generate_header(lang_code, output_path):
     # 从输出路径推导项目结构
-    # output_path 通常是 main/assets/lang_config.h
+    # output_path 通常是 main/i18n/lang_config.h
     main_dir = os.path.dirname(output_path)  # main/assets
-    if os.path.basename(main_dir) == 'assets':
+    if os.path.basename(main_dir) in ('assets', 'i18n'):
         main_dir = os.path.dirname(main_dir)  # main
     project_dir = os.path.dirname(main_dir)  # 项目根目录
     assets_dir = os.path.join(main_dir, 'assets')
@@ -159,6 +157,9 @@ def generate_header(lang_code, output_path):
         static_cast<const char*>(ogg_{base_name}_start),
         static_cast<size_t>(ogg_{base_name}_end - ogg_{base_name}_start)
         }};''')
+
+    # 提示音已经由 ToneModel 从 ROMFS 读取，语言头文件不再生成二进制链接符号。
+    sounds = []
 
     # 填充模板
     content = HEADER_TEMPLATE.format(

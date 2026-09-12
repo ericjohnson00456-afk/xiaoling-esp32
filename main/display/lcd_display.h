@@ -2,7 +2,7 @@
 #define LCD_DISPLAY_H
 
 #include "lvgl_display.h"
-#include "gif/lvgl_gif.h"
+#include "png_animation_player.h"
 
 #include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>
@@ -29,7 +29,7 @@ protected:
     lv_obj_t* preview_image_ = nullptr;
     lv_obj_t* emoji_label_ = nullptr;
     lv_obj_t* emoji_image_ = nullptr;
-    std::unique_ptr<LvglGif> gif_controller_ = nullptr;
+    std::unique_ptr<PngAnimationPlayer> animation_player_ = nullptr;
     lv_obj_t* emoji_box_ = nullptr;
     lv_obj_t* chat_message_label_ = nullptr;
 #ifndef CONFIG_USE_XIAOLING_MESSAGE_STYLE
@@ -49,7 +49,6 @@ protected:
     std::unique_ptr<LvglImage> image_cached_ = nullptr;
 #endif // CONFIG_LSPLATFORM
 
-    void InitializeLcdThemes();
     void SetupUI();
     virtual bool Lock(int timeout_ms = 0) override;
     virtual void Unlock() override;
@@ -62,6 +61,7 @@ public:
     ~LcdDisplay();
     virtual void SetEmotion(const char* emotion) override;
     virtual void SetChatMessage(const char* role, const char* content) override; 
+    virtual void SetHomeVisible(bool visible) override;
     virtual void SetPreviewImage(std::unique_ptr<LvglImage> image) override;
 
     // Add theme switching function
