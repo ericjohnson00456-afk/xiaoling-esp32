@@ -1,6 +1,6 @@
 #include "custom_wake_word.h"
 #include "audio_service.h"
-#include "system_info.h"
+#include "system/system_info.h"
 #include "assets.h"
 
 #include <esp_log.h>

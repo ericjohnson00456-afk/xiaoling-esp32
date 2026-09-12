@@ -1,5 +1,5 @@
 #include "board.h"
-#include "system_info.h"
+#include "system/system_info.h"
 #include "settings.h"
 #include "display/display.h"
 #include "display/oled_display.h"

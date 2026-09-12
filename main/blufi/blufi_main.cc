@@ -34,7 +34,7 @@
 #include "board.h"
 #include "display.h"
 #include "application.h"
-#include "system_info.h"
+#include "system/system_info.h"
 
 #include "esp_blufi_api.h"
 #include "blufi.h"

@@ -3,7 +3,7 @@
 #include "lvgl_display.h"
 #include "lvgl_image.h"
 #include "board.h"
-#include "system_info.h"
+#include "system/system_info.h"
 #include "config.h"
 #include "settings.h"
 

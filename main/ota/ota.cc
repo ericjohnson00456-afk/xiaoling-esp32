@@ -1,5 +1,5 @@
 #include "ota.h"
-#include "system_info.h"
+#include "system/system_info.h"
 #include "settings.h"
 #include "i18n/lang_config.h"
 

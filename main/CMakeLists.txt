@@ -38,15 +38,15 @@ set(SOURCES "audio/audio_codec.cc"
             "xiaoling/xiaoling_events.cc"
             "xiaoling/xiaoling_voice.cc"
             "mcp/mcp_server.cc"
-            "system_info.cc"
+            "system/system_info.cc"
             "application.cc"
             "ota/ota.cc"
-            "time_sync.cc"
+            "system/time_sync.cc"
             "settings.cc"
             "device_state_machine.cc"
             "assets.cc"
             "main.cc"
-            "watchdog.cc"
+            "system/watchdog.cc"
             )
 
 # MCP tools self-register through mcp_server.cc. Keep the source list automatic
@@ -66,7 +66,7 @@ list(APPEND SOURCES ${UI_SOURCES})
 set(INCLUDE_DIRS "." "display" "display/lvgl_display" "resource/romfs"
                  "ui/themes" "ui/tools/font" "ui/tools/image" "media/image" "audio"
                  "audio/player" "audio/player/core" "audio/player/engine" "cloud" "xiaoling" "mcp"
-                 "ui" "ui/models" "ui/presenters" "ui/views" "ota")
+                 "ui" "ui/models" "system" "ui/presenters" "ui/views" "ota")
 
 # Add board common files
 file(GLOB BOARD_COMMON_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/boards/common/*.cc)

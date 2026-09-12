@@ -2,7 +2,7 @@
 
 #include "i18n/lang_config.h"
 #include "board.h"
-#include "system_info.h"
+#include "system/system_info.h"
 #include "xiaoling_events.h"
 #include "xiaoling_voice.h"
 

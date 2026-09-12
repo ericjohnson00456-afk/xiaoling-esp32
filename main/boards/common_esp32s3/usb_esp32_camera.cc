@@ -3,7 +3,7 @@
 #include "display.h"
 #include "lvgl_display.h"
 #include "board.h"
-#include "system_info.h"
+#include "system/system_info.h"
 #include "nvs_flash.h"
 #include <esp_log.h>
 #include <esp_heap_caps.h>

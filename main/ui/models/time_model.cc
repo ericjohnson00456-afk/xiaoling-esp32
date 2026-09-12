@@ -1,6 +1,6 @@
 #include "time_model.h"
 
-#include "time_sync.h"
+#include "system/time_sync.h"
 
 #include <ctime>
 #include <utility>

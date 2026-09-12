@@ -21,7 +21,7 @@
 #include "jpeg_to_image.h"
 #include "lvgl_display.h"
 #include "mcp_server.h"
-#include "system_info.h"
+#include "system/system_info.h"
 
 #ifdef CONFIG_XIAOZHI_ENABLE_CAMERA_DEBUG_MODE
 #undef LOG_LOCAL_LEVEL

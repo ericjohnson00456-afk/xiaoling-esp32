@@ -1,6 +1,6 @@
 #include "xiaoling_voice.h"
 
-#include "system_info.h"
+#include "system/system_info.h"
 #include "xiaoling_events.h"
 #include "xiaoling_config.h"
 

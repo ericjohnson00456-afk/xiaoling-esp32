@@ -18,7 +18,7 @@
 #include "audio/player/audio_player.h"
 #include "device_state.h"
 #include "device_state_machine.h"
-#include "watchdog.h"
+#include "system/watchdog.h"
 
 // Main event bits
 #define MAIN_EVENT_SCHEDULE             (1 << 0)

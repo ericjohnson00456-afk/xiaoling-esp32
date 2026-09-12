@@ -3,7 +3,7 @@
 #include "i18n/lang_config.h"
 #include "board.h"
 #include "cloud/cloud_http.h"
-#include "system_info.h"
+#include "system/system_info.h"
 #include "xiaoling_config.h"
 
 #include <cJSON.h>
