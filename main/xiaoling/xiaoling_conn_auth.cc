@@ -4,6 +4,7 @@
 #include "board.h"
 #include "cloud/cloud_http.h"
 #include "system_info.h"
+#include "xiaoling_config.h"
 
 #include <cJSON.h>
 #include <esp_log.h>
@@ -59,7 +60,7 @@ bool XiaolingConn::EnsureAuthenticated() {
 }
 
 bool XiaolingConn::Authenticate(const std::string& extra_code) {
-    const std::string url = CONFIG_LSCHAT_TOKEN_URL;
+    const std::string url = XiaolingConfig::kTokenUrl;
     const auto product_id = SystemInfo::GetProductId();
     const auto device_id = SystemInfo::GetCloudDeviceId();
     const auto secret_id = SystemInfo::GetSecretId();

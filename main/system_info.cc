@@ -1,4 +1,5 @@
 #include "system_info.h"
+#include "xiaoling/xiaoling_config.h"
 
 #include <freertos/task.h>
 #include <esp_log.h>
@@ -68,7 +69,7 @@ std::string SystemInfo::GetSecretId() {
 }
 
 std::string SystemInfo::GetCloudDeviceId() {
-    std::string device_id = CONFIG_LSCHAT_DEVICE_ID;
+    std::string device_id = XiaolingConfig::kDeviceId;
     if (!device_id.empty()) {
         return device_id;
     }

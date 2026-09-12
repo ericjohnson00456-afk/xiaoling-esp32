@@ -5,6 +5,7 @@
 #include "system_info.h"
 #include "xiaoling_events.h"
 #include "xiaoling_voice.h"
+#include "xiaoling_config.h"
 
 #include <cJSON.h>
 #include <esp_app_desc.h>
@@ -128,7 +129,7 @@ std::string XiaolingConn::BuildWebSocketUrl() const {
         return {};
     }
 
-    std::string base_url = CONFIG_LSCHAT_WEBSOCKET_URL;
+    std::string base_url = XiaolingConfig::kWebSocketUrl;
     while (!base_url.empty() && base_url.back() == '/') {
         base_url.pop_back();
     }

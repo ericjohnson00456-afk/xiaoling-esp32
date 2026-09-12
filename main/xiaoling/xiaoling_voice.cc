@@ -2,6 +2,7 @@
 
 #include "system_info.h"
 #include "xiaoling_events.h"
+#include "xiaoling_config.h"
 
 #include <cJSON.h>
 #include <esp_log.h>
@@ -140,7 +141,7 @@ std::string XiaolingVoice::BuildStartMessage(ListeningMode mode) {
         cJSON_AddStringToObject(params, "fullduplex", "1");
     }
     cJSON_AddStringToObject(params, "data_type", "audio");
-    cJSON_AddStringToObject(params, "aue", CONFIG_LSCHAT_UPLINK_AUE);
+    cJSON_AddStringToObject(params, "aue", XiaolingConfig::kUplinkAudioEncoding);
 
     cJSON* features = cJSON_CreateArray();
     cJSON_AddItemToArray(features, cJSON_CreateString("nlu"));
@@ -259,7 +260,7 @@ bool XiaolingVoice::CheckUplinkAudioFormat(const AudioStreamPacket& packet) {
         return true;
     }
 
-    if (std::strcmp(CONFIG_LSCHAT_UPLINK_AUE, "raw") == 0) {
+    if (std::strcmp(XiaolingConfig::kUplinkAudioEncoding, "raw") == 0) {
         if (packet.sample_rate != kServerSampleRate ||
             packet.payload.size() % sizeof(int16_t) != 0) {
             ESP_LOGE(TAG, "上行 PCM 校验失败: sample_rate=%d, bytes=%u",
@@ -280,7 +281,7 @@ bool XiaolingVoice::CheckUplinkAudioFormat(const AudioStreamPacket& packet) {
     }
 
     const int duration_ms = sample_count * 1000 / packet.sample_rate;
-    if (std::strcmp(CONFIG_LSCHAT_UPLINK_AUE, "opus-wb") == 0 &&
+    if (std::strcmp(XiaolingConfig::kUplinkAudioEncoding, "opus-wb") == 0 &&
         (packet.sample_rate != kOpusWbSampleRate ||
          duration_ms != kOpusWbFrameDurationMs ||
          packet.payload.size() != kOpusWbPayloadBytes)) {
@@ -298,7 +299,7 @@ bool XiaolingVoice::SendUplinkAudioPacket(const AudioStreamPacket& packet) {
     if (!binary_sender_) {
         return false;
     }
-    if (std::strcmp(CONFIG_LSCHAT_UPLINK_AUE, "opus-wb") != 0) {
+    if (std::strcmp(XiaolingConfig::kUplinkAudioEncoding, "opus-wb") != 0) {
         return binary_sender_(packet.payload.data(), packet.payload.size());
     }
 

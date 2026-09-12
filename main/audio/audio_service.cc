@@ -1,4 +1,5 @@
 #include "audio_service.h"
+#include "xiaoling/xiaoling_config.h"
 #include <esp_log.h>
 #include <cstring>
 
@@ -368,7 +369,7 @@ void AudioService::OpusCodecTask() {
             packet->timestamp = task->timestamp;
 #ifdef CONFIG_LSPLATFORM
             const bool raw_uplink = task->type == kAudioTaskTypeEncodeToSendQueue &&
-                                    std::strcmp(CONFIG_LSCHAT_UPLINK_AUE, "raw") == 0;
+                                    std::strcmp(XiaolingConfig::kUplinkAudioEncoding, "raw") == 0;
             if (raw_uplink) {
                 // raw 协议要求 16 kHz、16-bit LE、单声道 PCM。
                 packet->payload.resize(task->pcm.size() * sizeof(int16_t));

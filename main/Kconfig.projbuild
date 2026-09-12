@@ -21,9 +21,9 @@ if LSPLATFORM
                 help
                     使用内置的 Product ID
             config LSPLATFORM_PRODUCT_ID_CUSTOM
-                bool "自定义"
+                bool "自建应用"
                 help
-                    使用自定义的 Product ID
+                    使用自建应用的 Product ID
         endchoice
         config LSPLATFORM_BUILTIN_PRODUCT_ID
             string
@@ -46,35 +46,14 @@ if LSPLATFORM
             default "ef22350d-6863-4814-8ed8-47c5b0c514a6"
             depends on LSPLATFORM_PRODUCT_ID_BUILTIN
         config LSPLATFORM_CUSTOM_PRODUCT_ID
-            string "自定义 Product ID"
+            string "自建应用 Product ID"
             depends on LSPLATFORM_PRODUCT_ID_CUSTOM
 
         config LSCHAT_SECRET_ID
-            string "lschat Secret ID"
+            string "自建应用 Product Secret"
             default ""
             help
-                用于获取 lschat token 的产品 Secret ID。生产固件应改由安全存储提供。
-
-        config LSCHAT_DEVICE_ID
-            string "lschat Device ID"
-            default ""
-            help
-                小聆平台登记的设备 ID。留空时使用去除分隔符后的 Wi-Fi MAC 地址。
-
-        config LSCHAT_TOKEN_URL
-            string "lschat Token URL"
-            default "http://api.listenai.com/v1/auth/tokens"
-
-        config LSCHAT_WEBSOCKET_URL
-            string "lschat WebSocket 基础 URL"
-            default "ws://api.listenai.com"
-
-        config LSCHAT_UPLINK_AUE
-            string "lschat 上行音频编码名称"
-            default "opus-wb"
-            help
-                必须与实际发送的音频数据以及云端协议枚举一致。
-                opus-wb 对应 16 kHz、单声道 Opus 包；raw 对应 16 kHz、16-bit LE、单声道 PCM。
+                用于获取 lschat token 的自建应用 Product Secret。生产固件应改由安全存储提供。
     endmenu
 
     # gmf_io 1.0.x 的后续候选使用该条件选择 USB Audio 依赖，
