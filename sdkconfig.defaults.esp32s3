@@ -25,6 +25,10 @@ CONFIG_SR_WN_WN9_NIHAOXIAOZHI_TTS=y
 
 CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
 
+# Use USB-Serial/JTAG as the primary console so the serial shell does not
+# reconfigure UART0 while the application is writing logs.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
 CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE=1536
 
 # LVGL Graphics

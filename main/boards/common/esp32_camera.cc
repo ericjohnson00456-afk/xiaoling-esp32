@@ -20,7 +20,6 @@
 #include "image_to_jpeg.h"
 #include "jpeg_to_image.h"
 #include "lvgl_display.h"
-#include "mcp_server.h"
 #include "system/system_info.h"
 
 #ifdef CONFIG_XIAOZHI_ENABLE_CAMERA_DEBUG_MODE

@@ -1,13 +1,13 @@
+#include "ui/display/display_factory.h"
+
+#include "boards/common/board_events.h"
 #include "dual_network_board.h"
 #include "codecs/no_audio_codec.h"
-#include "display/oled_display.h"
 #include "system_reset.h"
-#include "application.h"
 #include "button.h"
 #include "config.h"
 #include "power_save_timer.h"
 #include "led/single_led.h"
-#include "i18n/lang_config.h"
 #include "../xingzhi-cube-1.54tft-wifi/power_manager.h"
 
 #include <driver/rtc_io.h>
@@ -49,10 +49,10 @@ private:
 
         power_save_timer_ = new PowerSaveTimer(-1, 60, 300);
         power_save_timer_->OnEnterSleepMode([this]() {
-            GetDisplay()->SetPowerSaveMode(true);
+            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOn);
         });
         power_save_timer_->OnExitSleepMode([this]() {
-            GetDisplay()->SetPowerSaveMode(false);
+            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOff);
         });
         power_save_timer_->OnShutdownRequest([this]() {
             ESP_LOGI(TAG, "Shutting down");
@@ -117,7 +117,7 @@ private:
         ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_));
         if (esp_lcd_panel_init(panel_) != ESP_OK) {
             ESP_LOGE(TAG, "Failed to initialize display");
-            display_ = new NoDisplay();
+            display_ = CreateNoDisplay();
             return;
         }
 
@@ -125,26 +125,24 @@ private:
         ESP_LOGI(TAG, "Turning display on");
         ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_, true));
 
-        display_ = new OledDisplay(panel_io_, panel_, DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
+        display_ = CreateOledDisplay(panel_io_, panel_, DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
     }
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
             power_save_timer_->WakeUp();
-            auto& app = Application::GetInstance();
             if (GetNetworkType() == NetworkType::WIFI) {
-                if (app.GetDeviceState() == kDeviceStateStarting) {
+                if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
                     // cast to WifiBoard
                     auto& wifi_board = static_cast<WifiBoard&>(GetCurrentBoard());
                     wifi_board.EnterWifiConfigMode();
                     return;
                 }
             }
-            app.ToggleChatState();
+            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
         });
         boot_button_.OnDoubleClick([this]() {
-            auto& app = Application::GetInstance();
-            if (app.GetDeviceState() == kDeviceStateStarting || app.GetDeviceState() == kDeviceStateWifiConfiguring) {
+            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting || BoardEvents::GetRuntimeState() == kDeviceStateWifiConfiguring) {
                 SwitchNetworkType();
             }
         });
@@ -157,13 +155,13 @@ private:
                 volume = 100;
             }
             codec->SetOutputVolume(volume);
-            GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
+            BoardEvents::PostInput(BoardEvents::Input::VolumeChanged, volume);
         });
 
         volume_up_button_.OnLongPress([this]() {
             power_save_timer_->WakeUp();
             GetAudioCodec()->SetOutputVolume(100);
-            GetDisplay()->ShowNotification(Lang::Strings::MAX_VOLUME);
+            BoardEvents::PostInput(BoardEvents::Input::VolumeMax);
         });
 
         volume_down_button_.OnClick([this]() {
@@ -174,13 +172,13 @@ private:
                 volume = 0;
             }
             codec->SetOutputVolume(volume);
-            GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
+            BoardEvents::PostInput(BoardEvents::Input::VolumeChanged, volume);
         });
 
         volume_down_button_.OnLongPress([this]() {
             power_save_timer_->WakeUp();
             GetAudioCodec()->SetOutputVolume(0);
-            GetDisplay()->ShowNotification(Lang::Strings::MUTED);
+            BoardEvents::PostInput(BoardEvents::Input::VolumeMuted);
         });
     }
 
@@ -232,3 +230,5 @@ public:
 };
 
 DECLARE_BOARD(XINGZHI_CUBE_0_96OLED_ML307);
+
+

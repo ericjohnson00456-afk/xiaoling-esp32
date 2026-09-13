@@ -49,24 +49,27 @@ def get_sound_files(directory):
     return [f for f in os.listdir(directory) if f.endswith('.ogg')]
 
 def generate_header(lang_code, output_path):
-    # 从输出路径推导项目结构
-    # output_path 通常是 main/i18n/lang_config.h
-    main_dir = os.path.dirname(output_path)  # main/assets
-    if os.path.basename(main_dir) in ('assets', 'i18n'):
-        main_dir = os.path.dirname(main_dir)  # main
-    project_dir = os.path.dirname(main_dir)  # 项目根目录
-    assets_dir = os.path.join(main_dir, 'assets')
-    
+    # The generated header lives under main/ui/i18n, while source assets live
+    # under main/resource/assets.
+    main_dir = os.path.dirname(output_path)
+    while os.path.basename(main_dir) != 'main' and os.path.dirname(main_dir) != main_dir:
+        main_dir = os.path.dirname(main_dir)
+    project_dir = os.path.dirname(main_dir)
+    assets_dir = os.path.join(main_dir, 'resource', 'assets')
+    if not os.path.isdir(assets_dir):
+        # Keep compatibility with older checkouts that still use main/assets.
+        assets_dir = os.path.join(main_dir, 'assets')
+
     # 构建语言JSON文件路径
     input_path = os.path.join(assets_dir, 'locales', lang_code, 'language.json')
-    
+
     print(f"Processing language: {lang_code}")
     print(f"Input file path: {input_path}")
     print(f"Output file path: {output_path}")
-    
+
     if not os.path.exists(input_path):
         raise FileNotFoundError(f"Language file not found: {input_path}")
-    
+
     with open(input_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
 
@@ -76,19 +79,19 @@ def generate_header(lang_code, output_path):
 
     # 加载 en-US 基准语言数据
     base_data = load_base_language(assets_dir)
-    
+
     # 合并字符串：以 en-US 为基准，用户语言覆盖
     base_strings = base_data.get('strings', {})
     user_strings = data['strings']
     merged_strings = base_strings.copy()
     merged_strings.update(user_strings)
-    
+
     # 统计信息
     base_count = len(base_strings)
     user_count = len(user_strings)
     total_count = len(merged_strings)
     fallback_count = total_count - user_count
-    
+
     print(f"Language {lang_code} string statistics:")
     print(f"  - Base language (en-US): {base_count} strings")
     print(f"  - User language: {user_count} strings")
@@ -107,29 +110,29 @@ def generate_header(lang_code, output_path):
     current_lang_dir = os.path.join(assets_dir, 'locales', lang_code)
     base_lang_dir = os.path.join(assets_dir, 'locales', 'en-US')
     common_dir = os.path.join(assets_dir, 'common')
-    
+
     # 获取所有可能的音效文件
     base_sounds = get_sound_files(base_lang_dir)
     current_sounds = get_sound_files(current_lang_dir)
     common_sounds = get_sound_files(common_dir)
-    
+
     # 合并音效文件列表：用户语言覆盖基准语言
     all_sound_files = set(base_sounds)
     all_sound_files.update(current_sounds)
-    
+
     # 音效统计信息
     base_sound_count = len(base_sounds)
     user_sound_count = len(current_sounds)
     common_sound_count = len(common_sounds)
     sound_fallback_count = len(set(base_sounds) - set(current_sounds))
-    
+
     print(f"Language {lang_code} sound statistics:")
     print(f"  - Base language (en-US): {base_sound_count} sounds")
     print(f"  - User language: {user_sound_count} sounds")
     print(f"  - Common sounds: {common_sound_count} sounds")
     if sound_fallback_count > 0:
         print(f"  - Sound fallback to en-US: {sound_fallback_count} sounds")
-    
+
     # 生成语言特定音效常量
     for file in sorted(all_sound_files):
         base_name = os.path.splitext(file)[0]
@@ -138,7 +141,7 @@ def generate_header(lang_code, output_path):
             sound_lang = lang_code.replace('-', '_').lower()
         else:
             sound_lang = 'en_us'
-            
+
         sounds.append(f'''
         extern const char ogg_{base_name}_start[] asm("_binary_{base_name}_ogg_start");
         extern const char ogg_{base_name}_end[] asm("_binary_{base_name}_ogg_end");
@@ -146,7 +149,7 @@ def generate_header(lang_code, output_path):
         static_cast<const char*>(ogg_{base_name}_start),
         static_cast<size_t>(ogg_{base_name}_end - ogg_{base_name}_start)
         }};''')
-    
+
     # 生成公共音效常量
     for file in sorted(common_sounds):
         base_name = os.path.splitext(file)[0]

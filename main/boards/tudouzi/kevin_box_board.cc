@@ -1,13 +1,13 @@
+#include "ui/display/display_factory.h"
+
+#include "boards/common/board_events.h"
 #include "ml307_board.h"
 #include "codecs/box_audio_codec.h"
-#include "display/oled_display.h"
-#include "application.h"
 #include "button.h"
 #include "led/single_led.h"
 #include "config.h"
 #include "power_save_timer.h"
 #include "axp2101.h"
-#include "i18n/lang_config.h"
 
 #include <esp_log.h>
 #include <driver/gpio.h>
@@ -23,23 +23,23 @@ public:
         // ** EFUSE defaults **
         WriteReg(0x22, 0b110); // PWRON > OFFLEVEL as POWEROFF Source enable
         WriteReg(0x27, 0x10);  // hold 4s to power off
-    
+
         WriteReg(0x93, 0x1C); // 配置 aldo2 输出为 3.3V
-    
+
         uint8_t value = ReadReg(0x90); // XPOWERS_AXP2101_LDO_ONOFF_CTRL0
         value = value | 0x02; // set bit 1 (ALDO2)
         WriteReg(0x90, value);  // and power channels now enabled
-    
+
         WriteReg(0x64, 0x03); // CV charger voltage setting to 4.2V
-        
+
         WriteReg(0x61, 0x05); // set Main battery precharge current to 125mA
         WriteReg(0x62, 0x0A); // set Main battery charger current to 400mA ( 0x08-200mA, 0x09-300mA, 0x0A-400mA )
         WriteReg(0x63, 0x15); // set Main battery term charge current to 125mA
-    
+
         WriteReg(0x14, 0x00); // set minimum system voltage to 4.1V (default 4.7V), for poor USB cables
         WriteReg(0x15, 0x00); // set input voltage limit to 3.88v, for poor USB cables
         WriteReg(0x16, 0x05); // set input current limit to 2000mA
-    
+
         WriteReg(0x24, 0x01); // set Vsys for PWROFF threshold to 3.2V (default - 2.6V and kill battery)
         WriteReg(0x50, 0x14); // set TS pin to EXTERNAL input (not temperature)
     }
@@ -61,10 +61,10 @@ private:
     void InitializePowerSaveTimer() {
         power_save_timer_ = new PowerSaveTimer(240, 60, -1);
         power_save_timer_->OnEnterSleepMode([this]() {
-            GetDisplay()->SetPowerSaveMode(true);
+            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOn);
         });
         power_save_timer_->OnExitSleepMode([this]() {
-            GetDisplay()->SetPowerSaveMode(false);
+            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOff);
         });
         power_save_timer_->SetEnabled(true);
     }
@@ -134,7 +134,7 @@ private:
         ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_));
         if (esp_lcd_panel_init(panel_) != ESP_OK) {
             ESP_LOGE(TAG, "Failed to initialize display");
-            display_ = new NoDisplay();
+            display_ = CreateNoDisplay();
             return;
         }
 
@@ -142,7 +142,7 @@ private:
         ESP_LOGI(TAG, "Turning display on");
         ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_, true));
 
-        display_ = new OledDisplay(panel_io_, panel_, DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
+        display_ = CreateOledDisplay(panel_io_, panel_, DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
     }
 
     void InitializeCodecI2c() {
@@ -165,10 +165,10 @@ private:
     void InitializeButtons() {
         boot_button_.OnPressDown([this]() {
             power_save_timer_->WakeUp();
-            Application::GetInstance().StartListening();
+            BoardEvents::PostInput(BoardEvents::Input::TouchDown);
         });
         boot_button_.OnPressUp([this]() {
-            Application::GetInstance().StopListening();
+            BoardEvents::PostInput(BoardEvents::Input::TouchUp);
         });
 
         volume_up_button_.OnClick([this]() {
@@ -179,13 +179,13 @@ private:
                 volume = 100;
             }
             codec->SetOutputVolume(volume);
-            GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
+            BoardEvents::PostInput(BoardEvents::Input::VolumeChanged, volume);
         });
 
         volume_up_button_.OnLongPress([this]() {
             power_save_timer_->WakeUp();
             GetAudioCodec()->SetOutputVolume(100);
-            GetDisplay()->ShowNotification(Lang::Strings::MAX_VOLUME);
+            BoardEvents::PostInput(BoardEvents::Input::VolumeMax);
         });
 
         volume_down_button_.OnClick([this]() {
@@ -196,13 +196,13 @@ private:
                 volume = 0;
             }
             codec->SetOutputVolume(volume);
-            GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
+            BoardEvents::PostInput(BoardEvents::Input::VolumeChanged, volume);
         });
 
         volume_down_button_.OnLongPress([this]() {
             power_save_timer_->WakeUp();
             GetAudioCodec()->SetOutputVolume(0);
-            GetDisplay()->ShowNotification(Lang::Strings::MUTED);
+            BoardEvents::PostInput(BoardEvents::Input::VolumeMuted);
         });
     }
 
@@ -253,3 +253,4 @@ public:
 };
 
 DECLARE_BOARD(KevinBoxBoard);
+

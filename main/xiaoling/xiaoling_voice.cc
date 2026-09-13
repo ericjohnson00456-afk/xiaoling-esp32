@@ -7,7 +7,7 @@
 #include <cJSON.h>
 #include <esp_log.h>
 #include <esp_random.h>
-#include <mbedtls/base64.h>
+#include "base64_codec.h"
 #include <opus.h>
 
 #include <cstring>
@@ -40,35 +40,6 @@ std::string JsonToString(cJSON* root) {
     std::string result(text);
     cJSON_free(text);
     return result;
-}
-
-bool DecodeBase64Text(const char* encoded_text, std::string& decoded_text) {
-    if (encoded_text == nullptr || encoded_text[0] == '\0') {
-        return false;
-    }
-
-    const auto* encoded = reinterpret_cast<const unsigned char*>(encoded_text);
-    const size_t encoded_size = std::strlen(encoded_text);
-    size_t required_size = 0;
-    const int size_result = mbedtls_base64_decode(nullptr, 0, &required_size, encoded, encoded_size);
-    if (size_result != MBEDTLS_ERR_BASE64_BUFFER_TOO_SMALL || required_size == 0) {
-        return false;
-    }
-
-    std::vector<unsigned char> decoded(required_size + 1, 0);
-    size_t decoded_size = 0;
-    if (mbedtls_base64_decode(decoded.data(), required_size, &decoded_size,
-                              encoded, encoded_size) != 0 || decoded_size == 0) {
-        return false;
-    }
-    if (decoded[decoded_size - 1] == '\0') {
-        --decoded_size;
-    }
-    if (decoded_size == 0 || std::memchr(decoded.data(), '\0', decoded_size) != nullptr) {
-        return false;
-    }
-    decoded_text.assign(reinterpret_cast<const char*>(decoded.data()), decoded_size);
-    return true;
 }
 
 }  // 匿名命名空间
@@ -426,7 +397,8 @@ void XiaolingVoice::HandleTts(const cJSON* data) {
     auto& events = XiaolingEventBus::GetInstance();
     if (const auto* content = ReadString(data, "content")) {
         std::string url;
-        if (DecodeBase64Text(content, url)) {
+        if (content != nullptr && Base64Codec::Decode(content, url) && !url.empty() &&
+            std::memchr(url.data(), '\0', url.size()) == nullptr) {
             events.Publish(XIAOLING_TTS_URL, std::move(url));
         } else {
             ESP_LOGE(TAG, "小聆 TTS URL 解码失败");

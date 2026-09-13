@@ -1,6 +1,6 @@
 #include "xiaoling_conn.h"
 
-#include "i18n/lang_config.h"
+#include "ui/i18n/lang_config.h"
 #include "board.h"
 #include "cloud/cloud_http.h"
 #include "system/system_info.h"
@@ -53,7 +53,7 @@ bool XiaolingConn::EnsureAuthenticated() {
     }
     if (SystemInfo::GetSecretId().empty()) {
         ESP_LOGE(TAG, "CONFIG_LSCHAT_SECRET_ID 为空");
-        SetError(Lang::Strings::SERVER_NOT_CONNECTED);
+        SetError(XiaolingError::ServerNotConnected);
         return false;
     }
     return Authenticate();
@@ -66,7 +66,7 @@ bool XiaolingConn::Authenticate(const std::string& extra_code) {
     const auto secret_id = SystemInfo::GetSecretId();
     if (url.empty() || product_id.empty() || device_id.empty() || secret_id.empty()) {
         ESP_LOGE(TAG, "小聆鉴权参数不完整");
-        SetError(Lang::Strings::SERVER_NOT_CONNECTED);
+        SetError(XiaolingError::ServerNotConnected);
         return false;
     }
     const auto current_time = std::time(nullptr);
@@ -74,7 +74,7 @@ bool XiaolingConn::Authenticate(const std::string& extra_code) {
     const auto checksum = CalculateChecksum(secret_id + device_id + current_time_text);
     if (checksum.empty()) {
         ESP_LOGE(TAG, "计算小聆鉴权校验值失败");
-        SetError(Lang::Strings::SERVER_NOT_CONNECTED);
+        SetError(XiaolingError::ServerNotConnected);
         return false;
     }
 
@@ -110,7 +110,7 @@ bool XiaolingConn::Authenticate(const std::string& extra_code) {
     if (!http.PostJson(url, request_body, response, headers) ||
         response.status_code < 200 || response.status_code >= 300) {
         ESP_LOGE(TAG, "小聆鉴权失败: status=%d", response.status_code);
-        SetError(Lang::Strings::SERVER_NOT_CONNECTED);
+        SetError(XiaolingError::ServerNotConnected);
         return false;
     }
 

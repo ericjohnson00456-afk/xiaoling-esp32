@@ -1,7 +1,8 @@
+#include "ui/display/display_factory.h"
+
+#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "tcircles3_audio_codec.h"
-#include "display/lcd_display.h"
-#include "application.h"
 #include "button.h"
 #include "config.h"
 #include "power_save_timer.h"
@@ -53,18 +54,18 @@ class LilygoTCircleS3Board : public WifiBoard {
 private:
     i2c_master_bus_handle_t i2c_bus_;
     Cst816x *cst816d_;
-    LcdDisplay *display_;
+    Display *display_;
     Button boot_button_;
     PowerSaveTimer* power_save_timer_;
 
     void InitializePowerSaveTimer() {
         power_save_timer_ = new PowerSaveTimer(-1, 60, 300);
         power_save_timer_->OnEnterSleepMode([this]() {
-            GetDisplay()->SetPowerSaveMode(true);
+            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOn);
             GetBacklight()->SetBrightness(10);
         });
         power_save_timer_->OnExitSleepMode([this]() {
-            GetDisplay()->SetPowerSaveMode(false);
+            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOff);
             GetBacklight()->RestoreBrightness();
         });
         power_save_timer_->SetEnabled(true);
@@ -119,7 +120,7 @@ private:
                 // On press
                 if (!was_touched) {
                     was_touched = true;
-                    Application::GetInstance().ToggleChatState();
+                    BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
                 }
             }
             // On release
@@ -179,7 +180,7 @@ private:
         esp_lcd_panel_swap_xy(panel, DISPLAY_SWAP_XY);
         esp_lcd_panel_mirror(panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
 
-        display_ = new SpiLcdDisplay(panel_io, panel,
+        display_ = CreateSpiLcdDisplay(panel_io, panel,
                                   DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X,
                                   DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
 
@@ -199,12 +200,11 @@ private:
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
             power_save_timer_->WakeUp();
-            auto& app = Application::GetInstance();
-            if (app.GetDeviceState() == kDeviceStateStarting) {
+            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
-            app.ToggleChatState();
+            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
         });
     }
 
@@ -244,7 +244,7 @@ public:
         }
         WifiBoard::SetPowerSaveLevel(level);
     }
-    
+
     virtual Backlight* GetBacklight() override {
         static PwmBacklight backlight(DISPLAY_BACKLIGHT_PIN, DISPLAY_BACKLIGHT_OUTPUT_INVERT);
         return &backlight;
@@ -256,3 +256,5 @@ public:
 };
 
 DECLARE_BOARD(LilygoTCircleS3Board);
+
+

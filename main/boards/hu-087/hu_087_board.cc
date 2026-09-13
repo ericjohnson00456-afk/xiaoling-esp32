@@ -1,18 +1,16 @@
+#include "ui/display/display_factory.h"
+
+#include "boards/common/board_events.h"
 #include <driver/i2c_master.h>
 #include <esp_lcd_panel_ops.h>
 #include <esp_lcd_panel_vendor.h>
 #include <esp_log.h>
 
-#include "application.h"
-#include "i18n/lang_config.h"
 #include "boards/common/wifi_board.h"
 #include "button.h"
 #include "codecs/no_audio_codec.h"
 #include "config.h"
-#include "display/oled_display.h"
-#include "lamp_controller.h"
 #include "led/single_led.h"
-#include "mcp_server.h"
 #include "system_reset.h"
 
 #define TAG "Hu087Board"
@@ -81,7 +79,7 @@ class Hu087Board : public WifiBoard {
         ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_));
         if (esp_lcd_panel_init(panel_) != ESP_OK) {
             ESP_LOGE(TAG, "Failed to initialize display");
-            display_ = new NoDisplay();
+            display_ = CreateNoDisplay();
             return;
         }
 
@@ -89,7 +87,7 @@ class Hu087Board : public WifiBoard {
         ESP_LOGI(TAG, "Turning display on");
         ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_, true));
 
-        display_ = new OledDisplay(panel_io_, panel_, DISPLAY_WIDTH, DISPLAY_HEIGHT,
+        display_ = CreateOledDisplay(panel_io_, panel_, DISPLAY_WIDTH, DISPLAY_HEIGHT,
                                    DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
     }
 
@@ -107,12 +105,11 @@ class Hu087Board : public WifiBoard {
 
     void InitializeButtons() {
         touch_button_.OnClick([this]() {
-            auto& app = Application::GetInstance();
-            if (app.GetDeviceState() == kDeviceStateStarting) {
+            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
-            app.ToggleChatState();
+            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
         });
 
         touch_button_.OnLongPress([this]() {
@@ -122,8 +119,7 @@ class Hu087Board : public WifiBoard {
                 volume = 100;
             }  // Need to implement logic to lower volume
             codec->SetOutputVolume(volume);
-            GetDisplay()->ShowNotification(Lang::Strings::VOLUME +
-                                           std::to_string(volume));
+            BoardEvents::PostInput(BoardEvents::Input::VolumeChanged, volume);
         });
     }
 
@@ -149,3 +145,4 @@ class Hu087Board : public WifiBoard {
 };
 
 DECLARE_BOARD(Hu087Board);
+

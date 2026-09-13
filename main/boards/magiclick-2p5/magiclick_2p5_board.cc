@@ -1,11 +1,10 @@
+#include "boards/common/board_events.h"
 #include "dual_network_board.h"
-#include "display/lcd_display.h"
+#include "ui/display/lcd_display.h"
 #include "codecs/es8311_audio_codec.h"
-#include "application.h"
 #include "button.h"
 #include "led/circular_strip.h"
 #include "config.h"
-#include "i18n/lang_config.h"
 
 #include <esp_lcd_panel_vendor.h>
 #include <esp_log.h>
@@ -91,14 +90,14 @@ private:
     void InitializePowerSaveTimer() {
         power_save_timer_ = new PowerSaveTimer(240, 60, -1);
         power_save_timer_->OnEnterSleepMode([this]() {
-            GetDisplay()->SetPowerSaveMode(true);
+            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOn);
             GetBacklight()->SetBrightness(1);
         });
         power_save_timer_->OnExitSleepMode([this]() {
-            GetDisplay()->SetPowerSaveMode(false);
+            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOff);
             GetBacklight()->RestoreBrightness();
         });
-         
+
         power_save_timer_->SetEnabled(true);
     }
 
@@ -138,49 +137,47 @@ private:
         } else if (GetNetworkType() == NetworkType::ML307) {
             Enable4GModule();
         }
-        
+
     }
 
     void InitializeButtons() {
         main_button_.OnClick([this]() {
-            auto& app = Application::GetInstance();
             if (GetNetworkType() == NetworkType::WIFI) {
-                if (app.GetDeviceState() == kDeviceStateStarting) {
+                if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
                     // cast to WifiBoard
                     auto& wifi_board = static_cast<WifiBoard&>(GetCurrentBoard());
                     wifi_board.EnterWifiConfigMode();
                 }
             }
-        });        
+        });
         main_button_.OnDoubleClick([this]() {
-            auto& app = Application::GetInstance();
-            if (app.GetDeviceState() == kDeviceStateStarting || app.GetDeviceState() == kDeviceStateWifiConfiguring) {
+            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting || BoardEvents::GetRuntimeState() == kDeviceStateWifiConfiguring) {
                 SwitchNetworkType();
             }
         });
         main_button_.OnPressDown([this]() {
             power_save_timer_->WakeUp();
-            Application::GetInstance().StartListening();
+            BoardEvents::PostInput(BoardEvents::Input::TouchDown);
         });
         main_button_.OnPressUp([this]() {
-            Application::GetInstance().StopListening();
+            BoardEvents::PostInput(BoardEvents::Input::TouchUp);
         });
 
         left_button_.OnClick([this]() {
-            power_save_timer_->WakeUp();            
+            power_save_timer_->WakeUp();
             auto codec = GetAudioCodec();
             auto volume = codec->output_volume() - 10;
             if (volume < 0) {
                 volume = 0;
             }
             codec->SetOutputVolume(volume);
-            GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
+            BoardEvents::PostInput(BoardEvents::Input::VolumeChanged, volume);
         });
 
         left_button_.OnLongPress([this]() {
             power_save_timer_->WakeUp();
             GetAudioCodec()->SetOutputVolume(0);
-            GetDisplay()->ShowNotification(Lang::Strings::MUTED);
+            BoardEvents::PostInput(BoardEvents::Input::VolumeMuted);
         });
 
         right_button_.OnClick([this]() {
@@ -191,13 +188,13 @@ private:
                 volume = 100;
             }
             codec->SetOutputVolume(volume);
-            GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
+            BoardEvents::PostInput(BoardEvents::Input::VolumeChanged, volume);
         });
 
         right_button_.OnLongPress([this]() {
             power_save_timer_->WakeUp();
             GetAudioCodec()->SetOutputVolume(100);
-            GetDisplay()->ShowNotification(Lang::Strings::MAX_VOLUME);
+            BoardEvents::PostInput(BoardEvents::Input::VolumeMax);
         });
     }
 
@@ -235,7 +232,7 @@ private:
         ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi(SPI3_HOST, &io_config, &panel_io));
 
         // 初始化液晶屏驱动芯片GC9107
-        ESP_LOGD(TAG, "Install LCD driver");        
+        ESP_LOGD(TAG, "Install LCD driver");
         gc9a01_vendor_config_t gc9107_vendor_config = {
             .init_cmds = gc9107_lcd_init_cmds,
             .init_cmds_size = sizeof(gc9107_lcd_init_cmds) / sizeof(gc9a01_lcd_init_cmd_t),
@@ -262,7 +259,7 @@ private:
 public:
     magiclick_2p5() : DualNetworkBoard(ML307_TX_PIN, ML307_RX_PIN, GPIO_NUM_NC, 0),
         main_button_(MAIN_BUTTON_GPIO),
-        left_button_(LEFT_BUTTON_GPIO), 
+        left_button_(LEFT_BUTTON_GPIO),
         right_button_(RIGHT_BUTTON_GPIO) {
         InitializeLedPower();
         CheckNetType();
@@ -290,7 +287,7 @@ public:
     virtual Display* GetDisplay() override {
         return display_;
     }
-    
+
     virtual Backlight* GetBacklight() override {
         static PwmBacklight backlight(DISPLAY_BACKLIGHT_PIN, DISPLAY_BACKLIGHT_OUTPUT_INVERT);
         return &backlight;
@@ -317,3 +314,5 @@ public:
 };
 
 DECLARE_BOARD(magiclick_2p5);
+
+

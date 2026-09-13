@@ -1,7 +1,7 @@
+#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "codecs/no_audio_codec.h"
 #include "system_reset.h"
-#include "application.h"
 #include "button.h"
 #include "config.h"
 #include "led/gpio_led.h"
@@ -34,12 +34,11 @@ private:
                 click_times = 0;
                 check_time = 0;
             }
-            auto& app = Application::GetInstance();
-            if (app.GetDeviceState() == kDeviceStateStarting) {
+            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
-            app.ToggleChatState();
+            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
         });
         boot_button_.OnDoubleClick([this]() {
             click_times++;
@@ -61,11 +60,11 @@ private:
 
         touch_button_.OnPressDown([this]() {
             click_times = 0;
-            Application::GetInstance().StartListening();
+            BoardEvents::PostInput(BoardEvents::Input::TouchDown);
         });
         touch_button_.OnPressUp([this]() {
             click_times = 0;
-            Application::GetInstance().StopListening();
+            BoardEvents::PostInput(BoardEvents::Input::TouchUp);
         });
 
         volume_up_button_.OnClick([this]() {

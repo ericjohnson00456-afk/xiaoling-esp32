@@ -1,12 +1,11 @@
+#include "ui/display/display_factory.h"
+
+#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "codecs/no_audio_codec.h"
-#include "display/lcd_display.h"
 #include "system_reset.h"
-#include "application.h"
 #include "button.h"
 #include "config.h"
-#include "mcp_server.h"
-#include "lamp_controller.h"
 #include "led/single_led.h"
 #include "esp32_camera.h"
 
@@ -57,14 +56,14 @@ static const gc9a01_lcd_init_cmd_t gc9107_lcd_init_cmds[] = {
     {0xba, (uint8_t[]){0xFF, 0xFF}, 2, 0},
 };
 #endif
- 
+
 #define TAG "CompactWifiBoardS3Cam"
 
 class CompactWifiBoardS3Cam : public WifiBoard {
 private:
- 
+
     Button boot_button_;
-    LcdDisplay* display_;
+    Display* display_;
      Esp32Camera* camera_;
 
     void InitializeSpi() {
@@ -106,11 +105,11 @@ private:
         gc9a01_vendor_config_t gc9107_vendor_config = {
             .init_cmds = gc9107_lcd_init_cmds,
             .init_cmds_size = sizeof(gc9107_lcd_init_cmds) / sizeof(gc9a01_lcd_init_cmd_t),
-        };        
+        };
 #else
         ESP_ERROR_CHECK(esp_lcd_new_panel_st7789(panel_io, &panel_config, &panel));
 #endif
-        
+
         esp_lcd_panel_reset(panel);
 
         esp_lcd_panel_init(panel);
@@ -120,7 +119,7 @@ private:
 #ifdef  LCD_TYPE_GC9A01_SERIAL
         panel_config.vendor_config = &gc9107_vendor_config;
 #endif
-        display_ = new SpiLcdDisplay(panel_io, panel,
+        display_ = CreateSpiLcdDisplay(panel_io, panel,
                                     DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
 
@@ -171,12 +170,11 @@ private:
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
-            auto& app = Application::GetInstance();
-            if (app.GetDeviceState() == kDeviceStateStarting) {
+            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
-            app.ToggleChatState();
+            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
         });
     }
 
@@ -190,7 +188,7 @@ public:
         if (DISPLAY_BACKLIGHT_PIN != GPIO_NUM_NC) {
             GetBacklight()->RestoreBrightness();
         }
-        
+
     }
 
     virtual Led* GetLed() override {
@@ -227,3 +225,4 @@ public:
 };
 
 DECLARE_BOARD(CompactWifiBoardS3Cam);
+

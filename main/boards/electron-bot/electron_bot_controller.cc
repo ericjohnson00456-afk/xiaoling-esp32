@@ -7,7 +7,6 @@
 
 #include <cstring>
 
-#include "application.h"
 #include "board.h"
 #include "config.h"
 #include "mcp_server.h"

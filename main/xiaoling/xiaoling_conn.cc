@@ -1,6 +1,5 @@
 #include "xiaoling_conn.h"
 
-#include "i18n/lang_config.h"
 #include "board.h"
 #include "system/system_info.h"
 #include "xiaoling_events.h"
@@ -28,8 +27,8 @@ XiaolingConn::XiaolingConn() {
         },
         [this](XiaolingVoiceError error) {
             SetError(error == XiaolingVoiceError::kServerTimeout
-                         ? Lang::Strings::SERVER_TIMEOUT
-                         : Lang::Strings::SERVER_ERROR);
+                         ? XiaolingError::ServerTimeout
+                         : XiaolingError::ServerError);
         });
 }
 
@@ -57,7 +56,7 @@ bool XiaolingConn::Connect() {
     protocol_connected_ = false;
     xEventGroupClearBits(event_group_, kProtocolConnectedBit);
     if (!StartSupervisor()) {
-        SetError(Lang::Strings::SERVER_NOT_CONNECTED);
+        SetError(XiaolingError::ServerNotConnected);
         return false;
     }
 
@@ -66,7 +65,7 @@ bool XiaolingConn::Connect() {
                                           pdMS_TO_TICKS(kProtocolConnectTimeoutMs));
     if (!(bits & kProtocolConnectedBit) || !protocol_connected_) {
         ESP_LOGE(TAG, "等待小聆 connected 消息超时");
-        SetError(Lang::Strings::SERVER_TIMEOUT);
+        SetError(XiaolingError::ServerTimeout);
         StopSupervisor();
         return false;
     }
@@ -145,7 +144,7 @@ void XiaolingConn::OnIncomingJson(std::function<void(const cJSON*)> callback) {
     on_incoming_json_ = std::move(callback);
 }
 
-void XiaolingConn::OnNetworkError(std::function<void(const std::string&)> callback) {
+void XiaolingConn::OnNetworkError(std::function<void(XiaolingError)> callback) {
     on_network_error_ = std::move(callback);
 }
 
@@ -356,9 +355,9 @@ void XiaolingConn::HandleTransportDisconnected(uint32_t generation) {
     }
 }
 
-void XiaolingConn::SetError(const std::string& message) {
+void XiaolingConn::SetError(XiaolingError error) {
     error_occurred_ = true;
     if (on_network_error_) {
-        on_network_error_(message);
+        on_network_error_(error);
     }
 }

@@ -6,7 +6,6 @@
 #include <esp_log.h>
 #include <esp_err.h>
 #include <esp_lvgl_port.h>
-#include "i18n/lang_config.h"
 #include <cstring>
 #include "settings.h"
 
@@ -81,7 +80,7 @@ void CustomLcdDisplay::lvgl_port_flush_callback(lv_display_t *drv, const lv_area
     uint16_t *map = (uint16_t*)color_map;
 #endif
     xSemaphoreGive(trans_done_sem);
-    
+
     for(int i = 0; i<flush_coun; i++) {
         xSemaphoreTake(trans_done_sem,portMAX_DELAY);
         memcpy(trans_buf_1,map,LVGL_DMA_BUFF_LEN);

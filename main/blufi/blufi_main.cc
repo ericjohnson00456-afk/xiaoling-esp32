@@ -30,7 +30,7 @@
 
 #include "ssid_manager.h"
 #include "settings.h"
-#include "i18n/lang_config.h"
+#include "ui/i18n/lang_config.h"
 #include "board.h"
 #include "display.h"
 #include "application.h"

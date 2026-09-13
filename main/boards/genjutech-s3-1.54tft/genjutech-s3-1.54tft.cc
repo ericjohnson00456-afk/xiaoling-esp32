@@ -1,8 +1,9 @@
+#include "ui/display/display_factory.h"
+
+#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "codecs/es8311_audio_codec.h"
-#include "display/lcd_display.h"
 #include "system_reset.h"
-#include "application.h"
 #include "button.h"
 #include "config.h"
 #include "led/single_led.h"
@@ -15,21 +16,20 @@
 #include <freertos/task.h>
 #include "power_save_timer.h"
 
-#include "i18n/lang_config.h"
 #include "power_manager.h"
 
 #define TAG "GenJuTech_s3_1_54TFT"
 
 class SparkBotEs8311AudioCodec : public Es8311AudioCodec {
-    private:    
-    
+    private:
+
     public:
         SparkBotEs8311AudioCodec(void* i2c_master_handle, i2c_port_t i2c_port, int input_sample_rate, int output_sample_rate,
                             gpio_num_t mclk, gpio_num_t bclk, gpio_num_t ws, gpio_num_t dout, gpio_num_t din,
                             gpio_num_t pa_pin, uint8_t es8311_addr, bool use_mclk = true)
             : Es8311AudioCodec(i2c_master_handle, i2c_port, input_sample_rate, output_sample_rate,
                                  mclk,  bclk,  ws,  dout,  din,pa_pin,  es8311_addr,  use_mclk = true) {}
-    
+
         void EnableOutput(bool enable) override {
             if (enable == output_enabled_) {
                 return;
@@ -48,7 +48,7 @@ private:
     Button boot_button_;
     Button volume_up_button_;
     Button volume_down_button_;
-    LcdDisplay* display_;
+    Display* display_;
     i2c_master_bus_handle_t codec_i2c_bus_;
     PowerSaveTimer* power_save_timer_;
     PowerManager* power_manager_;
@@ -68,10 +68,10 @@ private:
         // 第一个参数不为 -1 时，进入睡眠会关闭音频输入
         power_save_timer_ = new PowerSaveTimer(240, 60);
         power_save_timer_->OnEnterSleepMode([this]() {
-            GetDisplay()->SetPowerSaveMode(true);
+            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOn);
         });
         power_save_timer_->OnExitSleepMode([this]() {
-            GetDisplay()->SetPowerSaveMode(false);
+            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOff);
         });
         power_save_timer_->SetEnabled(true);
     }
@@ -107,18 +107,17 @@ private:
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
             power_save_timer_->WakeUp();
-            auto& app = Application::GetInstance();
-            if (app.GetDeviceState() == kDeviceStateStarting) {
+            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
-            app.ToggleChatState();
+            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
         });
         // boot_button_.OnPressDown([this]() {
-        //     Application::GetInstance().StartListening();
+        //     BoardEvents::PostInput(BoardEvents::Input::TouchDown);
         // });
         // boot_button_.OnPressUp([this]() {
-        //     Application::GetInstance().StopListening();
+        //     BoardEvents::PostInput(BoardEvents::Input::TouchUp);
         // });
 
         volume_up_button_.OnClick([this]() {
@@ -129,13 +128,13 @@ private:
                 volume = 100;
             }
             codec->SetOutputVolume(volume);
-            GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
+            BoardEvents::PostInput(BoardEvents::Input::VolumeChanged, volume);
         });
 
         volume_up_button_.OnLongPress([this]() {
             power_save_timer_->WakeUp();
             GetAudioCodec()->SetOutputVolume(100);
-            GetDisplay()->ShowNotification(Lang::Strings::MAX_VOLUME);
+            BoardEvents::PostInput(BoardEvents::Input::VolumeMax);
         });
 
         volume_down_button_.OnClick([this]() {
@@ -146,13 +145,13 @@ private:
                 volume = 0;
             }
             codec->SetOutputVolume(volume);
-            GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
+            BoardEvents::PostInput(BoardEvents::Input::VolumeChanged, volume);
         });
 
         volume_down_button_.OnLongPress([this]() {
             power_save_timer_->WakeUp();
             GetAudioCodec()->SetOutputVolume(0);
-            GetDisplay()->ShowNotification(Lang::Strings::MUTED);
+            BoardEvents::PostInput(BoardEvents::Input::VolumeMuted);
         });
     }
 
@@ -196,7 +195,7 @@ private:
         ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y));
         ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel, true));
 
-        display_ = new SpiLcdDisplay(panel_io, panel,
+        display_ = CreateSpiLcdDisplay(panel_io, panel,
                             DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
 
@@ -230,7 +229,7 @@ public:
     virtual Display *GetDisplay() override {
         return display_;
     }
-    
+
     virtual Backlight* GetBacklight() override {
         static PwmBacklight backlight(DISPLAY_BACKLIGHT_PIN, DISPLAY_BACKLIGHT_OUTPUT_INVERT);
         return &backlight;
@@ -257,3 +256,5 @@ public:
 };
 
 DECLARE_BOARD(GenJuTech_s3_1_54TFT);
+
+

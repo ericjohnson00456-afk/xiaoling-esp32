@@ -1,8 +1,8 @@
+#include "ui/display/display_factory.h"
+
+#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "codecs/box_audio_codec.h"
-#include "display/lcd_display.h"
-#include "display/emote_display.h"
-#include "application.h"
 #include "button.h"
 #include "config.h"
 #include "backlight.h"
@@ -240,7 +240,7 @@ public:
 
         int16_t voltage = static_cast<uint16_t>(read_buffer_[1] << 8 | read_buffer_[0]);
         int16_t current = static_cast<int16_t>(read_buffer_[3] << 8 | read_buffer_[2]);
-        
+
         // Use the variables to avoid warnings (can be removed if actual implementation uses them)
         (void)voltage;
         (void)current;
@@ -468,7 +468,6 @@ private:
 
         while (true) {
             if (touchpad->WaitForTouchEvent()) {
-                auto &app = Application::GetInstance();
                 auto &board = (EchoEar &)Board::GetInstance();
 
                 ESP_LOGI(TAG, "Touch event, TP_PIN_NUM_INT: %d", gpio_get_level(TP_PIN_NUM_INT));
@@ -476,10 +475,10 @@ private:
                 auto touch_event = touchpad->CheckTouchEvent();
 
                 if (touch_event == Cst816s::TOUCH_RELEASE) {
-                    if (app.GetDeviceState() == kDeviceStateStarting) {
+                    if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
                         board.EnterWifiConfigMode();
                     } else {
-                        app.ToggleChatState();
+                        BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
                     }
                 }
             }
@@ -553,12 +552,8 @@ private:
         esp_lcd_panel_swap_xy(panel, DISPLAY_SWAP_XY);
         esp_lcd_panel_mirror(panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
 
-#if CONFIG_USE_EMOTE_MESSAGE_STYLE
-        display_ = new emote::EmoteDisplay(panel, panel_io, DISPLAY_WIDTH, DISPLAY_HEIGHT);
-#else
-        display_ = new SpiLcdDisplay(panel_io, panel,
+display_ = CreateSpiLcdDisplay(panel_io, panel,
             DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
-#endif
         backlight_ = new PwmBacklight(DISPLAY_BACKLIGHT_PIN, DISPLAY_BACKLIGHT_OUTPUT_INVERT);
         backlight_->RestoreBrightness();
     }
@@ -566,13 +561,12 @@ private:
     void InitializeButtons()
     {
         boot_button_.OnClick([this]() {
-            auto &app = Application::GetInstance();
-            if (app.GetDeviceState() == kDeviceStateStarting) {
+            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
                 ESP_LOGI(TAG, "Boot button pressed, enter WiFi configuration mode");
                 EnterWifiConfigMode();
                 return;
             }
-            app.ToggleChatState();
+            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
         });
         gpio_config_t power_gpio_config = {
             .pin_bit_mask = (BIT64(POWER_CTRL)),
@@ -664,3 +658,5 @@ public:
 };
 
 DECLARE_BOARD(EchoEar);
+
+

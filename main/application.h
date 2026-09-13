@@ -18,6 +18,7 @@
 #include "audio/player/audio_player.h"
 #include "device_state.h"
 #include "device_state_machine.h"
+#include "boards/common/board_events.h"
 #include "system/watchdog.h"
 
 // Main event bits
@@ -68,7 +69,7 @@ public:
 
     DeviceState GetDeviceState() const { return state_machine_.GetState(); }
     bool IsVoiceDetected() const { return audio_service_.IsVoiceDetected(); }
-    
+
     /**
      * Request state transition
      * Returns true if transition was successful
@@ -118,7 +119,7 @@ public:
     void PlayLocalizedTone(const char* name);
     void PlayTone(uint16_t tone_id);
     AudioService& GetAudioService() { return audio_service_; }
-    
+
     /**
      * Reset protocol resources (thread-safe)
      * Can be called from any task to release resources allocated after network connected
@@ -166,6 +167,16 @@ private:
     void HandleNetworkDisconnectedEvent();
     void HandleActivationDoneEvent();
     void HandleWakeWordDetectedEvent();
+    // Translate board hardware input events into application actions. Board
+    // implementations never include Application or call these methods.
+    void HandleBoardInput(const BoardEvents::InputEvent& event);
+    void HandleBoardWifiConfigHint(const BoardEvents::WifiConfigHintEvent& event);
+    void HandleBoardWakeWord(const BoardEvents::WakeWordEvent& event);
+    void HandleBoardSystemMessage(const BoardEvents::SystemMessageEvent& event);
+    void HandleBoardEmotion(const BoardEvents::EmotionEvent& event);
+    void HandleBoardLocalizedText(const BoardEvents::LocalizedTextEvent& event);
+    static void OnBoardInputEvent(void* arg, esp_event_base_t event_base,
+                                  int32_t event_id, void* event_data);
 
     // Activation task (runs in background)
     void ActivationTask();
@@ -176,7 +187,7 @@ private:
     void InitializeXiaolingConn();
     void ShowActivationCode(const std::string& code, const std::string& message, const std::string& qrcode = "");
     void SetListeningMode(ListeningMode mode);
-    
+
     // State change handler called by state machine
     void OnStateChanged(DeviceState old_state, DeviceState new_state);
 #ifdef CONFIG_LSPLATFORM

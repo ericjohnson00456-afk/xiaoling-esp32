@@ -1,21 +1,19 @@
 #include "dual_network_board.h"
-#include "application.h"
-#include "display.h"
-#include "i18n/lang_config.h"
+#include "board_events.h"
 #include "settings.h"
 #include <esp_log.h>
 
 static const char *TAG = "DualNetworkBoard";
 
-DualNetworkBoard::DualNetworkBoard(gpio_num_t ml307_tx_pin, gpio_num_t ml307_rx_pin, gpio_num_t ml307_dtr_pin, int32_t default_net_type) 
-    : Board(), 
-      ml307_tx_pin_(ml307_tx_pin), 
-      ml307_rx_pin_(ml307_rx_pin), 
+DualNetworkBoard::DualNetworkBoard(gpio_num_t ml307_tx_pin, gpio_num_t ml307_rx_pin, gpio_num_t ml307_dtr_pin, int32_t default_net_type)
+    : Board(),
+      ml307_tx_pin_(ml307_tx_pin),
+      ml307_rx_pin_(ml307_rx_pin),
       ml307_dtr_pin_(ml307_dtr_pin) {
-    
+
     // 从Settings加载网络类型
     network_type_ = LoadNetworkTypeFromSettings(default_net_type);
-    
+
     // 只初始化当前网络类型对应的板卡
     InitializeCurrentBoard();
 }
@@ -43,32 +41,33 @@ void DualNetworkBoard::InitializeCurrentBoard() {
 }
 
 void DualNetworkBoard::SwitchNetworkType() {
-    auto display = GetDisplay();
-    if (network_type_ == NetworkType::WIFI) {    
+    if (network_type_ == NetworkType::WIFI) {
         SaveNetworkTypeToSettings(NetworkType::ML307);
-        display->ShowNotification(Lang::Strings::SWITCH_TO_4G_NETWORK);
+        BoardEvents::PostInput(BoardEvents::Input::NetworkSwitchTo4G);
     } else {
         SaveNetworkTypeToSettings(NetworkType::WIFI);
-        display->ShowNotification(Lang::Strings::SWITCH_TO_WIFI_NETWORK);
+        BoardEvents::PostInput(BoardEvents::Input::NetworkSwitchToWifi);
     }
-    vTaskDelay(pdMS_TO_TICKS(1000));
-    auto& app = Application::GetInstance();
-    app.Reboot();
+    BoardEvents::PostInput(BoardEvents::Input::RebootRequested);
 }
 
- 
+bool DualNetworkBoard::EnterNetworkConfigMode() {
+    if (network_type_ != NetworkType::WIFI) {
+        return false;
+    }
+    auto* wifi_board = dynamic_cast<WifiBoard*>(current_board_.get());
+    if (wifi_board == nullptr) {
+        return false;
+    }
+    return wifi_board->EnterNetworkConfigMode();
+}
+
+
 std::string DualNetworkBoard::GetBoardType() {
     return current_board_->GetBoardType();
 }
 
 void DualNetworkBoard::StartNetwork() {
-    auto display = Board::GetInstance().GetDisplay();
-    
-    if (network_type_ == NetworkType::WIFI) {
-        display->SetStatus(Lang::Strings::CONNECTING);
-    } else {
-        display->SetStatus(Lang::Strings::DETECTING_MODULE);
-    }
     current_board_->StartNetwork();
 }
 
@@ -89,7 +88,7 @@ void DualNetworkBoard::SetPowerSaveLevel(PowerSaveLevel level) {
     current_board_->SetPowerSaveLevel(level);
 }
 
-std::string DualNetworkBoard::GetBoardJson() {   
+std::string DualNetworkBoard::GetBoardJson() {
     return current_board_->GetBoardJson();
 }
 

@@ -1,7 +1,7 @@
 #include "custom_wake_word.h"
 #include "audio_service.h"
 #include "system/system_info.h"
-#include "assets.h"
+#include "resource/assets.h"
 
 #include <esp_log.h>
 #include <esp_mn_iface.h>
@@ -125,7 +125,7 @@ bool CustomWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list) 
         esp_mn_commands_add(i + 1, commands_[i].command.c_str());
     }
     esp_mn_commands_update();
-    
+
     multinet_->print_active_speech_commands(multinet_model_data_);
     return true;
 }
@@ -161,19 +161,19 @@ void CustomWakeWord::Feed(const std::vector<int16_t>& data) {
         StoreWakeWordData(data);
         mn_state = multinet_->detect(multinet_model_data_, const_cast<int16_t*>(data.data()));
     }
-    
+
     if (mn_state == ESP_MN_STATE_DETECTING) {
         return;
     } else if (mn_state == ESP_MN_STATE_DETECTED) {
         esp_mn_results_t *mn_result = multinet_->get_results(multinet_model_data_);
         for (int i = 0; i < mn_result->num && running_; i++) {
-            ESP_LOGI(TAG, "Custom wake word detected: command_id=%d, string=%s, prob=%f", 
+            ESP_LOGI(TAG, "Custom wake word detected: command_id=%d, string=%s, prob=%f",
                     mn_result->command_id[i], mn_result->string, mn_result->prob[i]);
             auto& command = commands_[mn_result->command_id[i] - 1];
             if (command.action == "wake") {
                 last_detected_wake_word_ = command.text;
                 running_ = false;
-                
+
                 if (wake_word_detected_callback_) {
                     wake_word_detected_callback_(last_detected_wake_word_);
                 }

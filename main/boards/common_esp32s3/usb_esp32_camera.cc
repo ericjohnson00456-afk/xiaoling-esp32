@@ -1,5 +1,4 @@
 #include "usb_esp32_camera.h"
-#include "mcp_server.h"
 #include "display.h"
 #include "lvgl_display.h"
 #include "board.h"
@@ -33,7 +32,7 @@ jpeg_error_t esp_jpeg_decode_one_picture(uint8_t *input_buf, int len, uint8_t **
     config.rotate = JPEG_ROTATE_0D;
 
     // Create jpeg_dec handle
-    
+
     ret = jpeg_dec_open(&config, &jpeg_dec);
     if (ret != JPEG_ERR_OK) {
         return ret;
@@ -264,7 +263,7 @@ static void usb_stream_state_changed_cd(usb_stream_state_t event,void *arg)
                 uvc_frame_size_t *_frame_list = (uvc_frame_size_t *)heap_caps_aligned_alloc(16, camera_resolution_info.camera_frame_list_num * sizeof(uvc_frame_size_t),MALLOC_CAP_SPIRAM);
 
                 camera_resolution_info.camera_frame_list = (uvc_frame_size_t *)heap_caps_realloc(camera_resolution_info.camera_frame_list, camera_resolution_info.camera_frame_list_num * sizeof(uvc_frame_size_t),MALLOC_CAP_SPIRAM);
-                
+
                 if (NULL == camera_resolution_info.camera_frame_list)
                 {
                     ESP_LOGE(TAG, "camera_resolution_info.camera_frame_list");
@@ -339,7 +338,7 @@ static void usb_stream_state_changed_cd(usb_stream_state_t event,void *arg)
 }
 
 USB_Esp32Camera::USB_Esp32Camera() {
-    
+
     xfer_buffer_a = (uint8_t *)heap_caps_aligned_alloc(16, DEMO_UVC_XFER_BUFFER_SIZE,MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     assert(xfer_buffer_a != NULL);
     xfer_buffer_b = (uint8_t *)heap_caps_aligned_alloc(16, DEMO_UVC_XFER_BUFFER_SIZE,MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -348,7 +347,7 @@ USB_Esp32Camera::USB_Esp32Camera() {
     assert(frame_buffer != NULL);
     decode_frame_buffer = (uint8_t *)heap_caps_aligned_alloc(16,480 * 320 * 2,MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     assert(decode_frame_buffer != NULL);
-    
+
     /* USB数据流初始化 */
     ESP_ERROR_CHECK(usb_stream_init());
     /* 注册回调函数 */
@@ -417,7 +416,7 @@ bool USB_Esp32Camera::Capture() {
 
     //等待流稳定
     vTaskDelay(pdMS_TO_TICKS(500));
-    
+
     if (encoder_thread_.joinable()) {
         encoder_thread_.join();
     }
@@ -453,23 +452,23 @@ bool USB_Esp32Camera::SetVFlip(bool enabled) {
 }
 /**
  * @brief 将摄像头捕获的图像发送到远程服务器进行AI分析和解释
- * 
+ *
  * 该函数将当前摄像头缓冲区中的图像编码为JPEG格式，并通过HTTP POST请求
  * 以multipart/form-data的形式发送到指定的解释服务器。服务器将根据提供的
  * 问题对图像进行AI分析并返回结果。
- * 
+ *
  * 实现特点：
  * - 使用独立线程编码JPEG，与主线程分离
  * - 采用分块传输编码(chunked transfer encoding)优化内存使用
  * - 通过队列机制实现编码线程和发送线程的数据同步
  * - 支持设备ID、客户端ID和认证令牌的HTTP头部配置
- * 
+ *
  * @param question 要向AI提出的关于图像的问题，将作为表单字段发送
  * @return std::string 服务器返回的JSON格式响应字符串
  *         成功时包含AI分析结果，失败时包含错误信息
  *         格式示例：{"success": true, "result": "分析结果"}
  *                  {"success": false, "message": "错误信息"}
- * 
+ *
  * @note 调用此函数前必须先调用SetExplainUrl()设置服务器URL
  * @note 函数会等待之前的编码线程完成后再开始新的处理
  * @warning 如果摄像头缓冲区为空或网络连接失败，将返回错误信息
@@ -483,21 +482,21 @@ std::string USB_Esp32Camera::Explain(const std::string& question) {
     auto http = network->CreateHttp();
     // 构造multipart/form-data请求体
     std::string boundary = "----ESP32_CAMERA_BOUNDARY";
-    
+
     // 构造question字段
     std::string question_field;
     question_field += "--" + boundary + "\r\n";
     question_field += "Content-Disposition: form-data; name=\"question\"\r\n";
     question_field += "\r\n";
     question_field += question + "\r\n";
-    
+
     // 构造文件字段头部
     std::string file_header;
     file_header += "--" + boundary + "\r\n";
     file_header += "Content-Disposition: form-data; name=\"file\"; filename=\"camera.jpg\"\r\n";
     file_header += "Content-Type: image/jpeg\r\n";
     file_header += "\r\n";
-    
+
     // 构造尾部
     std::string multipart_footer;
     multipart_footer += "\r\n--" + boundary + "--\r\n";
@@ -514,19 +513,19 @@ std::string USB_Esp32Camera::Explain(const std::string& question) {
         ESP_LOGE(TAG, "Failed to connect to explain URL");
         throw std::runtime_error("Failed to connect to explain URL");
     }
-    
+
     // 第一块：question字段
     http->Write(question_field.c_str(), question_field.size());
-    
+
     // 第二块：文件字段头部
     http->Write(file_header.c_str(), file_header.size());
-    
+
     // 第三块：JPEG数据
     http->Write((const char*)jpeg_data_.fb_buf, jpeg_data_.fb_buf_size);
 
     // 第四块：multipart尾部
     http->Write(multipart_footer.c_str(), multipart_footer.size());
-    
+
     // 结束块
     http->Write("", 0);
 

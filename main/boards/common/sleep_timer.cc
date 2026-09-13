@@ -1,8 +1,8 @@
 #include "sleep_timer.h"
 #include "application.h"
-#include "board.h"
 #include "display.h"
 #include "settings.h"
+#include "board_events.h"
 
 #include <esp_log.h>
 #include <esp_sleep.h>
@@ -84,17 +84,16 @@ void SleepTimer::CheckTimer() {
                 audio_service.EnableWakeWordDetection(false);
                 vTaskDelay(pdMS_TO_TICKS(100));
             }
-        
+
             app.Schedule([this, &app]() {
                 while (in_light_sleep_mode_) {
-                    auto& board = Board::GetInstance();
-                    board.GetDisplay()->UpdateStatusBar(true);
+                    BoardEvents::PostInput(BoardEvents::Input::StatusBarRefresh, 1);
                     lv_refr_now(nullptr);
                     lvgl_port_stop();
-    
+
                     // 配置timer唤醒源（30秒后自动唤醒）
                     esp_sleep_enable_timer_wakeup(30 * 1000000);
-                    
+
                     // 进入light sleep模式
                     esp_light_sleep_start();
                     lvgl_port_resume();

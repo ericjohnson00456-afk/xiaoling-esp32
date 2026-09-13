@@ -1,4 +1,6 @@
+#include "boards/common/board_events.h"
 #include "afsk_demod.h"
+#include "application.h"
 #include <cstring>
 #include <algorithm>
 #include "esp_log.h"
@@ -33,7 +35,7 @@ namespace audio_wifi_config
                 vTaskDelay(pdMS_TO_TICKS(100));
                 continue;
             }
-            
+
             if (!app->GetAudioService().ReadAudioData(audio_data, 16000, 480)) { // 16kHz, 480 samples corresponds to 30ms data
                 // 读取音频失败，短暂延迟后重试
                 ESP_LOGI(kLogTag, "Failed to read audio data, retrying.");
@@ -48,7 +50,7 @@ namespace audio_wifi_config
                 }
                 audio_data = std::move(mono_data);
             }
-            
+
             // Downsample the audio data
             std::vector<float> downsampled_data;
             size_t last_index = 0;
@@ -68,17 +70,17 @@ namespace audio_wifi_config
                     downsampled_data.push_back(static_cast<float>(sample));
                 }
             }
-            
+
             // Process audio samples to get probability data
             auto probabilities = signal_processor.ProcessAudioSamples(downsampled_data);
-            
+
             // Feed probability data to the data buffer
             if (data_buffer.ProcessProbabilityData(probabilities, 0.5f)) {
                 // If complete data was received, extract WiFi credentials
                 if (data_buffer.decoded_text.has_value()) {
                     ESP_LOGI(kLogTag, "Received text data: %s", data_buffer.decoded_text->c_str());
-                    display->SetChatMessage("system", data_buffer.decoded_text->c_str());
-                    
+                    BoardEvents::PostSystemMessage("system", *data_buffer.decoded_text);
+
                     // Split SSID and password by newline character
                     std::string wifi_ssid, wifi_password;
                     size_t newline_position = data_buffer.decoded_text->find('\n');
@@ -90,15 +92,15 @@ namespace audio_wifi_config
                         ESP_LOGE(kLogTag, "Invalid data format, no newline character found");
                         continue;
                     }
-                    
+
                     // Save WiFi credentials using SsidManager
                     auto& ssid_manager = SsidManager::GetInstance();
                     ssid_manager.AddSsid(wifi_ssid, wifi_password);
                     ESP_LOGI(kLogTag, "WiFi credentials saved successfully");
-                    
+
                     // Exit config mode (triggers ConfigModeExit event)
                     wifi_manager->StopConfigAp();
-                    
+
                     data_buffer.decoded_text.reset();  // Clear processed data
                     return;  // Exit the function
                 }
@@ -162,7 +164,7 @@ namespace audio_wifi_config
         float real_part = cos_coefficient_ * s_minus_1 - s_minus_2;  // Real part
         float imaginary_part = sin_coefficient_ * s_minus_1;         // Imaginary part
 
-        return std::sqrt(real_part * real_part + imaginary_part * imaginary_part) / 
+        return std::sqrt(real_part * real_part + imaginary_part * imaginary_part) /
                (static_cast<float>(window_size_) / 2.0f);
     }
 
@@ -207,7 +209,7 @@ namespace audio_wifi_config
                     float space_amplitude = space_detector_->GetAmplitude(); // Space amplitude
 
                     // Avoid division by zero
-                    float mark_probability = mark_amplitude / 
+                    float mark_probability = mark_amplitude /
                                            (space_amplitude + mark_amplitude + std::numeric_limits<float>::epsilon());
                     result.push_back(mark_probability);
 
@@ -331,7 +333,7 @@ namespace audio_wifi_config
                             uint8_t calculated_checksum = CalculateChecksum(result);
                             if (calculated_checksum != received_checksum) {
                                 // Checksum mismatch
-                                ESP_LOGW(kLogTag, "Checksum mismatch: expected %d, got %d", 
+                                ESP_LOGW(kLogTag, "Checksum mismatch: expected %d, got %d",
                                         received_checksum, calculated_checksum);
                                 ClearBuffers();
                                 return false;

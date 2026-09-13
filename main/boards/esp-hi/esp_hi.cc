@@ -1,6 +1,6 @@
+#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "adc_pdm_audio_codec.h"
-#include "application.h"
 #include "button.h"
 #include "config.h"
 #include "mcp_server.h"
@@ -10,13 +10,12 @@
 #include <esp_wifi.h>
 #include <esp_event.h>
 
-#include "display/lcd_display.h"
+#include "ui/display/lcd_display.h"
 #include <esp_lcd_panel_vendor.h>
 #include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>
 #include "esp_lcd_ili9341.h"
 
-#include "i18n/lang_config.h"
 #include "anim_player.h"
 #include "emoji_display.h"
 #include "servo_dog_ctrl.h"
@@ -89,7 +88,7 @@ private:
             xTaskCreate(
                 [](void* arg) {
                     EspHi* instance = static_cast<EspHi*>(arg);
-                    
+
                     vTaskDelay(5000 / portTICK_PERIOD_MS);
 
                     if (!instance->web_server_initialized_) {
@@ -155,8 +154,7 @@ private:
                 if (interval < 100) {
                     ESP_LOGI(TAG, "gesture detected");
                     gesture_state = 0;
-                    auto &app = Application::GetInstance();
-                    app.ToggleChatState();
+                    BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
                 }
                 break;
             }
@@ -169,13 +167,12 @@ private:
         static int gesture_state = 0;  // 0: init, 1: wait second long interval, 2: wait oscillation
 
         boot_button_.OnClick([this]() {
-            auto &app = Application::GetInstance();
             // During startup (before connected), pressing BOOT button enters Wi-Fi config mode without reboot
-            if (app.GetDeviceState() == kDeviceStateStarting) {
+            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
-            app.ToggleChatState();
+            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
         });
 
         audio_wake_button_.OnPressDown([this]() {
@@ -194,7 +191,7 @@ private:
             HandleMoveWakePressUp(current_time, last_trigger_time, gesture_state);
         });
     }
-    
+
     void InitializeLed() {
         ESP_LOGI(TAG, "BLINK_GPIO setting %d", bsp_strip_config.strip_gpio_num);
 
@@ -298,13 +295,12 @@ private:
 #endif
     }
 
-    void InitializeTools()
+    void RegisterMcpTools(McpServer& mcp_server) override
     {
-        auto& mcp_server = McpServer::GetInstance();
-        
+
         // 基础动作控制
         mcp_server.AddTool("self.dog.basic_control", "机器人的基础动作。机器人可以做以下基础动作：\n"
-            "forward: 向前移动\nbackward: 向后移动\nturn_left: 向左转\nturn_right: 向右转\nstop: 立即停止当前动作", 
+            "forward: 向前移动\nbackward: 向后移动\nturn_left: 向左转\nturn_right: 向右转\nstop: 立即停止当前动作",
             PropertyList({
                 Property("action", kPropertyTypeString),
             }), [this](const PropertyList& properties) -> ReturnValue {
@@ -324,11 +320,11 @@ private:
                 }
                 return true;
             });
-        
+
         // 扩展动作控制
         mcp_server.AddTool("self.dog.advanced_control", "机器人的扩展动作。机器人可以做以下扩展动作：\n"
             "sway_back_forth: 前后摇摆\nlay_down: 趴下\nsway: 左右摇摆\nretract_legs: 收回腿部\n"
-            "shake_hand: 握手\nshake_back_legs: 伸懒腰\njump_forward: 向前跳跃", 
+            "shake_hand: 握手\nshake_back_legs: 伸懒腰\njump_forward: 向前跳跃",
             PropertyList({
                 Property("action", kPropertyTypeString),
             }), [this](const PropertyList& properties) -> ReturnValue {
@@ -397,7 +393,6 @@ public:
         InitializeIot();
         InitializeSpi();
         InitializeLcdDisplay();
-        InitializeTools();
     }
 
     virtual AudioCodec* GetAudioCodec() override
@@ -419,3 +414,5 @@ public:
 };
 
 DECLARE_BOARD(EspHi);
+
+

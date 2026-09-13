@@ -1,13 +1,12 @@
+#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "codecs/no_audio_codec.h"
 #include "zhengchen_lcd_display.h"
 #include "system_reset.h"
-#include "application.h"
 #include "button.h"
 #include "config.h"
 #include "power_save_timer.h"
 #include "led/single_led.h"
-#include "i18n/lang_config.h"
 #include "power_manager.h"
 
 #include <esp_log.h>
@@ -44,7 +43,7 @@ private:
                 ESP_LOGI("PowerManager", "Charging stopped");
             }
         });
-    
+
     }
 
     void InitializePowerSaveTimer() {
@@ -54,11 +53,11 @@ private:
 
         power_save_timer_ = new PowerSaveTimer(-1, 60, 300);
         power_save_timer_->OnEnterSleepMode([this]() {
-            GetDisplay()->SetPowerSaveMode(true);
+            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOn);
             GetBacklight()->SetBrightness(1);
         });
         power_save_timer_->OnExitSleepMode([this]() {
-            GetDisplay()->SetPowerSaveMode(false);
+            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOff);
             GetBacklight()->RestoreBrightness();
         });
         power_save_timer_->SetEnabled(true);
@@ -76,15 +75,14 @@ private:
     }
 
     void InitializeButtons() {
-        
+
         boot_button_.OnClick([this]() {
             power_save_timer_->WakeUp();
-            auto& app = Application::GetInstance();
-            if (app.GetDeviceState() == kDeviceStateStarting) {
+            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
-            app.ToggleChatState();
+            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
         });
 
         // 设置开机按钮的长按事件（直接进入配网模式）
@@ -92,11 +90,10 @@ private:
             // 唤醒电源保存定时器
             power_save_timer_->WakeUp();
             // 获取应用程序实例
-            auto& app = Application::GetInstance();
-            
+
             // 进入配网模式
-            app.SetDeviceState(kDeviceStateWifiConfiguring);
-            
+            BoardEvents::PostInput(BoardEvents::Input::EnterWifiConfigState);
+
             // 重置WiFi配置以确保进入配网模式
             EnterWifiConfigMode();
         });
@@ -109,13 +106,13 @@ private:
                 volume = 100;
             }
             codec->SetOutputVolume(volume);
-            GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume/10));
+            BoardEvents::PostInput(BoardEvents::Input::VolumeChanged, volume/10);
         });
 
         volume_up_button_.OnLongPress([this]() {
             power_save_timer_->WakeUp();
             GetAudioCodec()->SetOutputVolume(100);
-            GetDisplay()->ShowNotification(Lang::Strings::MAX_VOLUME);
+            BoardEvents::PostInput(BoardEvents::Input::VolumeMax);
         });
 
         volume_down_button_.OnClick([this]() {
@@ -126,13 +123,13 @@ private:
                 volume = 0;
             }
             codec->SetOutputVolume(volume);
-            GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume/10));
+            BoardEvents::PostInput(BoardEvents::Input::VolumeChanged, volume/10);
         });
 
         volume_down_button_.OnLongPress([this]() {
             power_save_timer_->WakeUp();
             GetAudioCodec()->SetOutputVolume(0);
-            GetDisplay()->ShowNotification(Lang::Strings::MUTED);
+            BoardEvents::PostInput(BoardEvents::Input::VolumeMuted);
         });
     }
 
@@ -160,12 +157,12 @@ private:
         ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel_, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y));
         ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel_, true));
 
-        display_ = new ZHENGCHEN_LcdDisplay(panel_io_, panel_, DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, 
+        display_ = new ZHENGCHEN_LcdDisplay(panel_io_, panel_, DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y,
             DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
         display_->SetupHighTempWarningPopup();
     }
 
-    void InitializeTools() {
+    void RegisterMcpTools(McpServer& mcp_server) override {
     }
 
 public:
@@ -177,8 +174,7 @@ public:
         InitializePowerSaveTimer();
         InitializeSpi();
         InitializeButtons();
-        InitializeSt7789Display();  
-        InitializeTools();
+        InitializeSt7789Display();
         GetBacklight()->RestoreBrightness();
     }
 
@@ -194,7 +190,7 @@ public:
     virtual Display* GetDisplay() override {
         return display_;
     }
-    
+
     virtual Backlight* GetBacklight() override {
         static PwmBacklight backlight(DISPLAY_BACKLIGHT_PIN, DISPLAY_BACKLIGHT_OUTPUT_INVERT);
         return &backlight;

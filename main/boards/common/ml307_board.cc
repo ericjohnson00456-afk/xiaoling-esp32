@@ -1,8 +1,7 @@
 #include "ml307_board.h"
 
-#include "application.h"
+#include "audio_codec.h"
 #include "display.h"
-#include "i18n/lang_config.h"
 
 #include <esp_log.h>
 #include <esp_timer.h>
@@ -67,8 +66,6 @@ void Ml307Board::OnNetworkEvent(NetworkEvent event, const std::string& data) {
 }
 
 void Ml307Board::NetworkTask() {
-    auto& application = Application::GetInstance();
-
     // Notify modem detection started
     OnNetworkEvent(NetworkEvent::ModemDetecting);
 
@@ -93,7 +90,7 @@ void Ml307Board::NetworkTask() {
 
     // Set up network state change callback
     // Note: Don't call GetCarrierName() here as it sends AT command and will block ReceiveTask
-    modem_->OnNetworkStateChanged([this, &application](bool network_ready) {
+    modem_->OnNetworkStateChanged([this](bool network_ready) {
         if (network_ready) {
             OnNetworkEvent(NetworkEvent::Connected);
         } else {
@@ -190,7 +187,7 @@ void Ml307Board::SetPowerSaveLevel(PowerSaveLevel level) {
 std::string Ml307Board::GetDeviceStatusJson() {
     /*
      * 返回设备状态JSON
-     * 
+     *
      * 返回的JSON结构如下：
      * {
      *     "audio_speaker": {

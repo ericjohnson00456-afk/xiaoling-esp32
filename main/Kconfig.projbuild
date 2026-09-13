@@ -72,7 +72,7 @@ if LSPLATFORM
             select BT_BLE_BLUFI_ENABLE
             select BT_BLE_42_FEATURES_SUPPORTED
             select MBEDTLS_DHM_C
-        config PROV_MODE_XIAOZHI    
+        config PROV_MODE_XIAOZHI
             bool "XIAOZHI配网方案"
     endchoice
 
@@ -84,7 +84,7 @@ if LSPLATFORM
         config BT_BLE_SMP_ENABLE
             default n
         config MBEDTLS_HARDWARE_MPI
-            default n  
+            default n
     endif # PROV_MODE_BLE
 endif # LSPLATFORM
 
@@ -207,7 +207,7 @@ choice BOARD_TYPE
         depends on IDF_TARGET_ESP32S3
     config BOARD_TYPE_BREAD_COMPACT_WIFI_CAM
         bool "Bread Compact WiFi + LCD + Camera (面包板)"
-        depends on IDF_TARGET_ESP32S3     
+        depends on IDF_TARGET_ESP32S3
     config BOARD_TYPE_BREAD_COMPACT_ML307
         bool "Bread Compact ML307/EC801E (面包板 4G)"
         depends on IDF_TARGET_ESP32S3
@@ -666,10 +666,6 @@ choice DISPLAY_STYLE
     config USE_XIAOLING_MESSAGE_STYLE
         bool "Enable Xiaoling Message Style"
         depends on LSPLATFORM
-
-    config USE_EMOTE_MESSAGE_STYLE
-        bool "Emote animation style"
-        depends on BOARD_TYPE_ESP_BOX_3 || BOARD_TYPE_ECHOEAR || BOARD_TYPE_LICHUANG_DEV_S3
 endchoice
 
 choice WAKE_WORD_TYPE
@@ -781,7 +777,7 @@ config USE_AUDIO_DEBUGGER
     help
         Enable audio debugger, send audio data through UDP to the host machine
 
-if PROV_MODE_XIAOZHI        
+if PROV_MODE_XIAOZHI
     menu "WiFi Configuration Method"
         help
             WiFi Configuration Method Selection
@@ -915,6 +911,18 @@ menu "TAIJIPAI_S3_CONFIG"
     default y
     help
         启动双声道
+endmenu
+
+menu "串口 Shell"
+    config ENABLE_SERIAL_SHELL
+        bool "Enable serial shell"
+        default y
+        help
+            Enable the runtime serial shell for reading and writing NVS settings.
+
+    if ENABLE_SERIAL_SHELL
+        comment "Shell transport follows the ESP-IDF console transport selection."
+    endif
 endmenu
 
 endmenu

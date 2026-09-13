@@ -1,8 +1,9 @@
+#include "ui/display/display_factory.h"
+
+#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "codecs/no_audio_codec.h"
-#include "display/lcd_display.h"
 #include "system_reset.h"
-#include "application.h"
 #include "button.h"
 #include "config.h"
 #include "led/single_led.h"
@@ -21,7 +22,7 @@
 class DuChatX : public WifiBoard {
 private:
     Button boot_button_;
-    LcdDisplay *display_;
+    Display *display_;
     PowerManager *power_manager_;
     PowerSaveTimer *power_save_timer_;
     esp_lcd_panel_handle_t panel_ = nullptr;
@@ -33,7 +34,7 @@ private:
                 power_save_timer_->SetEnabled(false);
             } else {
                 power_save_timer_->SetEnabled(true);
-            } 
+            }
         });
     }
     void InitializePowerSaveTimer() {
@@ -43,12 +44,12 @@ private:
 
         power_save_timer_ = new PowerSaveTimer(-1, 60, 300);
         power_save_timer_->OnEnterSleepMode([this]() {
-            GetDisplay()->SetPowerSaveMode(true);
-            GetBacklight()->SetBrightness(1); 
+            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOn);
+            GetBacklight()->SetBrightness(1);
         });
         power_save_timer_->OnExitSleepMode([this]() {
-            GetDisplay()->SetPowerSaveMode(false);
-            GetBacklight()->RestoreBrightness(); 
+            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOff);
+            GetBacklight()->RestoreBrightness();
         });
         power_save_timer_->OnShutdownRequest([this]() {
             ESP_LOGI(TAG, "Shutting down");
@@ -56,7 +57,7 @@ private:
             // 启用保持功能，确保睡眠期间电平不变
             rtc_gpio_hold_en(GPIO_NUM_1);
             esp_lcd_panel_disp_on_off(panel_, false); //关闭显示
-            esp_deep_sleep_start(); 
+            esp_deep_sleep_start();
         });
         power_save_timer_->SetEnabled(true);
     }
@@ -97,18 +98,17 @@ private:
         esp_lcd_panel_invert_color(panel_, DISPLAY_INVERT_COLOR);
         esp_lcd_panel_swap_xy(panel_, DISPLAY_SWAP_XY);
         esp_lcd_panel_mirror(panel_, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
-        display_ = new SpiLcdDisplay(panel_io, panel_,DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y,DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
+        display_ = CreateSpiLcdDisplay(panel_io, panel_,DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y,DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
             power_save_timer_->WakeUp();
-            auto& app = Application::GetInstance();
-            if (app.GetDeviceState() == kDeviceStateStarting) {
+            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
-            app.ToggleChatState(); 
+            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
         });
     }
 
@@ -162,3 +162,5 @@ public:
 };
 
 DECLARE_BOARD(DuChatX);
+
+

@@ -1,7 +1,7 @@
 #include "ota.h"
 #include "system/system_info.h"
 #include "settings.h"
-#include "i18n/lang_config.h"
+#include "ui/i18n/lang_config.h"
 
 #include <cJSON.h>
 #include <esp_log.h>
@@ -68,7 +68,7 @@ std::unique_ptr<Http> Ota::SetupHttp() {
     return http;
 }
 
-/* 
+/*
  * Specification: https://ccnphfhqs21z.feishu.cn/wiki/FjW6wZmisimNBBkov6OcmfvknVd
  */
 esp_err_t Ota::CheckVersion() {
@@ -166,7 +166,7 @@ bool Ota::Upgrade(const std::string& firmware_url, std::function<void(int progre
             if (image_header.size() >= sizeof(esp_image_header_t) + sizeof(esp_image_segment_header_t) + sizeof(esp_app_desc_t)) {
                 esp_app_desc_t new_app_info;
                 memcpy(&new_app_info, image_header.data() + sizeof(esp_image_header_t) + sizeof(esp_image_segment_header_t), sizeof(esp_app_desc_t));
-                
+
                 auto current_version = esp_app_get_description()->version;
                 ESP_LOGI(TAG, "Current version: %s, New version: %s", current_version, new_app_info.version);
 
@@ -218,18 +218,18 @@ std::vector<int> Ota::ParseVersion(const std::string& version) {
     std::vector<int> versionNumbers;
     std::stringstream ss(version);
     std::string segment;
-    
+
     while (std::getline(ss, segment, '.')) {
         versionNumbers.push_back(std::stoi(segment));
     }
-    
+
     return versionNumbers;
 }
 
 bool Ota::IsNewVersionAvailable(const std::string& currentVersion, const std::string& newVersion) {
     std::vector<int> current = ParseVersion(currentVersion);
     std::vector<int> newer = ParseVersion(newVersion);
-    
+
     for (size_t i = 0; i < std::min(current.size(), newer.size()); ++i) {
         if (newer[i] > current[i]) {
             return true;
@@ -237,7 +237,7 @@ bool Ota::IsNewVersionAvailable(const std::string& currentVersion, const std::st
             return false;
         }
     }
-    
+
     return newer.size() > current.size();
 }
 
@@ -249,7 +249,7 @@ std::string Ota::GetActivationPayload() {
     std::string hmac_hex;
 #ifdef SOC_HMAC_SUPPORTED
     uint8_t hmac_result[32]; // SHA-256 输出为32字节
-    
+
     // 使用Key0计算HMAC
     esp_err_t ret = esp_hmac_calculate(HMAC_KEY0, (uint8_t*)activation_challenge_.data(), activation_challenge_.size(), hmac_result);
     if (ret != ESP_OK) {
@@ -300,7 +300,7 @@ esp_err_t Ota::Activate() {
         ESP_LOGE(TAG, "Failed to open HTTP connection");
         return ESP_FAIL;
     }
-    
+
     auto status_code = http->GetStatusCode();
     if (status_code == 202) {
         return ESP_ERR_TIMEOUT;

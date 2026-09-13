@@ -1,10 +1,10 @@
+#include "ui/display/display_factory.h"
+
+#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "codecs/es8311_audio_codec.h"
-#include "display/oled_display.h"
-#include "application.h"
 #include "button.h"
 #include "led/single_led.h"
-#include "mcp_server.h"
 #include "settings.h"
 #include "config.h"
 #include "power_save_timer.h"
@@ -31,10 +31,10 @@ private:
     void InitializePowerSaveTimer() {
         power_save_timer_ = new PowerSaveTimer(160, 300);
         power_save_timer_->OnEnterSleepMode([this]() {
-            GetDisplay()->SetPowerSaveMode(true);
+            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOn);
         });
         power_save_timer_->OnExitSleepMode([this]() {
-            GetDisplay()->SetPowerSaveMode(false);
+            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOff);
         });
         power_save_timer_->SetEnabled(true);
     }
@@ -100,7 +100,7 @@ private:
         ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_));
         if (esp_lcd_panel_init(panel_) != ESP_OK) {
             ESP_LOGE(TAG, "Failed to initialize display");
-            display_ = new NoDisplay();
+            display_ = CreateNoDisplay();
             return;
         }
 
@@ -108,18 +108,17 @@ private:
         ESP_LOGI(TAG, "Turning display on");
         ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_, true));
 
-        display_ = new OledDisplay(panel_io_, panel_, DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
+        display_ = CreateOledDisplay(panel_io_, panel_, DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
     }
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
-            auto& app = Application::GetInstance();
-            if (app.GetDeviceState() == kDeviceStateStarting) {
+            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
             if (!press_to_talk_tool_ || !press_to_talk_tool_->IsPressToTalkEnabled()) {
-                app.ToggleChatState();
+                BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
             }
         });
         boot_button_.OnPressDown([this]() {
@@ -127,17 +126,17 @@ private:
                 power_save_timer_->WakeUp();
             }
             if (press_to_talk_tool_ && press_to_talk_tool_->IsPressToTalkEnabled()) {
-                Application::GetInstance().StartListening();
+                BoardEvents::PostInput(BoardEvents::Input::TouchDown);
             }
         });
         boot_button_.OnPressUp([this]() {
             if (press_to_talk_tool_ && press_to_talk_tool_->IsPressToTalkEnabled()) {
-                Application::GetInstance().StopListening();
+                BoardEvents::PostInput(BoardEvents::Input::TouchUp);
             }
         });
     }
 
-    void InitializeTools() {
+    void RegisterMcpTools(McpServer& mcp_server) override {
         press_to_talk_tool_ = new PressToTalkMcpTool();
         press_to_talk_tool_->Initialize();
     }
@@ -148,7 +147,6 @@ public:
         InitializeSsd1306Display();
         InitializeButtons();
         InitializePowerSaveTimer();
-        InitializeTools();
 
         // 避免使用错误的固件，把 EFUSE 操作放在最后
         // 把 ESP32C3 的 VDD SPI 引脚作为普通 GPIO 口使用
@@ -180,3 +178,5 @@ public:
 };
 
 DECLARE_BOARD(XminiC3Board);
+
+

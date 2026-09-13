@@ -19,6 +19,12 @@
 
 class XiaolingVoice;
 
+enum class XiaolingError {
+    ServerNotConnected,
+    ServerTimeout,
+    ServerError,
+};
+
 // 小聆连接入口：负责鉴权、长连接、心跳、重连和语音模块接入。
 class XiaolingConn final {
 public:
@@ -45,7 +51,7 @@ public:
 
     void OnIncomingAudio(std::function<void(std::unique_ptr<AudioStreamPacket>)> callback);
     void OnIncomingJson(std::function<void(const cJSON*)> callback);
-    void OnNetworkError(std::function<void(const std::string&)> callback);
+    void OnNetworkError(std::function<void(XiaolingError)> callback);
     void OnConnected(std::function<void()> callback);
     void OnDisconnected(std::function<void()> callback);
 
@@ -74,7 +80,7 @@ private:
     bool error_occurred_ = false;
 
     std::function<void(const cJSON*)> on_incoming_json_;
-    std::function<void(const std::string&)> on_network_error_;
+    std::function<void(XiaolingError)> on_network_error_;
     std::function<void()> on_connected_;
     std::function<void()> on_disconnected_;
 
@@ -97,7 +103,7 @@ private:
     std::string BuildWebSocketUrl() const;
     void HandleIncomingText(const std::string& text);
     bool IsCurrentSessionMessage(const cJSON* root) const;
-    void SetError(const std::string& message);
+    void SetError(XiaolingError error);
 };
 
 #endif  // XIAOLING_CONN_H

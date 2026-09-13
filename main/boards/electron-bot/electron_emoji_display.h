@@ -1,6 +1,6 @@
 #pragma once
 
-#include "display/lcd_display.h"
+#include "ui/display/lcd_display.h"
 
 /**
  * @brief Electron机器人GIF表情显示类
@@ -20,3 +20,5 @@ class ElectronEmojiDisplay : public SpiLcdDisplay {
     void InitializeElectronEmojis();
     void SetupChatLabel();
 };
+
+

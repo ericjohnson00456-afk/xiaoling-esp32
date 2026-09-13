@@ -1,15 +1,13 @@
+#include "ui/display/display_factory.h"
+
+#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "codecs/no_audio_codec.h"
-#include "display/lcd_display.h"
 #include "system_reset.h"
-#include "application.h"
 #include "button.h"
 #include "config.h"
 #include "power_save_timer.h"
-#include "mcp_server.h"
-#include "lamp_controller.h"
 #include "led/single_led.h"
-#include "i18n/lang_config.h"
 
 #include <esp_log.h>
 #include <esp_lcd_panel_vendor.h>
@@ -30,7 +28,7 @@
 class ESP32_CGC_144 : public WifiBoard {
 private:
     Button boot_button_;
-    LcdDisplay* display_;
+    Display* display_;
     Button asr_button_;
     PowerSaveTimer* power_save_timer_;
     PowerManager* power_manager_;
@@ -64,11 +62,11 @@ void InitializePowerManager() {
     void InitializePowerSaveTimer() {
         power_save_timer_ = new PowerSaveTimer(-1, 60);
         power_save_timer_->OnEnterSleepMode([this]() {
-            GetDisplay()->SetPowerSaveMode(true);
+            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOn);
             GetBacklight()->SetBrightness(1);
         });
         power_save_timer_->OnExitSleepMode([this]() {
-            GetDisplay()->SetPowerSaveMode(false);
+            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOff);
             GetBacklight()->RestoreBrightness();
         });
 
@@ -108,40 +106,33 @@ void InitializePowerManager() {
         panel_config.rgb_ele_order = DISPLAY_RGB_ORDER;
         panel_config.bits_per_pixel = 16;
         ESP_ERROR_CHECK(esp_lcd_new_panel_st7789(panel_io, &panel_config, &panel));
-        
+
         esp_lcd_panel_reset(panel);
 
         esp_lcd_panel_init(panel);
         esp_lcd_panel_invert_color(panel, DISPLAY_INVERT_COLOR);
         esp_lcd_panel_swap_xy(panel, DISPLAY_SWAP_XY);
         esp_lcd_panel_mirror(panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
-        display_ = new SpiLcdDisplay(panel_io, panel,
+        display_ = CreateSpiLcdDisplay(panel_io, panel,
                                     DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
- 
+
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
             power_save_timer_->WakeUp();
-            auto& app = Application::GetInstance();
-            if (app.GetDeviceState() == kDeviceStateStarting) {
+            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
-            app.ToggleChatState();
+            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
         });
 
         asr_button_.OnClick([this]() {
             power_save_timer_->WakeUp();
             std::string wake_word="你好小智";
-            Application::GetInstance().WakeWordInvoke(wake_word);
+            BoardEvents::PostWakeWord(wake_word);
         });
     }
-
-    // 物联网初始化，添加对 AI 可见设备
-    void InitializeTools() {
-        static LampController lamp(LAMP_GPIO);
-    }
-
 public:
     ESP32_CGC_144() :
 	boot_button_(BOOT_BUTTON_GPIO), asr_button_(ASR_BUTTON_GPIO) {
@@ -150,7 +141,6 @@ public:
         InitializeSpi();
         InitializeSt7735Display();
         InitializeButtons();
-        InitializeTools();
         GetBacklight()->RestoreBrightness();
     }
 
@@ -163,7 +153,7 @@ public:
     virtual Display* GetDisplay() override {
         return display_;
     }
-    
+
     virtual Backlight* GetBacklight() override {
         static PwmBacklight backlight(DISPLAY_BACKLIGHT_PIN, DISPLAY_BACKLIGHT_OUTPUT_INVERT);
         return &backlight;
@@ -187,6 +177,8 @@ public:
         }
         WifiBoard::SetPowerSaveLevel(level);
     }
+
 };
 
 DECLARE_BOARD(ESP32_CGC_144);
+

@@ -1,9 +1,9 @@
+#include "boards/common/board_events.h"
 #include "wifi_board.h"
-#include "display/lcd_display.h"
+#include "ui/display/lcd_display.h"
 #include "esp_lcd_sh8601.h"
 
 #include "codecs/box_audio_codec.h"
-#include "application.h"
 #include "button.h"
 #include "led/single_led.h"
 #include "mcp_server.h"
@@ -141,12 +141,12 @@ private:
     void InitializePowerSaveTimer() {
         power_save_timer_ = new PowerSaveTimer(-1, 60, 300);
         power_save_timer_->OnEnterSleepMode([this]() {
-            GetDisplay()->SetPowerSaveMode(true);
+            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOn);
             GetBacklight()->SetBrightness(20); });
         power_save_timer_->OnExitSleepMode([this]() {
-            GetDisplay()->SetPowerSaveMode(false);
+            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOff);
             GetBacklight()->RestoreBrightness(); });
-        power_save_timer_->OnShutdownRequest([this](){ 
+        power_save_timer_->OnShutdownRequest([this](){
             pmic_->PowerOff(); });
         power_save_timer_->SetEnabled(true);
     }
@@ -184,19 +184,17 @@ private:
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
-            auto& app = Application::GetInstance();
-            if (app.GetDeviceState() == kDeviceStateStarting) {
+            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
-            app.ToggleChatState();
+            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
         });
 
 #if CONFIG_USE_DEVICE_AEC
         boot_button_.OnDoubleClick([this]() {
-            auto& app = Application::GetInstance();
-            if (app.GetDeviceState() == kDeviceStateIdle) {
-                app.SetAecMode(app.GetAecMode() == kAecOff ? kAecOnDeviceSide : kAecOff);
+            if (BoardEvents::GetRuntimeState() == kDeviceStateIdle) {
+                BoardEvents::PostInput(BoardEvents::Input::AecToggle);
             }
         });
 #endif
@@ -273,8 +271,7 @@ private:
     }
 
     // 初始化工具
-    void InitializeTools() {
-        auto &mcp_server = McpServer::GetInstance();
+    void RegisterMcpTools(McpServer& mcp_server) override {
         mcp_server.AddTool("self.system.reconfigure_wifi",
             "End this conversation and enter WiFi configuration mode.\n"
             "**CAUTION** You must ask the user to confirm this action.",
@@ -293,22 +290,21 @@ public:
         InitializeSH8601Display();
         InitializeTouch();
         InitializeButtons();
-        InitializeTools();
     }
 
     virtual AudioCodec* GetAudioCodec() override {
         static BoxAudioCodec audio_codec(
-            i2c_bus_, 
-            AUDIO_INPUT_SAMPLE_RATE, 
+            i2c_bus_,
+            AUDIO_INPUT_SAMPLE_RATE,
             AUDIO_OUTPUT_SAMPLE_RATE,
-            AUDIO_I2S_GPIO_MCLK, 
-            AUDIO_I2S_GPIO_BCLK, 
-            AUDIO_I2S_GPIO_WS, 
-            AUDIO_I2S_GPIO_DOUT, 
+            AUDIO_I2S_GPIO_MCLK,
+            AUDIO_I2S_GPIO_BCLK,
+            AUDIO_I2S_GPIO_WS,
+            AUDIO_I2S_GPIO_DOUT,
             AUDIO_I2S_GPIO_DIN,
-            AUDIO_CODEC_PA_PIN, 
-            AUDIO_CODEC_ES8311_ADDR, 
-            AUDIO_CODEC_ES7210_ADDR, 
+            AUDIO_CODEC_PA_PIN,
+            AUDIO_CODEC_ES8311_ADDR,
+            AUDIO_CODEC_ES7210_ADDR,
             AUDIO_INPUT_REFERENCE);
         return &audio_codec;
     }
@@ -344,3 +340,5 @@ public:
 };
 
 DECLARE_BOARD(WaveshareEsp32s3TouchAMOLED2inch06);
+
+

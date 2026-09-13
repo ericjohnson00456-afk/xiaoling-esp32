@@ -9,6 +9,7 @@
 #include <freertos/task.h>
 
 #include "application.h"
+#include "serial_shell.h"
 #include "system/system_info.h"
 
 #define TAG "main"
@@ -24,6 +25,11 @@ extern "C" void app_main(void)
     }
     ESP_ERROR_CHECK(ret);
 
+    ret = esp_event_loop_create_default();
+    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
+        ESP_ERROR_CHECK(ret);
+    }
+
     const auto* running_partition = esp_ota_get_running_partition();
     if (running_partition != nullptr) {
         ESP_LOGI(TAG, "Running partition: label=%s, address=0x%lx, size=0x%lx",
@@ -35,5 +41,8 @@ extern "C" void app_main(void)
     // Initialize and run the application
     auto& app = Application::GetInstance();
     app.Initialize();
+    if (!SerialShell::GetInstance().Initialize()) {
+        ESP_LOGW(TAG, "Serial shell initialization failed");
+    }
     app.Run();  // This function runs the main event loop and never returns
 }

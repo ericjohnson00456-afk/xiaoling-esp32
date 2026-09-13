@@ -1,7 +1,8 @@
+#include "ui/display/display_factory.h"
+
+#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "codecs/box_audio_codec.h"
-#include "display/lcd_display.h"
-#include "application.h"
 #include "button.h"
 #include "led/single_led.h"
 #include "pin_config.h"
@@ -26,7 +27,7 @@ class ESP_S3_LCD_EV_Board_2 : public WifiBoard {
 private:
     i2c_master_bus_handle_t i2c_bus_;
     Button boot_button_;
-    LcdDisplay* display_;
+    Display* display_;
     Esp32Camera* camera_;
 
     //add support ev board lcd
@@ -100,9 +101,9 @@ private:
                 .fb_in_psram = true, // allocate frame buffer in PSRAM
             }
         };
-    
+
         ESP_LOGI(TAG, "Initialize RGB LCD panel");
-    
+
         gc9503_vendor_config_t vendor_config = {
             .rgb_config = &rgb_config,
             .flags = {
@@ -122,7 +123,7 @@ private:
         (esp_lcd_panel_reset(panel_handle));
         (esp_lcd_panel_init(panel_handle));
 
-        display_ = new RgbLcdDisplay(panel_io, panel_handle,
+        display_ = CreateRgbLcdDisplay(panel_io, panel_handle,
                                   DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X,
                                   DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
@@ -154,17 +155,16 @@ private:
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
-            auto& app = Application::GetInstance();
-            if (app.GetDeviceState() == kDeviceStateStarting) {
+            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
         });
         boot_button_.OnPressDown([this]() {
-            Application::GetInstance().StartListening();
+            BoardEvents::PostInput(BoardEvents::Input::TouchDown);
         });
         boot_button_.OnPressUp([this]() {
-            Application::GetInstance().StopListening();
+            BoardEvents::PostInput(BoardEvents::Input::TouchUp);
         });
     }
 
@@ -192,7 +192,7 @@ private:
         ESP_ERROR_CHECK(esp_lcd_touch_new_i2c_gt1151(tp_io_handle, &tp_cfg, &tp));
 
         const lvgl_port_touch_cfg_t touch_cfg = {
-            .disp = lv_display_get_default(), 
+            .disp = lv_display_get_default(),
             .handle = tp,
         };
         lvgl_port_add_touch(&touch_cfg);
@@ -235,17 +235,17 @@ public:
 
     virtual AudioCodec* GetAudioCodec() override {
         static BoxAudioCodec audio_codec(
-            i2c_bus_, 
-            AUDIO_INPUT_SAMPLE_RATE, 
+            i2c_bus_,
+            AUDIO_INPUT_SAMPLE_RATE,
             AUDIO_OUTPUT_SAMPLE_RATE,
-            AUDIO_I2S_GPIO_MCLK, 
-            AUDIO_I2S_GPIO_BCLK, 
-            AUDIO_I2S_GPIO_WS, 
-            AUDIO_I2S_GPIO_DOUT, 
+            AUDIO_I2S_GPIO_MCLK,
+            AUDIO_I2S_GPIO_BCLK,
+            AUDIO_I2S_GPIO_WS,
+            AUDIO_I2S_GPIO_DOUT,
             AUDIO_I2S_GPIO_DIN,
-            GPIO_NUM_NC, 
-            AUDIO_CODEC_ES8311_ADDR, 
-            AUDIO_CODEC_ES7210_ADDR, 
+            GPIO_NUM_NC,
+            AUDIO_CODEC_ES8311_ADDR,
+            AUDIO_CODEC_ES7210_ADDR,
             true);
         return &audio_codec;
     }
@@ -253,7 +253,7 @@ public:
     virtual Display* GetDisplay() override {
         return display_;
     }
-    
+
     //添加彩灯显示状态，如果亮度太暗可以去更改默认亮度值 DEFAULT_BRIGHTNESS 在led的sigle_led.cc中
     virtual Led* GetLed() override {
         static SingleLed led(BUILTIN_LED_GPIO);
@@ -269,3 +269,5 @@ public:
 };
 
 DECLARE_BOARD(ESP_S3_LCD_EV_Board_2);
+
+

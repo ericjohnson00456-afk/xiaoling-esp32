@@ -1,6 +1,6 @@
 #include "emoji_model.h"
 
-#include "assets.h"
+#include "resource/assets.h"
 
 #include <cJSON.h>
 #include <esp_log.h>

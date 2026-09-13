@@ -1,0 +1,102 @@
+#include "serial_shell.h"
+
+#include "cmd/kv_command.h"
+#include "cmd/system_command.h"
+
+#include <cstdio>
+#include <fcntl.h>
+#include <cstring>
+
+#include <esp_console.h>
+#include <esp_err.h>
+#include <esp_log.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+
+#define TAG "SerialShell"
+
+namespace {
+
+void ShellTask(void*) {
+    char line[256];
+    std::printf("\r\nXiaoling shell ready. Type 'help'.\r\nxiaoling> ");
+    std::fflush(stdout);
+
+    while (true) {
+        if (std::fgets(line, sizeof(line), stdin) == nullptr) {
+            // USB-Serial/JTAG can report EOF while no host is connected.
+            // Keep the shell task alive and retry when the terminal appears.
+            clearerr(stdin);
+            vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
+        line[std::strcspn(line, "\r\n")] = '\0';
+        if (line[0] == '\0') {
+            std::printf("xiaoling> ");
+            std::fflush(stdout);
+            continue;
+        }
+        int command_ret = 0;
+        const esp_err_t ret = esp_console_run(line, &command_ret);
+        if (ret == ESP_ERR_NOT_FOUND) {
+            std::printf("Unknown command. Type 'help'.\r\n");
+        } else if (ret != ESP_OK && ret != ESP_ERR_INVALID_ARG) {
+            std::printf("Command failed: %s\r\n", esp_err_to_name(ret));
+        }
+        std::printf("xiaoling> ");
+        std::fflush(stdout);
+    }
+
+}
+
+}  // namespace
+
+SerialShell& SerialShell::GetInstance() {
+    static SerialShell instance;
+    return instance;
+}
+
+bool SerialShell::Initialize() {
+#if !CONFIG_ENABLE_SERIAL_SHELL
+    return true;
+#else
+    if (initialized_) {
+        return true;
+    }
+
+    esp_console_config_t console_config = ESP_CONSOLE_CONFIG_DEFAULT();
+    esp_err_t ret = esp_console_init(&console_config);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize console: %s", esp_err_to_name(ret));
+        return false;
+    }
+
+    ret = esp_console_register_help_command();
+    if (ret == ESP_OK) {
+        ret = RegisterKvCommands();
+    }
+    if (ret == ESP_OK) {
+        ret = RegisterSystemCommands();
+    }
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register shell commands: %s", esp_err_to_name(ret));
+        esp_console_deinit();
+        return false;
+    }
+
+    // The system console may leave stdin/stdout in non-blocking mode. The
+    // command task must block while waiting for the next line of input.
+    fcntl(fileno(stdin), F_SETFL, 0);
+    fcntl(fileno(stdout), F_SETFL, 0);
+    if (xTaskCreatePinnedToCore(ShellTask, "serial_shell", 4096, nullptr, 2, nullptr,
+                                tskNO_AFFINITY) != pdTRUE) {
+        ESP_LOGE(TAG, "Failed to start shell task");
+        esp_console_deinit();
+        return false;
+    }
+
+    initialized_ = true;
+    ESP_LOGI(TAG, "Serial shell started");
+    return true;
+#endif
+}

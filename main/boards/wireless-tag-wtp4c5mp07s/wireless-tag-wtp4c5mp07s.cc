@@ -1,7 +1,8 @@
+#include "ui/display/display_factory.h"
+
+#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "codecs/es8311_audio_codec.h"
-#include "application.h"
-#include "display/lcd_display.h"
 // #include "display/no_display.h"
 #include "button.h"
 #include "config.h"
@@ -29,7 +30,7 @@ class WirelessTagEsp32p47b : public WifiBoard {
 private:
     i2c_master_bus_handle_t i2c_bus_;
     Button boot_button_;
-    LcdDisplay *display_;
+    Display *display_;
 
     void InitializeCodecI2c() {
         // Initialize I2C peripheral
@@ -120,7 +121,7 @@ private:
         esp_lcd_panel_reset(disp_panel);
         esp_lcd_panel_init(disp_panel);
 
-        display_ = new MipiLcdDisplay(io, disp_panel, DISPLAY_WIDTH, DISPLAY_HEIGHT,
+        display_ = CreateMipiLcdDisplay(io, disp_panel, DISPLAY_WIDTH, DISPLAY_HEIGHT,
                                        DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
 #if 0
         lv_display_t *disp = lv_display_get_default();
@@ -167,13 +168,12 @@ private:
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
-            auto& app = Application::GetInstance();
             // During startup (before connected), pressing BOOT button enters Wi-Fi config mode without reboot
-            if (app.GetDeviceState() == kDeviceStateStarting) {
+            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
-            app.ToggleChatState();
+            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
         });
     }
 
@@ -295,3 +295,5 @@ public:
 };
 
 DECLARE_BOARD(WirelessTagEsp32p47b);
+
+

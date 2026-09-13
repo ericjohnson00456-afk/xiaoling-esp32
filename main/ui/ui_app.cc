@@ -1,13 +1,17 @@
 #include "ui_app.h"
 
 #include "home_presenter.h"
+#include "board.h"
 #include "display.h"
+#include "oled_display.h"
+#include "ui/display/display_factory.h"
 #include "ui_manager.h"
 #include "ui_page_ids.h"
 #include "wifi_model.h"
+#include "events/ui_event_handler.h"
 
 #ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
-#include "assets.h"
+#include "resource/assets.h"
 #include "emoji_model.h"
 #include "lvgl_theme.h"
 
@@ -36,6 +40,22 @@ bool ReloadEmojiResources() {
 }
 
 bool Initialize() {
+    auto& ui = UiManager::GetInstance();
+    if (!ui.initialized()) {
+        auto& board = Board::GetInstance();
+        auto* display = board.GetDisplay();
+        if (display == nullptr) {
+            display = CreateDisplay(board.GetDisplayHardware());
+        }
+        board.SetDisplay(display, display->width(), display->height(),
+                         dynamic_cast<OledDisplay*>(display) != nullptr);
+        ui.Initialize(display);
+    }
+
+    if (UiEventHandler::Initialize() != ESP_OK) {
+        return false;
+    }
+
 #ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
     // Home 页面创建前先加载表情动画定义，避免页面打开后再解析 JSON。
     auto emoji_model = std::make_shared<EmojiModel>();
@@ -52,7 +72,6 @@ bool Initialize() {
     }
 #endif
 
-    auto& ui = UiManager::GetInstance();
     if (ui.RegisterScreen(&HomePresenter::Screen()) != 0 ||
         ui.SetDefaultScreen(UI_PAGE_HOME) != 0) {
         return false;

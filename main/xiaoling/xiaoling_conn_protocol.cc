@@ -1,6 +1,5 @@
 #include "xiaoling_conn.h"
 
-#include "i18n/lang_config.h"
 #include "board.h"
 #include "system/system_info.h"
 #include "xiaoling_events.h"
@@ -10,7 +9,7 @@
 #include <cJSON.h>
 #include <esp_app_desc.h>
 #include <esp_log.h>
-#include <mbedtls/base64.h>
+#include "base64_codec.h"
 
 #include <algorithm>
 #include <cstring>
@@ -18,23 +17,6 @@
 #define TAG "XiaolingConn"
 
 namespace {
-
-std::string Base64Encode(const std::string& input) {
-    if (input.empty()) {
-        return {};
-    }
-    const size_t capacity = 4 * ((input.size() + 2) / 3) + 1;
-    std::string output(capacity, '\0');
-    size_t output_length = 0;
-    const auto result = mbedtls_base64_encode(
-        reinterpret_cast<unsigned char*>(output.data()), output.size(), &output_length,
-        reinterpret_cast<const unsigned char*>(input.data()), input.size());
-    if (result != 0) {
-        return {};
-    }
-    output.resize(output_length);
-    return output;
-}
 
 std::string JsonToString(cJSON* root) {
     char* text = cJSON_PrintUnformatted(root);
@@ -124,7 +106,7 @@ std::string XiaolingConn::BuildWebSocketUrl() const {
 
     const auto params_json = JsonToString(params);
     cJSON_Delete(params);
-    const auto encoded_params = Base64Encode(params_json);
+    const auto encoded_params = Base64Codec::Encode(params_json);
     if (encoded_params.empty()) {
         return {};
     }
@@ -150,7 +132,7 @@ bool XiaolingConn::SendText(const std::string& text) {
     }
     if (!sent) {
         HandleTransportDisconnected(generation_.load());
-        SetError(Lang::Strings::SERVER_ERROR);
+        SetError(XiaolingError::ServerError);
     }
     return sent;
 }
@@ -210,7 +192,7 @@ void XiaolingConn::HandleIncomingText(const std::string& text) {
             if (code == "401") {
                 ClearAuthentication();
             }
-            SetError(Lang::Strings::SERVER_ERROR);
+            SetError(XiaolingError::ServerError);
         }
     }
 

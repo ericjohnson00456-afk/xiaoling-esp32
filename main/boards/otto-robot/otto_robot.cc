@@ -1,3 +1,4 @@
+#include "boards/common/board_events.h"
 #include <driver/i2c_master.h>
 #include <driver/spi_common.h>
 #include <driver/ledc.h>
@@ -6,14 +7,11 @@
 #include <esp_lcd_panel_vendor.h>
 #include <esp_log.h>
 
-#include "application.h"
 #include "codecs/no_audio_codec.h"
 #include "button.h"
 #include "config.h"
-#include "display/lcd_display.h"
-#include "lamp_controller.h"
+#include "ui/display/lcd_display.h"
 #include "led/single_led.h"
-#include "mcp_server.h"
 #include "otto_emoji_display.h"
 #include "power_manager.h"
 #include "system_reset.h"
@@ -27,7 +25,7 @@ extern void InitializeOttoController(const HardwareConfig& hw_config);
 
 class OttoRobot : public WifiBoard {
 private:
-    LcdDisplay* display_;
+    Display* display_;
     PowerManager* power_manager_;
     Button boot_button_;
     WebSocketControlServer* ws_control_server_;
@@ -36,7 +34,7 @@ private:
     i2c_master_bus_handle_t i2c_bus_;
     Esp32Camera *camera_;
     bool has_camera_;
-    
+
     bool DetectHardwareVersion() {
         ledc_timer_config_t ledc_timer = {
             .speed_mode = LEDC_LOW_SPEED_MODE,
@@ -49,7 +47,7 @@ private:
         if (ret != ESP_OK) {
             return false;
         }
-        
+
         ledc_channel_config_t ledc_channel = {
             .gpio_num = CAMERA_XCLK,
             .speed_mode = LEDC_LOW_SPEED_MODE,
@@ -63,7 +61,7 @@ private:
         if (ret != ESP_OK) {
             return false;
         }
-        
+
         vTaskDelay(pdMS_TO_TICKS(100));
         i2c_master_bus_config_t i2c_bus_cfg = {
             .i2c_port = I2C_NUM_0,
@@ -77,7 +75,7 @@ private:
                 .enable_internal_pullup = 1,
             },
         };
-        
+
         ret = i2c_new_master_bus(&i2c_bus_cfg, &i2c_bus_);
         if (ret != ESP_OK) {
             ledc_stop(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL, 0);
@@ -85,7 +83,7 @@ private:
         }
         const uint8_t camera_addresses[] = {0x30, 0x3C, 0x21, 0x60};
         bool camera_found = false;
-        
+
         for (size_t i = 0; i < sizeof(camera_addresses); i++) {
             uint8_t addr = camera_addresses[i];
             i2c_device_config_t dev_cfg = {
@@ -93,7 +91,7 @@ private:
                 .device_address = addr,
                 .scl_speed_hz = 100000,
             };
-            
+
             i2c_master_dev_handle_t dev_handle;
             ret = i2c_master_bus_add_device(i2c_bus_, &dev_cfg, &dev_handle);
             if (ret == ESP_OK) {
@@ -108,7 +106,7 @@ private:
                 i2c_master_bus_rm_device(dev_handle);
             }
         }
-        
+
         if (!camera_found) {
             i2c_del_master_bus(i2c_bus_);
             i2c_bus_ = nullptr;
@@ -116,7 +114,7 @@ private:
         }
         return camera_found;
     }
-    
+
     void InitializePowerManager() {
         power_manager_ = new PowerManager(
             hw_config_.power_charge_detect_pin,
@@ -170,24 +168,23 @@ private:
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
-            auto& app = Application::GetInstance();
-            if (app.GetDeviceState() == kDeviceStateStarting) {
+            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
-            app.ToggleChatState();
+            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
         });
     }
 
     void InitializeOttoController() {
         ::InitializeOttoController(hw_config_);
     }
-    
+
 public:
     const HardwareConfig& GetHardwareConfig() const {
         return hw_config_;
     }
-    
+
 private:
 
     void InitializeWebSocketControlServer() {
@@ -201,7 +198,7 @@ private:
     void StartNetwork() override {
         WifiBoard::StartNetwork();
         vTaskDelay(pdMS_TO_TICKS(1000));
-        
+
         InitializeWebSocketControlServer();
     }
 
@@ -209,7 +206,7 @@ private:
         if (!has_camera_ || i2c_bus_ == nullptr) {
             return false;
         }
-        
+
         try {
             static esp_cam_ctlr_dvp_pin_config_t dvp_pin_config = {
                 .data_width = CAM_CTLR_DATA_WIDTH_8,
@@ -255,7 +252,7 @@ private:
             return false;
         }
     }
-    
+
     void InitializeAudioCodec() {
         if (hw_config_.audio_use_simplex) {
             audio_codec_ = new NoAudioCodecSimplex(
@@ -286,27 +283,27 @@ public:
                   i2c_bus_(nullptr),
                   camera_(nullptr),
                   has_camera_(false) {
-        
+
         has_camera_ = DetectHardwareVersion();
-        
-        if (has_camera_) 
+
+        if (has_camera_)
             hw_config_ = CAMERA_VERSION_CONFIG;
-        else 
+        else
             hw_config_ = NON_CAMERA_VERSION_CONFIG;
-        
-        
+
+
         InitializeSpi();
         InitializeLcdDisplay();
         InitializeButtons();
         InitializePowerManager();
         InitializeAudioCodec();
-        
+
         if (has_camera_) {
             if (!InitializeCamera()) {
                 has_camera_ = false;
             }
         }
-        
+
         InitializeOttoController();
         ws_control_server_ = nullptr;
         GetBacklight()->RestoreBrightness();
@@ -316,8 +313,8 @@ public:
         return audio_codec_;
     }
 
-    virtual Display* GetDisplay() override { 
-        return display_; 
+    virtual Display* GetDisplay() override {
+        return display_;
     }
 
     virtual Backlight* GetBacklight() override {
@@ -327,7 +324,7 @@ public:
         }
         return backlight;
     }
-    
+
     virtual bool GetBatteryLevel(int& level, bool& charging, bool& discharging) override {
         charging = power_manager_->IsCharging();
         discharging = !charging;
@@ -335,9 +332,11 @@ public:
         return true;
     }
 
-    virtual Camera *GetCamera() override { 
-        return has_camera_ ? camera_ : nullptr; 
+    virtual Camera *GetCamera() override {
+        return has_camera_ ? camera_ : nullptr;
     }
 };
 
 DECLARE_BOARD(OttoRobot);
+
+

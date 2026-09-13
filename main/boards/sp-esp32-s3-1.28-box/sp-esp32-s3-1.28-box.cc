@@ -1,11 +1,10 @@
+#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "codecs/es8311_audio_codec.h"
-#include "display/lcd_display.h"
-#include "application.h"
+#include "ui/display/lcd_display.h"
 #include "button.h"
 #include "config.h"
 #include "led/single_led.h"
-#include "i18n/lang_config.h"
 #include <esp_log.h>
 #include <esp_efuse_table.h>
 #include <driver/i2c_master.h>
@@ -143,11 +142,11 @@ private:
 
         power_save_timer_ = new PowerSaveTimer(-1, 60, 290);
         power_save_timer_->OnEnterSleepMode([this]() {
-            GetDisplay()->SetPowerSaveMode(true);
+            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOn);
             GetBacklight()->SetBrightness(1);
         });
         power_save_timer_->OnExitSleepMode([this]() {
-            GetDisplay()->SetPowerSaveMode(false);
+            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOff);
             GetBacklight()->RestoreBrightness();
         });
         power_save_timer_->OnShutdownRequest([this]() {
@@ -239,13 +238,12 @@ private:
 
             // 只有短触才触发
             if (touch_duration < TOUCH_THRESHOLD_MS) {
-                auto& app = Application::GetInstance();
                 // During startup (before connected), pressing touch enters Wi-Fi config mode without reboot
-                if (app.GetDeviceState() == kDeviceStateStarting) {
+                if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
                     board->EnterWifiConfigMode();
                     return;
                 }
-                app.ToggleChatState();
+                BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
             }
         }
     }
@@ -364,13 +362,12 @@ private:
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
-            auto& app = Application::GetInstance();
             // During startup (before connected), pressing BOOT button enters Wi-Fi config mode without reboot
-            if (app.GetDeviceState() == kDeviceStateStarting) {
+            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
-            app.ToggleChatState();
+            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
         });
     }
 
@@ -461,7 +458,7 @@ public:
             discharging = true;
             return false;
         }
-        
+
         static bool last_discharging = false;
         charging = power_manager_->IsCharging();
         discharging = power_manager_->IsDischarging();
@@ -482,3 +479,5 @@ public:
 };
 
 DECLARE_BOARD(Spotpear_ESP32_S3_1_28_BOX);
+
+

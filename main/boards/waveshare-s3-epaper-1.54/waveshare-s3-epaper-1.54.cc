@@ -1,9 +1,9 @@
+#include "boards/common/board_events.h"
 #include <stdio.h>
 #include <driver/i2c_master.h>
 #include <driver/spi_common.h>
 #include <esp_lcd_panel_vendor.h>
 #include <esp_log.h>
-#include "application.h"
 #include "button.h"
 #include "codecs/es8311_audio_codec.h"
 #include "config.h"
@@ -40,17 +40,16 @@ class CustomBoard : public WifiBoard {
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
-            auto &app = Application::GetInstance();
             // During startup (before connected), pressing BOOT button enters Wi-Fi config mode without reboot
-            if (app.GetDeviceState() == kDeviceStateStarting) {
+            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
-            app.ToggleChatState();
+            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
         });
 
         pwr_button_.OnLongPress([this]() {
-            GetDisplay()->SetChatMessage("system", "OFF");
+            BoardEvents::PostSystemMessage("system", "OFF");
             vTaskDelay(pdMS_TO_TICKS(1000));
             power_->PowerAudioOff();
             power_->PowerEpdOff();
@@ -58,8 +57,7 @@ class CustomBoard : public WifiBoard {
         });
     }
 
-    void InitializeTools() {
-        auto &mcp_server = McpServer::GetInstance();
+    void RegisterMcpTools(McpServer& mcp_server) override {
         mcp_server.AddTool("self.disp.network", "重新配网", PropertyList(), [this](const PropertyList &) -> ReturnValue {
             EnterWifiConfigMode();
             return true;
@@ -98,13 +96,13 @@ class CustomBoard : public WifiBoard {
                 .unit_id = ADC_UNIT_1,
             };
             adc_oneshot_new_unit(&init_config, &adc_handle);
-    
+
             adc_oneshot_chan_cfg_t ch_config = {
                 .atten = ADC_ATTEN_DB_12,
                 .bitwidth = ADC_BITWIDTH_12,
             };
             adc_oneshot_config_channel(adc_handle, ADC_CHANNEL_3, &ch_config);
-    
+
             adc_cali_curve_fitting_config_t cali_config = {
                 .unit_id = ADC_UNIT_1,
                 .atten = ADC_ATTEN_DB_12,
@@ -147,7 +145,6 @@ class CustomBoard : public WifiBoard {
         Power_Init();
         InitializeI2c();
         InitializeButtons();
-        InitializeTools();
         InitializeLcdDisplay();
     }
 

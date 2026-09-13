@@ -18,10 +18,10 @@ PngAnimationPlayer::~PngAnimationPlayer() {
 
 void PngAnimationPlayer::Play(const EmojiAnimation* animation) {
     Stop();
-    animation_ = animation;
-    if (animation_ == nullptr) {
+    if (animation == nullptr) {
         return;
     }
+    animation_ = std::make_unique<EmojiAnimation>(*animation);
 
     if (!animation_->intro.empty()) {
         StartPhase(PhaseType::kIntro);

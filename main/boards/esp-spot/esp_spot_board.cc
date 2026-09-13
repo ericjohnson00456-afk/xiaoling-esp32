@@ -1,3 +1,4 @@
+#include "boards/common/board_events.h"
 #include <driver/gpio.h>
 #include <driver/i2c_master.h>
 #include <esp_adc/adc_cali.h>
@@ -11,7 +12,6 @@
 #include "led/circular_strip.h"
 #include "sdkconfig.h"
 
-#include "application.h"
 #include "button.h"
 #include "codecs/es8311_audio_codec.h"
 #include "config.h"
@@ -221,8 +221,7 @@ private:
 
         key_button_.OnClick([this]() {
             HandleUserActivity();
-            auto& app = Application::GetInstance();
-            app.ToggleChatState();
+            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
             key_long_pressed_ = false;
         });
 

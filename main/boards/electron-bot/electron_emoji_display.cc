@@ -4,7 +4,7 @@
 
 #include <cstring>
 
-#include "i18n/lang_config.h"
+#include "ui/i18n/lang_config.h"
 #include "ui/models/emoji_model.h"
 #include "ui/tools/image/lvgl_image.h"
 #include "ui/themes/lvgl_theme.h"

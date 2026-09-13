@@ -31,7 +31,10 @@ private:
 
     lv_obj_t* image_ = nullptr;
     lv_timer_t* timer_ = nullptr;
-    const EmojiAnimation* animation_ = nullptr;
+    // Own a snapshot of the animation definition.  EmojiModel can be
+    // replaced when cloud assets are refreshed; keeping a raw pointer here
+    // would leave the LVGL timer reading freed model memory.
+    std::unique_ptr<EmojiAnimation> animation_ = nullptr;
     PhaseType phase_ = PhaseType::kIntro;
     size_t frame_index_ = 0;
 };

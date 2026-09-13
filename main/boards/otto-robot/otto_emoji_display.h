@@ -1,6 +1,6 @@
 #pragma once
 
-#include "display/lcd_display.h"
+#include "ui/display/lcd_display.h"
 
 /**
  * @brief Otto机器人GIF表情显示类
@@ -21,3 +21,5 @@ class OttoEmojiDisplay : public SpiLcdDisplay {
     void InitializeOttoEmojis();
     void SetupPreviewImage();
 };
+
+

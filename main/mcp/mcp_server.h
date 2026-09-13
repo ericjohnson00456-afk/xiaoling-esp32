@@ -10,7 +10,7 @@
 #include <optional>
 #include <stdexcept>
 #include <thread>
-#include <mbedtls/base64.h>
+#include "base64_codec.h"
 
 #include <cJSON.h>
 
@@ -57,19 +57,11 @@ private:
     std::string encoded_data_;
     std::string mime_type_;
 
-    static std::string Base64Encode(const std::string& data) {
-        size_t dlen = 0, olen = 0;
-        mbedtls_base64_encode((unsigned char*)nullptr, 0, &dlen, (const unsigned char*)data.data(), data.size());
-        std::string result(dlen, 0);
-        mbedtls_base64_encode((unsigned char*)result.data(), result.size(), &olen, (const unsigned char*)data.data(), data.size());
-        return result;
-    }
-
 public:
     ImageContent(const std::string& mime_type, const std::string& data) {
         mime_type_ = mime_type;
         // base64 encode data
-        encoded_data_ = Base64Encode(data);
+        encoded_data_ = Base64Codec::Encode(data);
     }
 
     std::string to_json() const {

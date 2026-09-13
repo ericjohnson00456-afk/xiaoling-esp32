@@ -5,8 +5,7 @@
 #include <esp_timer.h>
 #include <driver/gpio.h>
 #include <esp_adc/adc_oneshot.h>
-#include <driver/temperature_sensor.h> 
-#include "application.h"
+#include <driver/temperature_sensor.h>
 #include "zhengchen_lcd_display.h"
 
 class PowerManager {
@@ -15,7 +14,7 @@ private:
     esp_timer_handle_t timer_handle_;
     std::function<void(bool)> on_charging_status_changed_;
     std::function<void(bool)> on_low_battery_status_changed_;
-    std::function<void(float)> on_temperature_changed_; 
+    std::function<void(float)> on_temperature_changed_;
 
     gpio_num_t charging_pin_ = GPIO_NUM_NC;
     std::vector<uint16_t> adc_values_;
@@ -30,7 +29,7 @@ private:
     const int kTemperatureReadInterval = 10; // 每 10 秒读取一次温度
 
     adc_oneshot_unit_handle_t adc_handle_;
-    temperature_sensor_handle_t temp_sensor_ = NULL;  
+    temperature_sensor_handle_t temp_sensor_ = NULL;
 
     void CheckBatteryStatus() {
         // Get charging status
@@ -66,8 +65,8 @@ private:
         // 读取 ADC 值
         int adc_value;
         ESP_ERROR_CHECK(adc_oneshot_read(adc_handle_, ADC_CHANNEL_7, &adc_value));
-       
-        
+
+
         // 将 ADC 值添加到队列中
         adc_values_.push_back(adc_value);
         if (adc_values_.size() > kBatteryAdcDataCount) {
@@ -79,7 +78,7 @@ private:
         }
         average_adc /= adc_values_.size();
 
-       
+
         // 定义电池电量区间
         const struct {
             uint16_t adc;
@@ -126,27 +125,27 @@ private:
     void ReadTemperature() {
         float temperature = 0.0f;
         ESP_ERROR_CHECK(temperature_sensor_get_celsius(temp_sensor_, &temperature));
-        
+
         if (abs(temperature - current_temperature_) >= 3.5f) {  // 温度变化超过3.5°C才触发回调
             current_temperature_ = temperature;
             if (on_temperature_changed_) {
                 on_temperature_changed_(current_temperature_);
             }
             ESP_LOGI("PowerManager", "Temperature updated: %.1f°C", current_temperature_);
-        }      
+        }
     }
 
 
 public:
     PowerManager(gpio_num_t pin) : charging_pin_(pin) {
-        
+
         // 初始化充电引脚
         gpio_config_t io_conf = {};
         io_conf.intr_type = GPIO_INTR_DISABLE;
         io_conf.mode = GPIO_MODE_INPUT;
         io_conf.pin_bit_mask = (1ULL << charging_pin_);
-        io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE; 
-        io_conf.pull_up_en = GPIO_PULLUP_DISABLE;     
+        io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+        io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
         gpio_config(&io_conf);
 
         // 创建电池电量检查定时器
@@ -169,7 +168,7 @@ public:
             .ulp_mode = ADC_ULP_MODE_DISABLE,
         };
         ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_config, &adc_handle_));
-        
+
         adc_oneshot_chan_cfg_t chan_config = {
             .atten = ADC_ATTEN_DB_12,
             .bitwidth = ADC_BITWIDTH_12,
@@ -195,12 +194,12 @@ public:
         if (adc_handle_) {
             adc_oneshot_del_unit(adc_handle_);
         }
-        
+
         if (temp_sensor_) {
             temperature_sensor_disable(temp_sensor_);
             temperature_sensor_uninstall(temp_sensor_);
         }
-  
+
     }
 
     bool IsCharging() {
@@ -224,8 +223,8 @@ public:
 
     float GetTemperature() const { return current_temperature_; }  // 获取当前温度
 
-    void OnTemperatureChanged(std::function<void(float)> callback) { 
-        on_temperature_changed_ = callback; 
+    void OnTemperatureChanged(std::function<void(float)> callback) {
+        on_temperature_changed_ = callback;
     }
 
     void OnLowBatteryStatusChanged(std::function<void(bool)> callback) {

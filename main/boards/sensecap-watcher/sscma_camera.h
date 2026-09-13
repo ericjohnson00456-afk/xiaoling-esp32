@@ -10,7 +10,6 @@
 #include <freertos/queue.h>
 #include <esp_io_expander_tca95xx_16bit.h>
 #include <esp_jpeg_dec.h>
-#include <mbedtls/base64.h>
 
 #include "sscma_client.h"
 #include "camera.h"

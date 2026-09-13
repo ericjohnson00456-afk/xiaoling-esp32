@@ -1,8 +1,9 @@
+#include "ui/display/display_factory.h"
+
+#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "codecs/box_audio_codec.h"
-#include "display/lcd_display.h"
 #include "system_reset.h"
-#include "application.h"
 #include "button.h"
 #include "config.h"
 
@@ -30,7 +31,7 @@ private:
     Button boot_button_;
     i2c_master_bus_handle_t i2c_bus_;
     esp_io_expander_handle_t io_expander = NULL;
-    LcdDisplay* display_;
+    Display* display_;
     Esp32Camera* camera_;
 
     void InitializeI2c() {
@@ -43,10 +44,10 @@ private:
         };
         ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_bus_cfg, &i2c_bus_));
     }
-    
+
     void InitializeTca9555(void)
     {
-        esp_err_t ret = esp_io_expander_new_i2c_tca95xx_16bit(i2c_bus_, I2C_ADDRESS, &io_expander);  
+        esp_err_t ret = esp_io_expander_new_i2c_tca95xx_16bit(i2c_bus_, I2C_ADDRESS, &io_expander);
         if(ret != ESP_OK)
             ESP_LOGE(TAG, "TCA9554 create returned error");                                                                                  // 打印引脚状态
 
@@ -63,7 +64,7 @@ private:
         ret = esp_io_expander_set_level(io_expander, IO_EXPANDER_PIN_NUM_8, 1);                                                         // 启用喇叭功放
         ret = esp_io_expander_set_level(io_expander, IO_EXPANDER_PIN_NUM_5, false);                                                     // 复位摄像头
         vTaskDelay(pdMS_TO_TICKS(5));
-        ret = esp_io_expander_set_level(io_expander, IO_EXPANDER_PIN_NUM_6, true); 
+        ret = esp_io_expander_set_level(io_expander, IO_EXPANDER_PIN_NUM_6, true);
         vTaskDelay(pdMS_TO_TICKS(5));
         ESP_ERROR_CHECK(ret);
     }
@@ -107,7 +108,7 @@ private:
         ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y));
         ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel, DISPLAY_INVERT_COLOR));
 
-        display_ = new SpiLcdDisplay(panel_io, panel,
+        display_ = CreateSpiLcdDisplay(panel_io, panel,
                                      DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
 
@@ -140,18 +141,17 @@ private:
         ESP_ERROR_CHECK(esp_lcd_panel_set_gap(panel, 0, 34));
         ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel, true, false));
         ESP_ERROR_CHECK(esp_lcd_panel_swap_xy(panel, true));
-        display_ = new SpiLcdDisplay(panel_io, panel,
+        display_ = CreateSpiLcdDisplay(panel_io, panel,
                                      DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
-            auto& app = Application::GetInstance();
-            if (app.GetDeviceState() == kDeviceStateStarting) {
+            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
-            app.ToggleChatState();
+            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
         });
     }
 
@@ -203,9 +203,9 @@ public:
         InitializeSpi();
         InitializeButtons();
         #ifdef LCD_TYPE_JD9853_SERIAL
-        InitializeJd9853Display(); 
+        InitializeJd9853Display();
         #else
-        InitializeSt7789Display(); 
+        InitializeSt7789Display();
         #endif
         InitializeCamera();
         GetBacklight()->RestoreBrightness();
@@ -225,7 +225,7 @@ public:
     virtual Display* GetDisplay() override {
         return display_;
     }
-    
+
     virtual Backlight* GetBacklight() override {
         static PwmBacklight backlight(DISPLAY_BACKLIGHT_PIN, BACKLIGHT_INVERT);
         return &backlight;
@@ -237,3 +237,5 @@ public:
 };
 
 DECLARE_BOARD(CustomBoard);
+
+

@@ -1,7 +1,8 @@
+#include "ui/display/display_factory.h"
+
+#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "codecs/es8311_audio_codec.h"
-#include "application.h"
-#include "display/lcd_display.h"
 #include "button.h"
 #include "config.h"
 
@@ -54,7 +55,7 @@ class LilygoTDisplayP4Board : public WifiBoard {
 public:
     i2c_master_bus_handle_t audio_codec_i2c_bus_;
     Button boot_button_;
-    LcdDisplay *display_;
+    Display *display_;
     esp_lcd_panel_handle_t mipi_dpi_panel_;
     esp_timer_handle_t touchpad_timer_;
     uint8_t brightness_;
@@ -157,7 +158,7 @@ public:
         vTaskDelay(pdMS_TO_TICKS(10));
 
         Init_Ldo_Channel_Power(3, 1800);
-        
+
         esp_lcd_panel_io_handle_t mipi_dbi_io = NULL;
         esp_lcd_dsi_bus_handle_t mipi_dsi_bus = NULL;
 
@@ -240,7 +241,7 @@ public:
 #endif
 
 
-        display_ = new MipiLcdDisplay(mipi_dbi_io, mipi_dpi_panel_, SCREEN_WIDTH, SCREEN_HEIGHT,
+        display_ = CreateMipiLcdDisplay(mipi_dbi_io, mipi_dpi_panel_, SCREEN_WIDTH, SCREEN_HEIGHT,
                                        SCREEN_OFFSET_X, SCREEN_OFFSET_Y, SCREEN_MIRROR_X, SCREEN_MIRROR_Y, SCREEN_SWAP_XY);
     }
 
@@ -267,13 +268,12 @@ public:
     }
 
     void AppToggleChatState(void){
-        auto& app = Application::GetInstance();
         // During startup (before connected), pressing BOOT button enters Wi-Fi config mode without reboot
-        if (app.GetDeviceState() == kDeviceStateStarting) {
+        if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
             EnterWifiConfigMode();
             return;
         }
-        app.ToggleChatState(); 
+        BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
     }
 
     void InitializeButtons() {
@@ -352,7 +352,7 @@ void TouchTask(void *arg) {
 
         if(touch_lock_flag == false){
             size_t current_time = board->esp32p4_->get_system_time_ms();
-            
+
             if (!waiting_for_second_tap) {
                 // 第一次点击
                 first_touch_time = current_time;
@@ -365,7 +365,7 @@ void TouchTask(void *arg) {
                     printf("double touch trigger\n");
 
                     board->AppToggleChatState();
-                    
+
                     // 重置状态
                     waiting_for_second_tap = false;
                     first_touch_time = 0;
@@ -375,10 +375,10 @@ void TouchTask(void *arg) {
                     printf("first touch timeout, restart...\n");
                 }
             }
-            
+
             touch_lock_flag = true;
         }
-        
+
         // 处理双击超时
         if (waiting_for_second_tap) {
             size_t current_time = board->esp32p4_->get_system_time_ms();
@@ -389,9 +389,11 @@ void TouchTask(void *arg) {
                 printf("double touch timeout\n");
             }
         }
-        
+
         vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
 
 DECLARE_BOARD(LilygoTDisplayP4Board);
+
+

@@ -1,13 +1,13 @@
+#include "ui/display/display_factory.h"
+
+#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "codecs/es8311_audio_codec.h"
-#include "display/lcd_display.h"
 #include "system_reset.h"
-#include "application.h"
 #include "button.h"
 #include "config.h"
 #include "power_save_timer.h"
 #include "led/single_led.h"
-#include "i18n/lang_config.h"
 #include "power_manager.h"
 
 #include "i2c_device.h"
@@ -22,10 +22,10 @@
 class atk_dnesp32s3_box0  : public WifiBoard {
 private:
     i2c_master_bus_handle_t i2c_bus_;
-    Button right_button_;   
-    Button left_button_;    
+    Button right_button_;
+    Button left_button_;
     Button middle_button_;
-    LcdDisplay* display_;
+    Display* display_;
     PowerSaveTimer* power_save_timer_;
     PowerManager* power_manager_;
     PowerSupply power_status_;
@@ -49,8 +49,8 @@ private:
         gpio_init_struct.pin_bit_mask = (1ull << CODEC_PWR_PIN) | (1ull << SYS_POW_PIN);
         gpio_config(&gpio_init_struct);
 
-        gpio_set_level(CODEC_PWR_PIN, 1); 
-        gpio_set_level(SYS_POW_PIN, 1); 
+        gpio_set_level(CODEC_PWR_PIN, 1);
+        gpio_set_level(SYS_POW_PIN, 1);
 
         gpio_config_t chg_init_struct = {0};
 
@@ -77,7 +77,7 @@ private:
         esp_timer_create_args_t wake_display_timer_args = {
             .callback = [](void *arg) {
                 atk_dnesp32s3_box0* self = static_cast<atk_dnesp32s3_box0*>(arg);
-                if (self->LcdStatus_ == kDevicelcdbacklightOff && Application::GetInstance().GetDeviceState() == kDeviceStateListening 
+                if (self->LcdStatus_ == kDevicelcdbacklightOff && BoardEvents::GetRuntimeState() == kDeviceStateListening
                     && self->wake_status_ == kDeviceWaitWake) {
 
                     if (self->power_sleep_ == kDeviceNeutralSleep) {
@@ -87,7 +87,7 @@ private:
                     self->GetBacklight()->RestoreBrightness();
                     self->wake_status_ = kDeviceAwakened;
                     self->LcdStatus_ = kDevicelcdbacklightOn;
-                } else if (self->power_sleep_ == kDeviceNeutralSleep && Application::GetInstance().GetDeviceState() == kDeviceStateListening 
+                } else if (self->power_sleep_ == kDeviceNeutralSleep && BoardEvents::GetRuntimeState() == kDeviceStateListening
                          && self->LcdStatus_ != kDevicelcdbacklightOff && self->wake_status_ == kDeviceAwakened) {
                     self->power_save_timer_->WakeUp();
                     self->power_sleep_ = kDeviceNoSleep;
@@ -104,7 +104,7 @@ private:
                             esp_timer_stop(self->power_manager_->timer_handle_);
                             gpio_set_level(CHG_CTRL_PIN, 0);
                             vTaskDelay(pdMS_TO_TICKS(100));
-                            gpio_set_level(SYS_POW_PIN, 0);     
+                            gpio_set_level(SYS_POW_PIN, 0);
                             vTaskDelay(pdMS_TO_TICKS(100));
                         }
                     }
@@ -135,7 +135,7 @@ private:
         power_save_timer_->OnEnterSleepMode([this]() {
             power_sleep_ = kDeviceNeutralSleep;
             XiaozhiStatus_ = kDevice_join_Sleep;
-            GetDisplay()->SetPowerSaveMode(true);
+            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOn);
 
             if (LcdStatus_ != kDevicelcdbacklightOff) {
                 GetBacklight()->SetBrightness(1);
@@ -143,7 +143,7 @@ private:
         });
         power_save_timer_->OnExitSleepMode([this]() {
             power_sleep_ = kDeviceNoSleep;
-            GetDisplay()->SetPowerSaveMode(false);
+            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOff);
 
             if (XiaozhiStatus_ != kDevice_Exit_Sleep) {
                 GetBacklight()->RestoreBrightness();
@@ -193,7 +193,6 @@ private:
 
     void InitializeButtons() {
         middle_button_.OnClick([this]() {
-            auto& app = Application::GetInstance();
 
             if (LcdStatus_ != kDevicelcdbacklightOff) {
                 if (power_sleep_ == kDeviceNeutralSleep) {
@@ -201,14 +200,14 @@ private:
                     power_sleep_ = kDeviceNoSleep;
                 }
 
-                app.ToggleChatState();
+                BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
             }
         });
 
         middle_button_.OnPressUp([this]() {
             if (LcdStatus_ == kDevicelcdbacklightOff) {
-                Application::GetInstance().StopListening();
-                Application::GetInstance().SetDeviceState(kDeviceStateIdle);
+                BoardEvents::PostInput(BoardEvents::Input::TouchUp);
+                BoardEvents::PostInput(BoardEvents::Input::EnterIdleState);
                 wake_status_ = kDeviceWaitWake;
             }
 
@@ -225,26 +224,25 @@ private:
         });
 
         middle_button_.OnLongPress([this]() {
-            auto& app = Application::GetInstance();
-            if (app.GetDeviceState() == kDeviceStateStarting) {
+            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
 
-            if (app.GetDeviceState() != kDeviceStateStarting || app.GetDeviceState() == kDeviceStateWifiConfiguring) {
-                if (app.GetDeviceState() == kDeviceStateWifiConfiguring && power_status_ != kDeviceTypecSupply) {
+            if (BoardEvents::GetRuntimeState() != kDeviceStateStarting || BoardEvents::GetRuntimeState() == kDeviceStateWifiConfiguring) {
+                if (BoardEvents::GetRuntimeState() == kDeviceStateWifiConfiguring && power_status_ != kDeviceTypecSupply) {
                     GetBacklight()->SetBrightness(0);
                     XiaozhiStatus_ = kDevice_Distributionnetwork;
                 } else if (power_status_ == kDeviceBatterySupply && LcdStatus_ != kDevicelcdbacklightOff) {
-                    Application::GetInstance().StartListening();
-                    GetBacklight()->SetBrightness(0);   
+                    BoardEvents::PostInput(BoardEvents::Input::TouchDown);
+                    GetBacklight()->SetBrightness(0);
                     XiaozhiStatus_ = kDevice_Exit_Sleep;
-                } else if (power_status_ == kDeviceTypecSupply && LcdStatus_ == kDevicelcdbacklightOn && Application::GetInstance().GetDeviceState() != kDeviceStateStarting) {
-                    Application::GetInstance().StartListening();
+                } else if (power_status_ == kDeviceTypecSupply && LcdStatus_ == kDevicelcdbacklightOn && BoardEvents::GetRuntimeState() != kDeviceStateStarting) {
+                    BoardEvents::PostInput(BoardEvents::Input::TouchDown);
                     GetBacklight()->SetBrightness(0);
                     LcdStatus_ = kDevicelcdbacklightOff;
                 } else if (LcdStatus_ == kDevicelcdbacklightOff && (power_status_ == kDeviceTypecSupply || power_status_ == kDeviceBatterySupply)) {
-                    GetDisplay()->SetChatMessage("system", "");
+                    BoardEvents::PostSystemMessage("system", "");
                     GetBacklight()->RestoreBrightness();
                     wake_status_ = kDeviceAwakened;
                     LcdStatus_ = kDevicelcdbacklightOn;
@@ -264,12 +262,12 @@ private:
                 volume = 0;
             }
             codec->SetOutputVolume(volume);
-            GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
+            BoardEvents::PostInput(BoardEvents::Input::VolumeChanged, volume);
         });
 
         left_button_.OnLongPress([this]() {
             GetAudioCodec()->SetOutputVolume(0);
-            GetDisplay()->ShowNotification(Lang::Strings::MUTED);
+            BoardEvents::PostInput(BoardEvents::Input::VolumeMuted);
         });
 
         right_button_.OnClick([this]() {
@@ -283,12 +281,12 @@ private:
                 volume = 100;
             }
             codec->SetOutputVolume(volume);
-            GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
+            BoardEvents::PostInput(BoardEvents::Input::VolumeChanged, volume);
         });
 
         right_button_.OnLongPress([this]() {
             GetAudioCodec()->SetOutputVolume(100);
-            GetDisplay()->ShowNotification(Lang::Strings::MAX_VOLUME);
+            BoardEvents::PostInput(BoardEvents::Input::VolumeMax);
         });
 
     }
@@ -313,14 +311,14 @@ private:
         panel_config.bits_per_pixel = 16;
         panel_config.data_endian = LCD_RGB_DATA_ENDIAN_BIG,
         esp_lcd_new_panel_st7789(panel_io, &panel_config, &panel);
-        
+
         esp_lcd_panel_reset(panel);
         esp_lcd_panel_invert_color(panel, true);
         esp_lcd_panel_init(panel);
-        esp_lcd_panel_swap_xy(panel, DISPLAY_SWAP_XY); 
+        esp_lcd_panel_swap_xy(panel, DISPLAY_SWAP_XY);
         esp_lcd_panel_mirror(panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
 
-        display_ = new SpiLcdDisplay(panel_io, panel,
+        display_ = CreateSpiLcdDisplay(panel_io, panel,
                                     DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
 
@@ -341,17 +339,17 @@ public:
 
     virtual AudioCodec* GetAudioCodec() override {
         static Es8311AudioCodec audio_codec(
-            i2c_bus_, 
-            I2C_NUM_0, 
-            AUDIO_INPUT_SAMPLE_RATE, 
+            i2c_bus_,
+            I2C_NUM_0,
+            AUDIO_INPUT_SAMPLE_RATE,
             AUDIO_OUTPUT_SAMPLE_RATE,
-            GPIO_NUM_NC, 
-            AUDIO_I2S_GPIO_BCLK, 
-            AUDIO_I2S_GPIO_WS, 
-            AUDIO_I2S_GPIO_DOUT, 
+            GPIO_NUM_NC,
+            AUDIO_I2S_GPIO_BCLK,
+            AUDIO_I2S_GPIO_WS,
+            AUDIO_I2S_GPIO_DOUT,
             AUDIO_I2S_GPIO_DIN,
-            GPIO_NUM_NC, 
-            AUDIO_CODEC_ES8311_ADDR, 
+            GPIO_NUM_NC,
+            AUDIO_CODEC_ES8311_ADDR,
             false);
         return &audio_codec;
     }
@@ -386,3 +384,5 @@ public:
 };
 
 DECLARE_BOARD(atk_dnesp32s3_box0);
+
+

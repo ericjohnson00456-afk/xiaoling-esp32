@@ -104,6 +104,7 @@ void PowerSaveTimer::PowerSaveCheck() {
 }
 
 void PowerSaveTimer::WakeUp() {
+    auto& app = Application::GetInstance();
     ticks_ = 0;
     if (in_sleep_mode_) {
         ESP_LOGI(TAG, "Exiting power save mode");
@@ -118,7 +119,6 @@ void PowerSaveTimer::WakeUp() {
             esp_pm_configure(&pm_config);
 
             // Enable wake word detection
-            auto& app = Application::GetInstance();
             auto& audio_service = app.GetAudioService();
             if (is_wake_word_running_) {
                 audio_service.EnableWakeWordDetection(true);

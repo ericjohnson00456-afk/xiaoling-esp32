@@ -1,9 +1,9 @@
 #include <cstring>
-#include "display/lcd_display.h"
+#include "ui/display/lcd_display.h"
 #include <esp_log.h>
 #include "emoji_display.h"
-#include "i18n/lang_config.h"
-#include "assets.h"
+#include "ui/i18n/lang_config.h"
+#include "resource/assets.h"
 
 #include <esp_lcd_panel_io.h>
 #include <freertos/FreeRTOS.h>
@@ -176,3 +176,5 @@ void EmojiWidget::Unlock()
 }
 
 } // namespace anim
+
+

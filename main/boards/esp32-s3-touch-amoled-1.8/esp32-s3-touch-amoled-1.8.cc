@@ -1,9 +1,9 @@
+#include "boards/common/board_events.h"
 #include "wifi_board.h"
-#include "display/lcd_display.h"
+#include "ui/display/lcd_display.h"
 #include "esp_lcd_sh8601.h"
 
 #include "codecs/es8311_audio_codec.h"
-#include "application.h"
 #include "button.h"
 #include "led/single_led.h"
 #include "mcp_server.h"
@@ -45,9 +45,9 @@ public:
 
         // Enable ALDO1(MIC)
         WriteReg(0x90, 0x01);
-    
+
         WriteReg(0x64, 0x02); // CV charger voltage setting to 4.1V
-        
+
         WriteReg(0x61, 0x02); // set Main battery precharge current to 50mA
         WriteReg(0x62, 0x08); // set Main battery charger current to 400mA ( 0x08-200mA, 0x09-300mA, 0x0A-400mA )
         WriteReg(0x63, 0x01); // set Main battery term charge current to 25mA
@@ -121,11 +121,11 @@ private:
     void InitializePowerSaveTimer() {
         power_save_timer_ = new PowerSaveTimer(-1, 60, 300);
         power_save_timer_->OnEnterSleepMode([this]() {
-            GetDisplay()->SetPowerSaveMode(true);
+            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOn);
             GetBacklight()->SetBrightness(20);
         });
         power_save_timer_->OnExitSleepMode([this]() {
-            GetDisplay()->SetPowerSaveMode(false);
+            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOff);
             GetBacklight()->RestoreBrightness();
         });
         power_save_timer_->OnShutdownRequest([this]() {
@@ -187,12 +187,11 @@ private:
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
-            auto& app = Application::GetInstance();
-            if (app.GetDeviceState() == kDeviceStateStarting) {
+            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
-            app.ToggleChatState();
+            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
         });
     }
 
@@ -263,7 +262,7 @@ private:
         ESP_LOGI(TAG, "Initialize touch controller");
         ESP_ERROR_CHECK(esp_lcd_touch_new_i2c_ft5x06(tp_io_handle, &tp_cfg, &tp));
         const lvgl_port_touch_cfg_t touch_cfg = {
-            .disp = lv_display_get_default(), 
+            .disp = lv_display_get_default(),
             .handle = tp,
         };
         lvgl_port_add_touch(&touch_cfg);
@@ -271,8 +270,7 @@ private:
     }
 
     // 初始化工具
-    void InitializeTools() {
-        auto &mcp_server = McpServer::GetInstance();
+    void RegisterMcpTools(McpServer& mcp_server) override {
         mcp_server.AddTool("self.system.reconfigure_wifi",
             "End this conversation and enter WiFi configuration mode.\n"
             "**CAUTION** You must ask the user to confirm this action.",
@@ -293,7 +291,6 @@ public:
         InitializeSH8601Display();
         InitializeTouch();
         InitializeButtons();
-        InitializeTools();
     }
 
     virtual AudioCodec* GetAudioCodec() override {
@@ -333,3 +330,5 @@ public:
 };
 
 DECLARE_BOARD(WaveshareEsp32s3TouchAMOLED1inch8);
+
+

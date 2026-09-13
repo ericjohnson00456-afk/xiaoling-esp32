@@ -12,7 +12,7 @@
 #define AUDIO_I2S_SPK_GPIO_DOUT GPIO_NUM_4
 #define AUDIO_I2S_SPK_GPIO_BCLK GPIO_NUM_5
 #define AUDIO_I2S_SPK_GPIO_LRCK GPIO_NUM_6
- 
+
 #define BUILTIN_LED_GPIO        GPIO_NUM_40
 #define BOOT_BUTTON_GPIO        GPIO_NUM_0
 #define TOUCH_BUTTON_GPIO       GPIO_NUM_NC
@@ -41,7 +41,5 @@
 #define DISPLAY_BACKLIGHT_OUTPUT_INVERT false
 
 
-// A MCP Test: Control a lamp
-#define LAMP_GPIO GPIO_NUM_18
 
 #endif // _BOARD_CONFIG_H_

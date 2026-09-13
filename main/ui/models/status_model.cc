@@ -1,6 +1,6 @@
 #include "status_model.h"
 
-#include "i18n/lang_config.h"
+#include "ui/i18n/lang_config.h"
 
 #include <utility>
 

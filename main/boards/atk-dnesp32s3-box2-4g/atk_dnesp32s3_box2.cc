@@ -1,13 +1,13 @@
+#include "ui/display/display_factory.h"
+
+#include "boards/common/board_events.h"
 #include "dual_network_board.h"
 #include "codecs/es8389_audio_codec.h"
-#include "display/lcd_display.h"
 #include "system_reset.h"
-#include "application.h"
 #include "button.h"
 #include "config.h"
 #include "power_save_timer.h"
 #include "led/single_led.h"
-#include "i18n/lang_config.h"
 #include "power_manager.h"
 
 #include "i2c_device.h"
@@ -23,7 +23,7 @@
 class atk_dnesp32s3_box2_4g : public DualNetworkBoard {
 private:
     i2c_master_bus_handle_t i2c_bus_;
-    LcdDisplay* display_;
+    Display* display_;
     esp_io_expander_handle_t io_exp_handle;
     button_handle_t btns;
     button_driver_t* btn_driver_ = nullptr;
@@ -95,16 +95,16 @@ private:
     void InitializePowerSaveTimer() {
         power_save_timer_ = new PowerSaveTimer(-1, 60, 300);
         power_save_timer_->OnEnterSleepMode([this]() {
-            GetDisplay()->SetPowerSaveMode(true);
+            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOn);
             GetBacklight()->SetBrightness(1);
         });
         power_save_timer_->OnExitSleepMode([this]() {
-            GetDisplay()->SetPowerSaveMode(false);
+            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOff);
             GetBacklight()->RestoreBrightness();
         });
         power_save_timer_->OnShutdownRequest([this]() {
             if (power_status_ == kDeviceBatterySupply) {
-                GetBacklight()->SetBrightness(0);   
+                GetBacklight()->SetBrightness(0);
                 esp_timer_stop(power_manager_->timer_handle_);
                 esp_io_expander_set_dir( io_exp_handle, XIO_CHG_CTRL, IO_EXPANDER_OUTPUT);
                 esp_io_expander_set_level(io_exp_handle, XIO_CHG_CTRL, 0);
@@ -133,17 +133,17 @@ private:
             }
             codec->SetOutputVolume(volume);
         }
-        GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
+        BoardEvents::PostInput(BoardEvents::Input::VolumeChanged, volume);
     }
 
     void audio_volume_minimum(){
         GetAudioCodec()->SetOutputVolume(0);
-        GetDisplay()->ShowNotification(Lang::Strings::MUTED);
+        BoardEvents::PostInput(BoardEvents::Input::VolumeMuted);
     }
 
     void audio_volume_maxmum(){
         GetAudioCodec()->SetOutputVolume(100);
-        GetDisplay()->ShowNotification(Lang::Strings::MAX_VOLUME);
+        BoardEvents::PostInput(BoardEvents::Input::VolumeMax);
     }
 
     esp_err_t IoExpanderSetLevel(uint16_t pin_mask, uint8_t level) {
@@ -253,33 +253,29 @@ private:
         iot_button_register_cb(m_btn_handle, BUTTON_PRESS_DOWN, nullptr, [](void* button_handle, void* usr_data) {
             auto self = static_cast<atk_dnesp32s3_box2_4g*>(usr_data);
             self->power_save_timer_->WakeUp();
-            auto& app = Application::GetInstance();
             if (self->GetNetworkType() == NetworkType::WIFI) {
-                if (app.GetDeviceState() == kDeviceStateStarting || app.GetDeviceState() == kDeviceStateWifiConfiguring) {
+                if (BoardEvents::GetRuntimeState() == kDeviceStateStarting || BoardEvents::GetRuntimeState() == kDeviceStateWifiConfiguring) {
                 }
                 else {
-                    app.ToggleChatState();
+                    BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
                 }
             } else {
-                app.ToggleChatState();
+                BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
             }
         }, this);
 
         iot_button_register_cb(m_btn_handle, BUTTON_DOUBLE_CLICK, nullptr, [](void* button_handle, void* usr_data) {
             auto self = static_cast<atk_dnesp32s3_box2_4g*>(usr_data);
             self->power_save_timer_->WakeUp();
-            auto& app = Application::GetInstance();
-            if (app.GetDeviceState() == kDeviceStateStarting || app.GetDeviceState() == kDeviceStateWifiConfiguring) {
+            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting || BoardEvents::GetRuntimeState() == kDeviceStateWifiConfiguring) {
                 self->SwitchNetworkType();
             }
         }, this);
 
         iot_button_register_cb(m_btn_handle, BUTTON_LONG_PRESS_START, nullptr, [](void* button_handle, void* usr_data) {
             auto self = static_cast<atk_dnesp32s3_box2_4g*>(usr_data);
-
-            auto& app = Application::GetInstance();
             if (self->GetNetworkType() == NetworkType::WIFI) {
-                if (app.GetDeviceState() == kDeviceStateStarting) {
+                if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
                     auto& wifi_board = static_cast<WifiBoard&>(self->GetCurrentBoard());
                     wifi_board.EnterWifiConfigMode();
                     return;
@@ -367,9 +363,9 @@ private:
                 .dc_data_level = 1,
             },
             .flags = {
-                .cs_active_high = 0,        
-                .pclk_active_neg = 0,       
-                .pclk_idle_low = 0,           
+                .cs_active_high = 0,
+                .pclk_active_neg = 0,
+                .pclk_idle_low = 0,
             },
         };
         ESP_ERROR_CHECK(esp_lcd_new_panel_io_i80(i80_bus, &io_config, &panel_io));
@@ -408,7 +404,7 @@ private:
         esp_lcd_panel_swap_xy(panel, DISPLAY_SWAP_XY);
         esp_lcd_panel_mirror(panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
 
-        display_ = new SpiLcdDisplay(panel_io, panel,
+        display_ = CreateSpiLcdDisplay(panel_io, panel,
                                     DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
 
@@ -427,16 +423,16 @@ public:
 
     virtual AudioCodec* GetAudioCodec() override {
         static Es8389AudioCodec audio_codec(
-            i2c_bus_, 
-            I2C_NUM_0, 
-            AUDIO_INPUT_SAMPLE_RATE, 
+            i2c_bus_,
+            I2C_NUM_0,
+            AUDIO_INPUT_SAMPLE_RATE,
             AUDIO_OUTPUT_SAMPLE_RATE,
-            AUDIO_I2S_GPIO_MCLK, 
-            AUDIO_I2S_GPIO_BCLK, 
-            AUDIO_I2S_GPIO_WS, 
-            AUDIO_I2S_GPIO_DOUT, 
+            AUDIO_I2S_GPIO_MCLK,
+            AUDIO_I2S_GPIO_BCLK,
+            AUDIO_I2S_GPIO_WS,
+            AUDIO_I2S_GPIO_DOUT,
             AUDIO_I2S_GPIO_DIN,
-            GPIO_NUM_NC, 
+            GPIO_NUM_NC,
             AUDIO_CODEC_ES8389_ADDR
         );
         return &audio_codec;
@@ -475,3 +471,5 @@ DECLARE_BOARD(atk_dnesp32s3_box2_4g);
 
 // 定义静态成员变量
 atk_dnesp32s3_box2_4g* atk_dnesp32s3_box2_4g::instance_ = nullptr;
+
+

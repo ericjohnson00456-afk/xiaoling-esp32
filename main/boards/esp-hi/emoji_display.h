@@ -1,12 +1,12 @@
 #pragma once
 
-#include "display/lcd_display.h"
+#include "ui/display/lcd_display.h"
 #include <memory>
 #include <functional>
 #include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>
 #include "anim_player.h"
-#include "assets.h"
+#include "resource/assets.h"
 
 namespace anim {
 
@@ -53,3 +53,5 @@ private:
 };
 
 } // namespace anim
+
+

@@ -1,10 +1,11 @@
+#include "ui/display/display_factory.h"
+
+#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "tab5_audio_codec.h"
-#include "display/lcd_display.h"
 #include "esp_lcd_ili9881c.h"
 #include "esp_lcd_st7123.h"
 #include "font_emoji.h"
-#include "application.h"
 #include "button.h"
 #include "config.h"
 #include "esp32_camera.h"
@@ -88,7 +89,7 @@ class M5StackTab5Board : public WifiBoard {
 private:
     i2c_master_bus_handle_t i2c_bus_;
     Button boot_button_;
-    LcdDisplay* display_;
+    Display* display_;
     Esp32Camera* camera_ = nullptr;
     Pi4ioe1* pi4ioe1_;
     Pi4ioe2* pi4ioe2_;
@@ -148,25 +149,24 @@ private:
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
-            auto& app = Application::GetInstance();
-            if (app.GetDeviceState() == kDeviceStateStarting) {
+            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
-            app.ToggleChatState();
+            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
         });
     }
 
     void InitializeGt911TouchPad() {
         ESP_LOGI(TAG, "Init GT911");
- 
+
         /* Initialize Touch Panel */
         ESP_LOGI(TAG, "Initialize touch IO (I2C)");
         const esp_lcd_touch_config_t tp_cfg = {
             .x_max = DISPLAY_WIDTH,
             .y_max = DISPLAY_HEIGHT,
-            .rst_gpio_num = GPIO_NUM_NC, 
-            .int_gpio_num = TOUCH_INT_GPIO, 
+            .rst_gpio_num = GPIO_NUM_NC,
+            .int_gpio_num = TOUCH_INT_GPIO,
             .levels = {
                 .reset = 0,
                 .interrupt = 0,
@@ -179,7 +179,7 @@ private:
         };
         esp_lcd_panel_io_handle_t tp_io_handle = NULL;
         esp_lcd_panel_io_i2c_config_t tp_io_config = ESP_LCD_TOUCH_IO_I2C_GT911_CONFIG();
-        tp_io_config.dev_addr = ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS_BACKUP; // 更改 GT911 地址 
+        tp_io_config.dev_addr = ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS_BACKUP; // 更改 GT911 地址
         tp_io_config.scl_speed_hz = 100000;
         esp_lcd_new_panel_io_i2c(i2c_bus_, &tp_io_config, &tp_io_handle);
         esp_lcd_touch_new_i2c_gt911(tp_io_handle, &tp_cfg, &touch_);
@@ -257,7 +257,7 @@ private:
         ESP_ERROR_CHECK(esp_lcd_panel_init(panel));
         ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel, true));
 
-        display_ = new MipiLcdDisplay(panel_io, panel, DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X,
+        display_ = CreateMipiLcdDisplay(panel_io, panel, DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X,
                                       DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
 
@@ -266,7 +266,7 @@ private:
         esp_lcd_panel_io_handle_t io = NULL;
         esp_lcd_panel_handle_t disp_panel = NULL;
         esp_lcd_dsi_bus_handle_t mipi_dsi_bus = NULL;
-        
+
         // Declare all config structures at the top to avoid goto issues
         // Initialize with memset to avoid any initialization syntax that might confuse the compiler
         esp_lcd_dsi_bus_config_t bus_config;
@@ -274,7 +274,7 @@ private:
         esp_lcd_dpi_panel_config_t dpi_config;
         st7123_vendor_config_t vendor_config;
         esp_lcd_panel_dev_config_t lcd_dev_config;
-        
+
         memset(&bus_config, 0, sizeof(bus_config));
         memset(&dbi_config, 0, sizeof(dbi_config));
         memset(&dpi_config, 0, sizeof(dpi_config));
@@ -357,7 +357,7 @@ private:
             goto err;
         }
 
-        display_ = new MipiLcdDisplay(io, disp_panel, 720, 1280, DISPLAY_OFFSET_X,
+        display_ = CreateMipiLcdDisplay(io, disp_panel, 720, 1280, DISPLAY_OFFSET_X,
                                       DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
 
         ESP_LOGI(TAG, "ST7123 Display initialized with resolution %dx%d", 720, 1280);
@@ -379,7 +379,7 @@ private:
 
     void InitializeSt7123TouchPad() {
         ESP_LOGI(TAG, "Init ST7123 Touch");
-        
+
         /* Initialize Touch Panel */
         ESP_LOGI(TAG, "Initialize touch IO (I2C)");
         const esp_lcd_touch_config_t tp_cfg = {
@@ -482,17 +482,17 @@ public:
     }
 
     virtual AudioCodec* GetAudioCodec() override {
-        static Tab5AudioCodec audio_codec(i2c_bus_, 
-                                        AUDIO_INPUT_SAMPLE_RATE, 
+        static Tab5AudioCodec audio_codec(i2c_bus_,
+                                        AUDIO_INPUT_SAMPLE_RATE,
                                         AUDIO_OUTPUT_SAMPLE_RATE,
-                                        AUDIO_I2S_GPIO_MCLK, 
-                                        AUDIO_I2S_GPIO_BCLK, 
+                                        AUDIO_I2S_GPIO_MCLK,
+                                        AUDIO_I2S_GPIO_BCLK,
                                         AUDIO_I2S_GPIO_WS,
-                                        AUDIO_I2S_GPIO_DOUT, 
-                                        AUDIO_I2S_GPIO_DIN, 
+                                        AUDIO_I2S_GPIO_DOUT,
+                                        AUDIO_I2S_GPIO_DIN,
                                         AUDIO_CODEC_PA_PIN,
-                                        AUDIO_CODEC_ES8388_ADDR, 
-                                        AUDIO_CODEC_ES7210_ADDR, 
+                                        AUDIO_CODEC_ES8388_ADDR,
+                                        AUDIO_CODEC_ES7210_ADDR,
                                         AUDIO_INPUT_REFERENCE);
         return &audio_codec;
     }
@@ -562,4 +562,6 @@ public:
 
 
 DECLARE_BOARD(M5StackTab5Board);
+
+
 

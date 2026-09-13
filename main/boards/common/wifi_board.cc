@@ -1,10 +1,12 @@
+#include "boards/common/board_events.h"
 #include "wifi_board.h"
 
+#include "audio_codec.h"
 #include "display.h"
-#include "application.h"
+#include "board_events.h"
+#include "ui/i18n/lang_config.h"
 #include "system/system_info.h"
 #include "settings.h"
-#include "i18n/lang_config.h"
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -181,7 +183,7 @@ void WifiBoard::OnWifiConnectTimeout(void* arg) {
 void WifiBoard::StartWifiConfigMode() {
     in_config_mode_ = true;
     // Transition to wifi configuring state
-    Application::GetInstance().SetDeviceState(kDeviceStateWifiConfiguring);
+    BoardEvents::PostInput(BoardEvents::Input::EnterWifiConfigState);
 
 #ifdef CONFIG_PROV_MODE_BLE
     blufi_start();
@@ -193,14 +195,7 @@ void WifiBoard::StartWifiConfigMode() {
     wifi_manager.StartConfigAp();
 
     // Show config prompt after a short delay
-    Application::GetInstance().Schedule([&wifi_manager]() {
-        std::string hint = Lang::Strings::CONNECT_TO_HOTSPOT;
-        hint += wifi_manager.GetApSsid();
-        hint += Lang::Strings::ACCESS_VIA_BROWSER;
-        hint += wifi_manager.GetApWebUrl();
-
-        Application::GetInstance().Alert(Lang::Strings::WIFI_CONFIG_MODE, hint.c_str(), "gear", 70);
-    });
+    BoardEvents::PostWifiConfigHint(wifi_manager.GetApSsid(), wifi_manager.GetApWebUrl());
 #endif
 #if CONFIG_USE_ESP_BLUFI_WIFI_PROVISIONING
     auto &blufi = Blufi::GetInstance();
@@ -215,7 +210,6 @@ void WifiBoard::StartWifiConfigMode() {
 
     xTaskCreate([](void* arg) {
         auto ch = reinterpret_cast<intptr_t>(arg);
-        auto& app = Application::GetInstance();
         auto& wifi = WifiManager::GetInstance();
         auto disp = Board::GetInstance().GetDisplay();
         audio_wifi_config::ReceiveWifiCredentialsFromAudio(&app, &wifi, disp, ch);
@@ -228,18 +222,16 @@ void WifiBoard::StartWifiConfigMode() {
 
 void WifiBoard::EnterWifiConfigMode() {
     ESP_LOGI(TAG, "EnterWifiConfigMode called");
-    GetDisplay()->ShowNotification(Lang::Strings::ENTERING_WIFI_CONFIG_MODE);
+    BoardEvents::PostInput(BoardEvents::Input::WifiConfigNotification);
 
 #ifdef CONFIG_PROV_MODE_BLE
     ResetWifiConfiguration();
 #else //!CONFIG_PROV_MODE_BLE
-
-    auto& app = Application::GetInstance();
-    auto state = app.GetDeviceState();
+    auto state = BoardEvents::GetRuntimeState();
 
     if (state == kDeviceStateSpeaking || state == kDeviceStateListening || state == kDeviceStateIdle) {
         // Reset protocol (close audio channel, reset protocol)
-        Application::GetInstance().ResetXiaolingConn();
+        BoardEvents::PostInput(BoardEvents::Input::ResetProtocolRequested);
 
         xTaskCreate([](void* arg) {
             auto* board = static_cast<WifiBoard*>(arg);
@@ -272,6 +264,11 @@ void WifiBoard::EnterWifiConfigMode() {
 #endif
 }
 
+bool WifiBoard::EnterNetworkConfigMode() {
+    EnterWifiConfigMode();
+    return true;
+}
+
 void WifiBoard::ResetWifiConfiguration() {
     // Set a flag and reboot the device to enter the network configuration mode
     {
@@ -281,7 +278,7 @@ void WifiBoard::ResetWifiConfiguration() {
         settings.EraseKey("narrowband_mode");
 #endif // CONFIG_LSPLATFORM
     }
-    GetDisplay()->ShowNotification(Lang::Strings::ENTERING_WIFI_CONFIG_MODE);
+    BoardEvents::PostInput(BoardEvents::Input::WifiConfigNotification);
     vTaskDelay(pdMS_TO_TICKS(1000));
     // Reboot the device
     esp_restart();

@@ -2,7 +2,6 @@
 #include "config.h"
 #include "custom_lcd_display.h"
 #include "lcd_display.h"
-#include "i18n/lang_config.h"
 #include "settings.h"
 #include "board.h"
 
@@ -51,7 +50,7 @@ void CustomLcdDisplay::lvgl_port_flush_callback(lv_display_t *drv, const lv_area
     const int y_end = area->y2;
     const int width = x_end - x_start + 1;
     const int height = y_end - y_start + 1;
-    
+
     int32_t hor_res = lv_display_get_horizontal_resolution(drv);
     int32_t ver_res = lv_display_get_vertical_resolution(drv);
 

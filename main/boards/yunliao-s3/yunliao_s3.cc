@@ -1,12 +1,12 @@
+#include "ui/display/display_factory.h"
+
+#include "boards/common/board_events.h"
 #include <esp_lcd_panel_vendor.h>
 #include <esp_log.h>
 #include "settings.h"
-#include "application.h"
-#include "i18n/lang_config.h"
 #include "button.h"
 #include "codecs/es8388_audio_codec.h"
 #include "config.h"
-#include "display/lcd_display.h"
 #include "dual_network_board.h"
 #include "lvgl_theme.h"
 #include "power_manager.h"
@@ -26,11 +26,11 @@ class YunliaoS3 : public DualNetworkBoard {
     void InitializePowerSaveTimer() {
         power_save_timer_ = new PowerSaveTimer(-1, 60, 600);
         power_save_timer_->OnEnterSleepMode([this]() {
-            GetDisplay()->SetPowerSaveMode(true);
+            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOn);
             GetBacklight()->SetBrightness(10);
         });
         power_save_timer_->OnExitSleepMode([this]() {
-            GetDisplay()->SetPowerSaveMode(false);
+            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOff);
             GetBacklight()->RestoreBrightness();
         });
         power_save_timer_->OnShutdownRequest([this]() {
@@ -74,14 +74,12 @@ class YunliaoS3 : public DualNetworkBoard {
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
             power_save_timer_->WakeUp();
-            auto& app = Application::GetInstance();
-            app.ToggleChatState();
+            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
         });
         boot_button_.OnDoubleClick([this]() {
             ESP_LOGI(TAG, "Button OnDoubleClick");
-            auto& app = Application::GetInstance();
-            if (app.GetDeviceState() == kDeviceStateStarting ||
-                app.GetDeviceState() == kDeviceStateWifiConfiguring) {
+            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting ||
+                BoardEvents::GetRuntimeState() == kDeviceStateWifiConfiguring) {
                 SwitchNetworkType();
             }
         });
@@ -96,7 +94,7 @@ class YunliaoS3 : public DualNetworkBoard {
             }, 3);
         boot_button_.OnLongPress([this]() {
             ESP_LOGI(TAG, "Button LongPress to Sleep");
-            display_->SetStatus(Lang::Strings::PLEASE_WAIT);
+            BoardEvents::PostLocalizedText(BoardEvents::LocalizedText::PleaseWait);
             vTaskDelay(pdMS_TO_TICKS(2000));
             power_manager_->Sleep();
         });
@@ -133,7 +131,7 @@ class YunliaoS3 : public DualNetworkBoard {
         esp_lcd_panel_invert_color(panel, currentIpsMode);
         esp_lcd_panel_swap_xy(panel, DISPLAY_SWAP_XY);
         esp_lcd_panel_mirror(panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
-        display_ = new SpiLcdDisplay(panel_io, panel, DISPLAY_WIDTH,
+        display_ = CreateSpiLcdDisplay(panel_io, panel, DISPLAY_WIDTH,
                                      DISPLAY_HEIGHT, DISPLAY_OFFSET_X,
                                      DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X,
                                      DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
@@ -143,9 +141,8 @@ class YunliaoS3 : public DualNetworkBoard {
             display_->SetTheme(theme);
         }
     }
-    void InitializeTools(){
-        auto& mcp_server = McpServer::GetInstance();
-        
+    void RegisterMcpTools(McpServer& mcp_server) override{
+
         mcp_server.AddTool("self.system.set_aec",
             "Enable or disable voice interruption mode (AEC:Acoustic Echo Cancellation). When enabled, the device can detect voice interruptions and respond accordingly.",
             PropertyList({
@@ -165,10 +162,9 @@ class YunliaoS3 : public DualNetworkBoard {
     }
     void SetAecMode(bool enable) {
         AecMode newMode = enable ? kAecOnDeviceSide : kAecOff;
-        auto& app = Application::GetInstance();
-        app.StopListening();
-        app.SetDeviceState(kDeviceStateIdle);
-        app.SetAecMode(newMode);
+        BoardEvents::PostInput(BoardEvents::Input::TouchUp);
+        BoardEvents::PostInput(BoardEvents::Input::EnterIdleState);
+        BoardEvents::PostInput(BoardEvents::Input::AecSet, static_cast<int32_t>(newMode));
         Settings settings("aec", true);
         settings.SetInt("mode", newMode);
     }
@@ -178,8 +174,7 @@ class YunliaoS3 : public DualNetworkBoard {
         settings.SetBool("ips_mode", !currentIpsMode);
         ESP_LOGI(TAG, "IPS mode toggled to %s", !currentIpsMode ? "enabled" : "disabled");
         vTaskDelay(pdMS_TO_TICKS(1000));
-        auto& app = Application::GetInstance();
-        app.Reboot();
+        BoardEvents::PostInput(BoardEvents::Input::RebootRequested);
     }
 
    public:
@@ -214,9 +209,7 @@ class YunliaoS3 : public DualNetworkBoard {
         }
         InitializeButtons();
         Settings settings("aec", false);
-        auto& app = Application::GetInstance();
-        app.SetAecMode(settings.GetInt("mode",kAecOnDeviceSide) == kAecOnDeviceSide ? kAecOnDeviceSide : kAecOff);
-        InitializeTools();
+        BoardEvents::PostInput(BoardEvents::Input::AecSet, settings.GetInt("mode", kAecOnDeviceSide) == kAecOnDeviceSide ? static_cast<int32_t>(kAecOnDeviceSide) : static_cast<int32_t>(kAecOff));
     }
 
     virtual AudioCodec* GetAudioCodec() override {
@@ -253,3 +246,5 @@ class YunliaoS3 : public DualNetworkBoard {
 };
 
 DECLARE_BOARD(YunliaoS3);
+
+

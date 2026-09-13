@@ -16,20 +16,20 @@ set(SOURCES "audio/audio_codec.cc"
             "led/single_led.cc"
             "led/circular_strip.cc"
             "led/gpio_led.cc"
-            "display/display.cc"
-            "display/lcd_display.cc"
-            "display/oled_display.cc"
-            "display/lvgl_display/lvgl_display.cc"
-            "display/emote_display.cc"
+            "ui/display/display.cc"
+            "ui/display/lcd_display.cc"
+            "ui/display/oled_display.cc"
+            "ui/display/lvgl/lvgl_display.cc"
+            "ui/display/display_factory.cc"
             "ui/themes/lvgl_theme.cc"
             "ui/themes/lvgl_theme_setup.cc"
             "ui/tools/font/lvgl_font.cc"
             "ui/tools/image/lvgl_image.cc"
             "ui/tools/image/image_fetcher.cc"
             "ui/tools/image/png_animation_player.cc"
-            "media/image/image_to_jpeg.cpp"
-            "media/image/jpeg_to_image.c"
-            "resource/romfs/romfs.c"
+             "resource/romfs/romfs.c"
+             "ui/events/ui_events.cc"
+            "boards/common/board_events.cc"
             "cloud/cloud_http.cc"
             "cloud/cloud_websocket.cc"
             "xiaoling/xiaoling_conn.cc"
@@ -42,12 +42,14 @@ set(SOURCES "audio/audio_codec.cc"
             "application.cc"
             "ota/ota.cc"
             "system/time_sync.cc"
-            "settings.cc"
+            "shell/settings.cc"
+            "shell/serial_shell.cc"
             "device_state_machine.cc"
-            "assets.cc"
+            "resource/assets.cc"
             "main.cc"
             "system/watchdog.cc"
             )
+
 
 # MCP tools self-register through mcp_server.cc. Keep the source list automatic
 # so adding a new tool_xx.cc does not require a CMake edit.
@@ -60,13 +62,19 @@ file(GLOB UI_SOURCES
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/*.cc"
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/models/*.cc"
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/presenters/*.cc"
-     "${CMAKE_CURRENT_SOURCE_DIR}/ui/views/*.cc")
+     "${CMAKE_CURRENT_SOURCE_DIR}/ui/views/*.cc"
+     "${CMAKE_CURRENT_SOURCE_DIR}/ui/events/*.cc")
 list(APPEND SOURCES ${UI_SOURCES})
 
-set(INCLUDE_DIRS "." "display" "display/lvgl_display" "resource/romfs"
-                 "ui/themes" "ui/tools/font" "ui/tools/image" "media/image" "audio"
+# Shell commands are split by function under shell/cmd.
+file(GLOB SHELL_CMD_SOURCES
+     "${CMAKE_CURRENT_SOURCE_DIR}/shell/cmd/*.cc")
+list(APPEND SOURCES ${SHELL_CMD_SOURCES})
+
+set(INCLUDE_DIRS "." "ui/display" "ui/display/lvgl" "resource/romfs"
+                 "ui/themes" "ui/tools/font" "ui/tools/image" "audio"
                  "audio/player" "audio/player/core" "audio/player/engine" "cloud" "xiaoling" "mcp"
-                 "ui" "ui/models" "system" "ui/presenters" "ui/views" "ota")
+                 "ui" "ui/models" "system" "resource" "shell" "ui/presenters" "ui/views" "ota")
 
 # Add board common files
 file(GLOB BOARD_COMMON_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/boards/common/*.cc)
@@ -85,7 +93,7 @@ list(APPEND SOURCES "blufi/blufi_security.cc"
                     "blufi/blufi_init.cc"
                     "blufi/blufi_main.cc")
 list(APPEND INCLUDE_DIRS "blufi")
-set(BLUFI_ASSETS ${CMAKE_CURRENT_SOURCE_DIR}/assets/provisioning/xl_ble_prov.png)
+set(BLUFI_ASSETS ${CMAKE_CURRENT_SOURCE_DIR}/resource/assets/provisioning/xl_ble_prov.png)
 endif() # CONFIG_PROV_MODE_BLE
 
 idf_build_get_property(build_components BUILD_COMPONENTS)
@@ -502,7 +510,7 @@ elseif(CONFIG_BOARD_TYPE_XINGZHI_METAL_1_54_WIFI)
     set(BOARD_TYPE "xingzhi-metal-1.54-wifi")
     set(BUILTIN_TEXT_FONT font_puhui_basic_20_4)
     set(BUILTIN_ICON_FONT font_awesome_20_4)
-    set(DEFAULT_EMOJI_COLLECTION twemoji_64)  
+    set(DEFAULT_EMOJI_COLLECTION twemoji_64)
 elseif(CONFIG_BOARD_TYPE_SEEED_STUDIO_SENSECAP_WATCHER)
     set(BOARD_TYPE "sensecap-watcher")
     set(BUILTIN_TEXT_FONT font_puhui_basic_30_4)
@@ -725,8 +733,8 @@ elseif(CONFIG_LANGUAGE_SR_RS)
 endif()
 
 # Define generation path
-set(LANG_JSON "${CMAKE_CURRENT_SOURCE_DIR}/assets/locales/${LANG_DIR}/language.json")
-set(LANG_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/i18n/lang_config.h")
+set(LANG_JSON "${CMAKE_CURRENT_SOURCE_DIR}/resource/assets/locales/${LANG_DIR}/language.json")
+set(LANG_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/ui/i18n/lang_config.h")
 
 # If target chip is ESP32, exclude specific files to avoid build errors
 if(CONFIG_IDF_TARGET_ESP32)
@@ -735,8 +743,6 @@ if(CONFIG_IDF_TARGET_ESP32)
                              "audio/codecs/es8389_audio_codec.cc"
                              "led/gpio_led.cc"
                              "${CMAKE_CURRENT_SOURCE_DIR}/boards/common/esp32_camera.cc"
-                             "media/image/image_to_jpeg.cpp"
-                             "media/image/jpeg_to_image.c"
                              )
 endif()
 
@@ -748,16 +754,6 @@ idf_component_register(SRCS ${SOURCES}
                     WHOLE_ARCHIVE
                     )
 
-# espressif2022__esp_emote_gfx 2.0.0 has source-level warnings that become
-# errors under ESP-IDF's -Werror build flags (missing string.h and printf
-# format-width mismatches). Keep the compatibility adjustment local to that
-# third-party component instead of weakening warnings for the whole project.
-if(TARGET __idf_espressif2022__esp_emote_gfx)
-    target_compile_options(__idf_espressif2022__esp_emote_gfx PRIVATE
-        -include string.h
-        -Wno-error=format
-    )
-endif()
 
 if(CONFIG_USE_MICRO_WAKE_WORD)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE
@@ -826,7 +822,7 @@ list(APPEND FILES_TO_DOWNLOAD "panic_return.aaf" "wake.aaf")
 foreach(FILENAME IN LISTS FILES_TO_DOWNLOAD)
     set(REMOTE_FILE "${URL}/${FILENAME}")
     set(LOCAL_FILE "${EMOJI_DIR}/${FILENAME}")
-    
+
     # Check if local file exists
     if(EXISTS ${LOCAL_FILE})
         message(STATUS "File ${FILENAME} already exists, skipping download")
@@ -848,7 +844,7 @@ endif()
 function(build_default_assets_bin)
     # Set output path for generated assets.bin
     set(GENERATED_ASSETS_BIN "${CMAKE_BINARY_DIR}/generated_assets.bin")
-    
+
     # Prepare arguments for build script
     set(BUILD_ARGS
         "--sdkconfig" "${SDKCONFIG}"
@@ -856,29 +852,29 @@ function(build_default_assets_bin)
     )
 
     file(GLOB_RECURSE ROMFS_RESOURCE_FILES
-         "${CMAKE_CURRENT_SOURCE_DIR}/assets/*")
-    
+         "${CMAKE_CURRENT_SOURCE_DIR}/resource/assets/*")
+
     # Add builtin text font if defined
     if(BUILTIN_TEXT_FONT)
         list(APPEND BUILD_ARGS "--builtin_text_font" "${BUILTIN_TEXT_FONT}")
     endif()
-    
+
     # Add default emoji collection if defined
     if(CONFIG_USE_XIAOLING_MESSAGE_STYLE)
-        list(APPEND BUILD_ARGS "--romfs_resources" "${CMAKE_CURRENT_SOURCE_DIR}/assets" "--romfs")
+        list(APPEND BUILD_ARGS "--romfs_resources" "${CMAKE_CURRENT_SOURCE_DIR}/resource/assets" "--romfs")
     elseif(DEFAULT_EMOJI_COLLECTION)
         # 非小聆板型使用 xiaozhi-fonts/png 下的静态 PNG 集合。
         list(APPEND BUILD_ARGS "--emoji_collection" "${DEFAULT_EMOJI_COLLECTION}")
     endif()
-    
+
     # Add default assets extra files if defined
     if(DEFAULT_ASSETS_EXTRA_FILES)
         list(APPEND BUILD_ARGS "--extra_files" "${DEFAULT_ASSETS_EXTRA_FILES}")
     endif()
-    
+
     list(APPEND BUILD_ARGS "--esp_sr_model_path" "${ESP_SR_MODEL_PATH}")
     list(APPEND BUILD_ARGS "--xiaozhi_fonts_path" "${XIAOZHI_FONTS_PATH}")
-    
+
     # Create custom command to build assets
     add_custom_command(
         OUTPUT ${GENERATED_ASSETS_BIN}
@@ -891,15 +887,15 @@ function(build_default_assets_bin)
         COMMENT "Building default assets.bin based on configuration"
         VERBATIM
     )
-    
+
     # Create target for generated assets
     add_custom_target(generated_default_assets ALL
         DEPENDS ${GENERATED_ASSETS_BIN}
     )
-    
+
     # Set the generated file path in parent scope
     set(GENERATED_ASSETS_LOCAL_FILE ${GENERATED_ASSETS_BIN} PARENT_SCOPE)
-    
+
     message(STATUS "Default assets build configured: ${GENERATED_ASSETS_BIN}")
 endfunction()
 
@@ -912,18 +908,18 @@ function(get_assets_local_file assets_source assets_local_file_var)
         get_filename_component(ASSETS_FILENAME "${assets_source}" NAME)
         set(ASSETS_LOCAL_FILE "${CMAKE_BINARY_DIR}/${ASSETS_FILENAME}")
         set(ASSETS_TEMP_FILE "${CMAKE_BINARY_DIR}/${ASSETS_FILENAME}.tmp")
-        
+
         # Check if local file exists
         if(EXISTS ${ASSETS_LOCAL_FILE})
             message(STATUS "Assets file ${ASSETS_FILENAME} already exists, skipping download")
         else()
             message(STATUS "Downloading ${ASSETS_FILENAME}")
-            
+
             # Clean up any existing temp file
             if(EXISTS ${ASSETS_TEMP_FILE})
                 file(REMOVE ${ASSETS_TEMP_FILE})
             endif()
-            
+
             # Download to temporary file first
             file(DOWNLOAD ${assets_source} ${ASSETS_TEMP_FILE}
                  STATUS DOWNLOAD_STATUS)
@@ -935,7 +931,7 @@ function(get_assets_local_file assets_source assets_local_file_var)
                 endif()
                 message(FATAL_ERROR "Failed to download ${ASSETS_FILENAME} from ${assets_source}")
             endif()
-            
+
             # Move temp file to final location (atomic operation)
             file(RENAME ${ASSETS_TEMP_FILE} ${ASSETS_LOCAL_FILE})
             message(STATUS "Successfully downloaded ${ASSETS_FILENAME}")
@@ -947,15 +943,15 @@ function(get_assets_local_file assets_source assets_local_file_var)
         else()
             set(ASSETS_LOCAL_FILE "${CMAKE_CURRENT_SOURCE_DIR}/${assets_source}")
         endif()
-        
+
         # Check if local file exists
         if(NOT EXISTS ${ASSETS_LOCAL_FILE})
             message(FATAL_ERROR "Assets file not found: ${ASSETS_LOCAL_FILE}")
         endif()
-        
+
         message(STATUS "Using assets file: ${ASSETS_LOCAL_FILE}")
     endif()
-    
+
     set(${assets_local_file_var} ${ASSETS_LOCAL_FILE} PARENT_SCOPE)
 endfunction()
 
@@ -980,3 +976,7 @@ if ("${size}" AND "${offset}")
 else()
     message(STATUS "Assets partition not found, using v1 partition table")
 endif()
+
+
+
+

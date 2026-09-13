@@ -1,7 +1,7 @@
 #include "tone_model.h"
 
-#include "assets.h"
-#include "i18n/lang_config.h"
+#include "resource/assets.h"
+#include "ui/i18n/lang_config.h"
 
 #include <esp_log.h>
 
