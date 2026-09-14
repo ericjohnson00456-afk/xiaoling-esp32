@@ -17,9 +17,9 @@ set(SOURCES "audio/audio_codec.cc"
             "led/circular_strip.cc"
             "led/gpio_led.cc"
             "ui/display/display.cc"
-            "ui/display/lcd_display.cc"
-            "ui/display/oled_display.cc"
-            "ui/display/lvgl/lvgl_display.cc"
+            "ui/display/panels/lcd_display.cc"
+            "ui/display/panels/oled_display.cc"
+            "ui/display/backend/lvgl_display.cc"
             "ui/display/display_factory.cc"
             "ui/themes/lvgl_theme.cc"
             "ui/themes/lvgl_theme_setup.cc"
@@ -27,8 +27,6 @@ set(SOURCES "audio/audio_codec.cc"
             "ui/tools/image/lvgl_image.cc"
             "ui/tools/image/image_fetcher.cc"
             "ui/tools/image/png_animation_player.cc"
-             "resource/romfs/romfs.c"
-             "ui/events/ui_events.cc"
             "boards/common/board_events.cc"
             "cloud/cloud_http.cc"
             "cloud/cloud_websocket.cc"
@@ -46,6 +44,7 @@ set(SOURCES "audio/audio_codec.cc"
             "shell/serial_shell.cc"
             "device_state_machine.cc"
             "resource/assets.cc"
+            "resource/store/asset_store.cc"
             "main.cc"
             "system/watchdog.cc"
             )
@@ -57,12 +56,11 @@ file(GLOB MCP_TOOL_SOURCES
      "${CMAKE_CURRENT_SOURCE_DIR}/mcp/tools/tool_*.cc")
 list(APPEND SOURCES ${MCP_TOOL_SOURCES})
 
-# UI 层：包含 Model、Presenter、View 和导航栈，位于硬件显示层之上
+# UI 层按职责分为 core、models、events 和 screens；显示后端单独在上方登记。
 file(GLOB UI_SOURCES
-     "${CMAKE_CURRENT_SOURCE_DIR}/ui/*.cc"
+     "${CMAKE_CURRENT_SOURCE_DIR}/ui/core/*.cc"
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/models/*.cc"
-     "${CMAKE_CURRENT_SOURCE_DIR}/ui/presenters/*.cc"
-     "${CMAKE_CURRENT_SOURCE_DIR}/ui/views/*.cc"
+     "${CMAKE_CURRENT_SOURCE_DIR}/ui/screens/home/*.cc"
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/events/*.cc")
 list(APPEND SOURCES ${UI_SOURCES})
 
@@ -71,10 +69,10 @@ file(GLOB SHELL_CMD_SOURCES
      "${CMAKE_CURRENT_SOURCE_DIR}/shell/cmd/*.cc")
 list(APPEND SOURCES ${SHELL_CMD_SOURCES})
 
-set(INCLUDE_DIRS "." "ui/display" "ui/display/lvgl" "resource/romfs"
+set(INCLUDE_DIRS "." "ui/display" "ui/display/backend" "ui/display/panels"
                  "ui/themes" "ui/tools/font" "ui/tools/image" "audio"
                  "audio/player" "audio/player/core" "audio/player/engine" "cloud" "xiaoling" "mcp"
-                 "ui" "ui/models" "system" "resource" "shell" "ui/presenters" "ui/views" "ota")
+                 "ui" "ui/core" "ui/models" "ui/screens/home" "system" "resource" "shell" "ota")
 
 # Add board common files
 file(GLOB BOARD_COMMON_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/boards/common/*.cc)

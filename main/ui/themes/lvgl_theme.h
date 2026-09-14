@@ -84,12 +84,14 @@ public:
         return instance;
     }
 
-    void RegisterTheme(const std::string& theme_name, LvglTheme* theme);
+    // The manager owns registered themes. Re-registering a name releases the
+    // previous theme and its resources.
+    void RegisterTheme(const std::string& theme_name, std::unique_ptr<LvglTheme> theme);
     LvglTheme* GetTheme(const std::string& theme_name);
 
 private:
     LvglThemeManager();
     void InitializeDefaultThemes();
 
-    std::map<std::string, LvglTheme*> themes_;
+    std::map<std::string, std::unique_ptr<LvglTheme>> themes_;
 };

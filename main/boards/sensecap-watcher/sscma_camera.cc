@@ -2,7 +2,7 @@
 #include "sscma_camera.h"
 #include "mcp_server.h"
 #include "base64_codec.h"
-#include "lvgl_display.h"
+#include "ui/display/backend/lvgl_display.h"
 #include "lvgl_image.h"
 #include "board.h"
 #include "system/system_info.h"

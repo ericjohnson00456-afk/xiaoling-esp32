@@ -1,7 +1,7 @@
 #ifndef OLED_DISPLAY_H
 #define OLED_DISPLAY_H
 
-#include "lvgl_display.h"
+#include "ui/display/backend/lvgl_display.h"
 
 #include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>

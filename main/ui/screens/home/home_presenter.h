@@ -1,6 +1,6 @@
 #pragma once
 
-#include "nav_stack.h"
+#include "ui/core/nav_stack.h"
 
 #include <cstdint>
 #include <functional>

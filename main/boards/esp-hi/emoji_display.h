@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ui/display/lcd_display.h"
+#include "ui/display/panels/lcd_display.h"
 #include <memory>
 #include <functional>
 #include <esp_lcd_panel_io.h>

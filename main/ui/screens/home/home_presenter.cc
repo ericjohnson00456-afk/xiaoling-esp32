@@ -4,8 +4,8 @@
 #include "display.h"
 #include "home_view.h"
 #include "status_model.h"
-#include "ui_manager.h"
-#include "ui_page_ids.h"
+#include "ui/core/ui_manager.h"
+#include "ui/core/ui_page_ids.h"
 #include "voice_model.h"
 #include "wifi_model.h"
 

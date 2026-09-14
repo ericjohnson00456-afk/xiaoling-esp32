@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ui/display/lcd_display.h"
+#include "ui/display/panels/lcd_display.h"
 
 /**
  * @brief Otto机器人GIF表情显示类

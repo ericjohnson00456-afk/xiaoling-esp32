@@ -6,7 +6,7 @@
 #include <cstring>
 #include <font_awesome.h>
 
-#include "lvgl_display.h"
+#include "ui/display/backend/lvgl_display.h"
 #include "board.h"
 #include "audio_codec.h"
 #include "settings.h"

@@ -10,7 +10,7 @@
 #include "codecs/no_audio_codec.h"
 #include "button.h"
 #include "config.h"
-#include "ui/display/lcd_display.h"
+#include "ui/display/panels/lcd_display.h"
 #include "led/single_led.h"
 #include "otto_emoji_display.h"
 #include "power_manager.h"

@@ -1,6 +1,6 @@
 #include "emoji_model.h"
 
-#include "resource/assets.h"
+#include "resource/store/asset_store.h"
 
 #include <cJSON.h>
 #include <esp_log.h>
@@ -32,7 +32,7 @@ bool GetObjectInt(const cJSON* object, const char* key, int* value) {
     return true;
 }
 
-bool ParsePhase(const cJSON* json, Assets& assets, EmojiPhase& phase, bool loop) {
+bool ParsePhase(const cJSON* json, AssetStore& assets, EmojiPhase& phase, bool loop) {
     if (json == nullptr) {
         return true;
     }
@@ -137,7 +137,7 @@ void EmojiModel::ClearAnimations() {
     default_emoji_.clear();
 }
 
-bool EmojiModel::LoadFromAssets(Assets& assets, const std::string& config_path) {
+bool EmojiModel::LoadFromAssets(AssetStore& assets, const std::string& config_path) {
     ClearAnimations();
 
     void* data = nullptr;

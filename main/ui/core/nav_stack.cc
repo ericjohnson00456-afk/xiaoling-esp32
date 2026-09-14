@@ -1,6 +1,7 @@
 #include "nav_stack.h"
 
 #include <stdlib.h>
+#include <mutex>
 
 #include <esp_log.h>
 
@@ -21,6 +22,10 @@ struct ScrStackNode {
 
 ScrNode* scr_list_head = nullptr;
 ScrStackNode* scr_stack_top = nullptr;
+// Navigation callbacks may synchronously request another navigation. A
+// recursive mutex keeps the stack consistent while still allowing that
+// documented callback pattern.
+std::recursive_mutex nav_mutex;
 
 const UiNavScreen* FindScrById(int unique_id) {
     ScrNode* node = scr_list_head;
@@ -96,6 +101,7 @@ int StackHasId(int unique_id) {
 } // namespace
 
 int ui_nav_scr_nav_to(int unique_id) {
+    std::lock_guard<std::recursive_mutex> lock(nav_mutex);
     void* from_data = nullptr;
     void* to_data = nullptr;
 
@@ -177,6 +183,7 @@ int ui_nav_scr_nav_to(int unique_id) {
 }
 
 int ui_nav_scr_nav_back() {
+    std::lock_guard<std::recursive_mutex> lock(nav_mutex);
     void* from_data = nullptr;
     void* to_data = nullptr;
 
@@ -219,6 +226,7 @@ int ui_nav_scr_nav_back() {
 }
 
 int ui_nav_scr_nav_default() {
+    std::lock_guard<std::recursive_mutex> lock(nav_mutex);
     void* to_data = nullptr;
 
     if (!scr_stack_top) {
@@ -256,6 +264,7 @@ int ui_nav_scr_nav_default() {
 }
 
 int ui_nav_scr_default_set(const UiNavScreen* scr) {
+    std::lock_guard<std::recursive_mutex> lock(nav_mutex);
     if (scr == nullptr) {
         ESP_LOGE(TAG, "default_set: scr is NULL");
         return -1;
@@ -288,10 +297,12 @@ int ui_nav_scr_default_set(const UiNavScreen* scr) {
 }
 
 int ui_nav_scr_default_set_by_id(int id) {
+    std::lock_guard<std::recursive_mutex> lock(nav_mutex);
     return ui_nav_scr_default_set(FindScrById(id));
 }
 
 int ui_nav_scr_add(const UiNavScreen* scr) {
+    std::lock_guard<std::recursive_mutex> lock(nav_mutex);
     if (!scr) {
         ESP_LOGE(TAG, "scr is NULL");
         return -1;
@@ -311,6 +322,7 @@ int ui_nav_scr_add(const UiNavScreen* scr) {
 }
 
 int ui_nav_scr_get_top_id() {
+    std::lock_guard<std::recursive_mutex> lock(nav_mutex);
     const UiNavScreen* scr = StackTop(nullptr);
     if (!scr) {
         ESP_LOGE(TAG, "get_top_id: stack is empty");

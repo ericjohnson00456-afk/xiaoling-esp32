@@ -1,8 +1,8 @@
 #include "ui_manager.h"
 
 #include "display.h"
-#include "home_presenter.h"
-#include "lvgl_display.h"
+#include "ui/screens/home/home_presenter.h"
+#include "ui/display/backend/lvgl_display.h"
 
 #include <esp_log.h>
 
@@ -75,6 +75,13 @@ int UiManager::NavigateHome() {
 }
 
 int UiManager::TopScreenId() {
+    if (lvgl_display_ != nullptr) {
+        DisplayLockGuard lock(display_);
+        if (!lock.locked()) {
+            return -1;
+        }
+        return ui_nav_scr_get_top_id();
+    }
     return ui_nav_scr_get_top_id();
 }
 

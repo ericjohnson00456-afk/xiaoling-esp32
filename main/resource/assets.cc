@@ -1,134 +1,15 @@
 #include "assets.h"
-#include "resource/romfs/romfs.h"
 #include "board.h"
 #include "display.h"
 #include "application.h"
 #include "lvgl_theme.h"
-#include "ui/display/lcd_display.h"
+#include "ui/display/panels/lcd_display.h"
 
 #include <esp_log.h>
-#include <spi_flash_mmap.h>
 #include <esp_timer.h>
 #include <cbin_font.h>
 
-#include <cstring>
-
-
 #define TAG "Assets"
-
-struct mmap_assets_table {
-    char asset_name[32];          /*!< Name of the asset */
-    uint32_t asset_size;          /*!< Size of the asset */
-    uint32_t asset_offset;        /*!< Offset of the asset */
-    uint16_t asset_width;         /*!< Width of the asset */
-    uint16_t asset_height;        /*!< Height of the asset */
-};
-
-
-Assets::Assets() {
-    // Initialize the partition
-    InitializePartition();
-}
-
-Assets::~Assets() {
-    if (romfs_ != nullptr) {
-        romfs_deinit(&romfs_);
-    }
-    if (mmap_handle_ != 0) {
-        esp_partition_munmap(mmap_handle_);
-    }
-}
-
-uint32_t Assets::CalculateChecksum(const char* data, uint32_t length) {
-    uint32_t checksum = 0;
-    for (uint32_t i = 0; i < length; i++) {
-        checksum += static_cast<unsigned char>(data[i]);
-    }
-    return checksum & 0xFFFF;
-}
-
-bool Assets::InitializePartition() {
-    if (romfs_ != nullptr) {
-        romfs_deinit(&romfs_);
-    }
-    if (mmap_handle_ != 0) {
-        esp_partition_munmap(mmap_handle_);
-        mmap_handle_ = 0;
-        mmap_root_ = nullptr;
-    }
-    partition_valid_ = false;
-    checksum_valid_ = false;
-    assets_.clear();
-
-    partition_ = esp_partition_find_first(ESP_PARTITION_TYPE_ANY, ESP_PARTITION_SUBTYPE_ANY, "assets");
-    if (partition_ == nullptr) {
-        ESP_LOGI(TAG, "No assets partition found");
-        return false;
-    }
-
-    int free_pages = spi_flash_mmap_get_free_pages(SPI_FLASH_MMAP_DATA);
-    uint32_t storage_size = free_pages * 64 * 1024;
-    ESP_LOGI(TAG, "The storage free size is %ld KB", storage_size / 1024);
-    ESP_LOGI(TAG, "The partition size is %ld KB", partition_->size / 1024);
-    if (storage_size < partition_->size) {
-        ESP_LOGE(TAG, "The free size %ld KB is less than assets partition required %ld KB", storage_size / 1024, partition_->size / 1024);
-        return false;
-    }
-
-    esp_err_t err = esp_partition_mmap(partition_, 0, partition_->size, ESP_PARTITION_MMAP_DATA, (const void**)&mmap_root_, &mmap_handle_);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to mmap assets partition: %s", esp_err_to_name(err));
-        return false;
-    }
-
-    // ROMFS 资源包以固定魔数开头，优先识别新格式。
-    if (partition_->size >= 8 && std::memcmp(mmap_root_, "-rom1fs-", 8) == 0) {
-        if (romfs_init(&romfs_, mmap_root_, partition_->size) != 0) {
-            ESP_LOGE(TAG, "ROMFS 资源分区初始化失败");
-            esp_partition_munmap(mmap_handle_);
-            mmap_handle_ = 0;
-            mmap_root_ = nullptr;
-            return false;
-        }
-        partition_valid_ = true;
-        checksum_valid_ = true;
-        ESP_LOGI(TAG, "已使用 ROMFS 资源包");
-        return true;
-    }
-
-    partition_valid_ = true;
-
-    uint32_t stored_files = *(uint32_t*)(mmap_root_ + 0);
-    uint32_t stored_chksum = *(uint32_t*)(mmap_root_ + 4);
-    uint32_t stored_len = *(uint32_t*)(mmap_root_ + 8);
-
-    if (stored_len > partition_->size - 12) {
-        ESP_LOGD(TAG, "The stored_len (0x%lx) is greater than the partition size (0x%lx) - 12", stored_len, partition_->size);
-        return false;
-    }
-
-    auto start_time = esp_timer_get_time();
-    uint32_t calculated_checksum = CalculateChecksum(mmap_root_ + 12, stored_len);
-    auto end_time = esp_timer_get_time();
-    ESP_LOGI(TAG, "The checksum calculation time is %d ms", int((end_time - start_time) / 1000));
-
-    if (calculated_checksum != stored_chksum) {
-        ESP_LOGE(TAG, "The calculated checksum (0x%lx) does not match the stored checksum (0x%lx)", calculated_checksum, stored_chksum);
-        return false;
-    }
-
-    checksum_valid_ = true;
-
-    for (uint32_t i = 0; i < stored_files; i++) {
-        auto item = (const mmap_assets_table*)(mmap_root_ + 12 + i * sizeof(mmap_assets_table));
-        auto asset = Asset{
-            .size = static_cast<size_t>(item->asset_size),
-            .offset = static_cast<size_t>(12 + sizeof(mmap_assets_table) * stored_files + item->asset_offset)
-        };
-        assets_[item->asset_name] = asset;
-    }
-    return checksum_valid_;
-}
 
 bool Assets::Apply() {
     void* ptr = nullptr;
@@ -312,14 +193,8 @@ bool Assets::Apply() {
 bool Assets::Download(std::string url, std::function<void(int progress, size_t speed)> progress_callback) {
     ESP_LOGI(TAG, "Downloading new version of assets from %s", url.c_str());
 
-    // 取消当前资源分区的内存映射
-    if (mmap_handle_ != 0) {
-        esp_partition_munmap(mmap_handle_);
-        mmap_handle_ = 0;
-        mmap_root_ = nullptr;
-    }
-    checksum_valid_ = false;
-    assets_.clear();
+    // Release the read mapping before writing the replacement package.
+    Unmount();
 
     // 下载新的资源文件
     auto network = Board::GetInstance().GetNetwork();
@@ -341,8 +216,8 @@ bool Assets::Download(std::string url, std::function<void(int progress, size_t s
         return false;
     }
 
-    if (content_length > partition_->size) {
-        ESP_LOGE(TAG, "Assets file size (%u) is larger than partition size (%lu)", content_length, partition_->size);
+    if (content_length > partition()->size) {
+        ESP_LOGE(TAG, "Assets file size (%u) is larger than partition size (%lu)", content_length, partition()->size);
         return false;
     }
 
@@ -384,13 +259,13 @@ bool Assets::Download(std::string url, std::function<void(int progress, size_t s
             size_t sector_end = (current_sector + 1) * SECTOR_SIZE;
 
             // 确保擦除范围不超过分区大小
-            if (sector_end > partition_->size) {
-                ESP_LOGE(TAG, "Sector end (%u) exceeds partition size (%lu)", sector_end, partition_->size);
+            if (sector_end > partition()->size) {
+                ESP_LOGE(TAG, "Sector end (%u) exceeds partition size (%lu)", sector_end, partition()->size);
                 return false;
             }
 
             ESP_LOGD(TAG, "Erasing sector %u (offset: %u, size: %u)", current_sector, sector_start, SECTOR_SIZE);
-            esp_err_t err = esp_partition_erase_range(partition_, sector_start, SECTOR_SIZE);
+            esp_err_t err = esp_partition_erase_range(partition(), sector_start, SECTOR_SIZE);
             if (err != ESP_OK) {
                 ESP_LOGE(TAG, "Failed to erase sector %u at offset %u: %s", current_sector, sector_start, esp_err_to_name(err));
                 return false;
@@ -400,7 +275,7 @@ bool Assets::Download(std::string url, std::function<void(int progress, size_t s
         }
 
         // 写入数据到分区
-        esp_err_t err = esp_partition_write(partition_, total_written, buffer, ret);
+        esp_err_t err = esp_partition_write(partition(), total_written, buffer, ret);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "Failed to write to assets partition at offset %u: %s", total_written, esp_err_to_name(err));
             return false;
@@ -434,78 +309,10 @@ bool Assets::Download(std::string url, std::function<void(int progress, size_t s
              total_written, current_sector);
 
     // 重新初始化资源分区
-    if (!InitializePartition()) {
+    if (!Mount()) {
         ESP_LOGE(TAG, "Failed to re-initialize assets partition");
         return false;
     }
 
     return true;
 }
-
-bool Assets::GetAssetData(const std::string& name, void*& ptr, size_t& size) {
-    if (romfs_ != nullptr) {
-        std::string path = name;
-        if (path.empty() || path.front() != '/') {
-            path.insert(path.begin(), '/');
-        }
-        uint8_t* data = nullptr;
-        uint32_t data_size = 0;
-        if (romfs_info_get(romfs_, path.c_str(), &data, &data_size) != 0) {
-            return false;
-        }
-        ptr = data;
-        size = data_size;
-        return true;
-    }
-
-    auto asset = assets_.find(name);
-    if (asset == assets_.end()) {
-        return false;
-    }
-    auto data = (const char*)(mmap_root_ + asset->second.offset);
-    if (data[0] != 'Z' || data[1] != 'Z') {
-        ESP_LOGE(TAG, "The asset %s is not valid with magic %02x%02x", name.c_str(), data[0], data[1]);
-        return false;
-    }
-
-    ptr = static_cast<void*>(const_cast<char*>(data + 2));
-    size = asset->second.size;
-    return true;
-}
-
-bool Assets::ListAssetFiles(const std::string& directory, std::vector<std::string>& paths) {
-    paths.clear();
-    if (romfs_ != nullptr) {
-        romfs_dir_iter iter{};
-        if (romfs_dir_iter_start(romfs_, directory.c_str(), &iter) != 0) {
-            return false;
-        }
-        char path[ROMFS_PATH_MAX] = {};
-        uint8_t* data = nullptr;
-        uint32_t size = 0;
-        bool is_dir = false;
-        while (romfs_dir_iter_next(&iter, path, sizeof(path), &data, &size, &is_dir) == 0) {
-            if (!is_dir && data != nullptr && size > 0) {
-                paths.emplace_back(path);
-            }
-        }
-        return true;
-    }
-
-    // 旧格式没有目录层级，只能按文件名前缀提供兼容结果。
-    std::string prefix = directory;
-    if (!prefix.empty() && prefix.front() == '/') {
-        prefix.erase(prefix.begin());
-    }
-    if (!prefix.empty() && prefix.back() != '/') {
-        prefix.push_back('/');
-    }
-    for (const auto& item : assets_) {
-        if (item.first.rfind(prefix, 0) == 0) {
-            paths.emplace_back("/" + item.first);
-        }
-    }
-    return !paths.empty();
-}
-
-

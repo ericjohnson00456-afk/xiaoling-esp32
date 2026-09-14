@@ -3,6 +3,7 @@
 #include "observable_model.h"
 
 #include <functional>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -30,7 +31,10 @@ public:
         return instance;
     }
 
-    void SetWakeWordProvider(WakeWordProvider provider) { wake_word_provider_ = std::move(provider); }
+    void SetWakeWordProvider(WakeWordProvider provider) {
+        std::lock_guard<std::mutex> lock(provider_mutex_);
+        wake_word_provider_ = std::move(provider);
+    }
 
     /* 处理一条 result/setting 推送的 data 节点。非 banner 内容、缺字段时静默忽略。
        可在任意任务上下文调用（只做解析与回调，不触碰 LVGL）。 */
@@ -44,5 +48,6 @@ private:
 
     std::string SubstituteWakeWord(const std::string& text) const;
 
+    mutable std::mutex provider_mutex_;
     WakeWordProvider wake_word_provider_;
 };

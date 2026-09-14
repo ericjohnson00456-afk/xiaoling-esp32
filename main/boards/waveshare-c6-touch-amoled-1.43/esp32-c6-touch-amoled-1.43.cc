@@ -9,7 +9,7 @@
 #include <driver/i2c_master.h>
 #include <driver/spi_common.h>
 #include "esp_lcd_sh8601.h"
-#include "ui/display/lcd_display.h"
+#include "ui/display/panels/lcd_display.h"
 #include "esp_io_expander_tca9554.h"
 #include "mcp_server.h"
 #include "lvgl.h"

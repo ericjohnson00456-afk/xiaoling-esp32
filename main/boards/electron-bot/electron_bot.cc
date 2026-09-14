@@ -10,7 +10,7 @@
 #include "codecs/no_audio_codec.h"
 #include "button.h"
 #include "config.h"
-#include "ui/display/lcd_display.h"
+#include "ui/display/panels/lcd_display.h"
 #include "driver/spi_master.h"
 #include "electron_emoji_display.h"
 #include "movements.h"

@@ -20,11 +20,14 @@ LvglThemeManager::LvglThemeManager() {
 LvglTheme* LvglThemeManager::GetTheme(const std::string& theme_name) {
     auto it = themes_.find(theme_name);
     if (it != themes_.end()) {
-        return it->second;
+        return it->second.get();
     }
     return nullptr;
 }
 
-void LvglThemeManager::RegisterTheme(const std::string& theme_name, LvglTheme* theme) {
-    themes_[theme_name] = theme;
+void LvglThemeManager::RegisterTheme(const std::string& theme_name, std::unique_ptr<LvglTheme> theme) {
+    if (theme == nullptr) {
+        return;
+    }
+    themes_[theme_name] = std::move(theme);
 }

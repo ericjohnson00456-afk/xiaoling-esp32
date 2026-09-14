@@ -1,12 +1,12 @@
 #include "ui_app.h"
 
-#include "home_presenter.h"
+#include "ui/screens/home/home_presenter.h"
 #include "board.h"
 #include "display.h"
-#include "oled_display.h"
+#include "ui/display/panels/oled_display.h"
 #include "ui/display/display_factory.h"
-#include "ui_manager.h"
-#include "ui_page_ids.h"
+#include "ui/core/ui_manager.h"
+#include "ui/core/ui_page_ids.h"
 #include "wifi_model.h"
 #include "events/ui_event_handler.h"
 

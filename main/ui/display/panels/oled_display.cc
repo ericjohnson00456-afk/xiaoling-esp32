@@ -1,4 +1,4 @@
-#include "oled_display.h"
+#include "ui/display/panels/oled_display.h"
 #include "ui/i18n/lang_config.h"
 #include "lvgl_theme.h"
 #include "lvgl_font.h"
@@ -27,14 +27,14 @@ OledDisplay::OledDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handl
     auto icon_font = std::make_shared<LvglBuiltInFont>(&BUILTIN_ICON_FONT);
     auto large_icon_font = std::make_shared<LvglBuiltInFont>(&font_awesome_30_1);
 
-    auto dark_theme = new LvglTheme("dark");
+    auto dark_theme = std::make_unique<LvglTheme>("dark");
     dark_theme->set_text_font(text_font);
     dark_theme->set_icon_font(icon_font);
     dark_theme->set_large_icon_font(large_icon_font);
 
     auto& theme_manager = LvglThemeManager::GetInstance();
-    theme_manager.RegisterTheme("dark", dark_theme);
-    current_theme_ = dark_theme;
+    theme_manager.RegisterTheme("dark", std::move(dark_theme));
+    current_theme_ = theme_manager.GetTheme("dark");
 
     ESP_LOGI(TAG, "Initialize LVGL");
     lvgl_port_cfg_t port_cfg = ESP_LVGL_PORT_INIT_CONFIG();

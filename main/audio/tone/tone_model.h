@@ -6,14 +6,14 @@
 #include <string>
 #include <vector>
 
-class Assets;
+class AssetStore;
 
 // ROMFS tone 索引。文件名使用三位数字前缀，例如 /tone/059_network_suc.mp3。
 class ToneModel final {
 public:
     static ToneModel& GetInstance();
 
-    bool Initialize(Assets& assets, const std::string& directory = "/tone");
+    bool Initialize(AssetStore& assets, const std::string& directory = "/tone");
     const char* GetUrl(uint16_t tone_id) const;
     // 按逻辑名称读取当前语言 OGG，找不到时回退到 en-US。
     bool GetLocalizedData(const std::string& name, const uint8_t** data, size_t* size) const;
@@ -30,5 +30,6 @@ private:
 
     std::vector<std::string> urls_;
     std::vector<embed_item_info_t> items_;
+    AssetStore* assets_ = nullptr;
     bool initialized_ = false;
 };

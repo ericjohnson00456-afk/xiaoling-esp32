@@ -1,5 +1,5 @@
 #include <cstring>
-#include "ui/display/lcd_display.h"
+#include "ui/display/panels/lcd_display.h"
 #include <esp_log.h>
 #include "emoji_display.h"
 #include "ui/i18n/lang_config.h"

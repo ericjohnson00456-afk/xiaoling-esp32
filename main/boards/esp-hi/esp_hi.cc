@@ -10,7 +10,7 @@
 #include <esp_wifi.h>
 #include <esp_event.h>
 
-#include "ui/display/lcd_display.h"
+#include "ui/display/panels/lcd_display.h"
 #include <esp_lcd_panel_vendor.h>
 #include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>

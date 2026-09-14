@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-class Assets;
+class AssetStore;
 
 // 表情动画的一个阶段，例如 intro、loop 或 outro。
 struct EmojiPhase {
@@ -38,7 +38,7 @@ public:
     const LvglImage* GetEmojiImage(const char* name) const;
 
     // 在 UI 初始化阶段读取 emoji.json 并建立所有动画帧索引。
-    bool LoadFromAssets(Assets& assets, const std::string& config_path = "/emoji/emoji.json");
+    bool LoadFromAssets(AssetStore& assets, const std::string& config_path = "/emoji/emoji.json");
 
     // 获取表情动画；alias 会自动解析，找不到时返回 nullptr。
     const EmojiAnimation* GetAnimation(const std::string& name) const;

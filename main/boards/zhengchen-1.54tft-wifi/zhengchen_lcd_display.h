@@ -1,7 +1,7 @@
 #ifndef ZHENGCHEN_LCD_DISPLAY_H
 #define ZHENGCHEN_LCD_DISPLAY_H
 
-#include "ui/display/lcd_display.h"
+#include "ui/display/panels/lcd_display.h"
 #include "lvgl_theme.h"
 #include <esp_lvgl_port.h>
 

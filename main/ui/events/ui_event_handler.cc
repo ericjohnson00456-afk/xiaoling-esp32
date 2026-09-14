@@ -3,7 +3,7 @@
 
 #include "ui/i18n/lang_config.h"
 #include "status_model.h"
-#include "ui_manager.h"
+#include "ui/core/ui_manager.h"
 
 #include "display.h"
 #include "voice_model.h"

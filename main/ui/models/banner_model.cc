@@ -50,10 +50,18 @@ void BannerModel::HandleSettingMessage(const cJSON* data) {
 }
 
 std::string BannerModel::SubstituteWakeWord(const std::string& text) const {
-    if (!wake_word_provider_ || text.find(kWakeWordPlaceholder) == std::string::npos) {
+    if (text.find(kWakeWordPlaceholder) == std::string::npos) {
         return text;
     }
-    const std::string wake_word = wake_word_provider_();
+    WakeWordProvider provider;
+    {
+        std::lock_guard<std::mutex> lock(provider_mutex_);
+        provider = wake_word_provider_;
+    }
+    if (!provider) {
+        return text;
+    }
+    const std::string wake_word = provider();
     if (wake_word.empty()) {
         // 尚未唤醒过、拿不到唤醒词名称时保留原文，由下次推送自然覆盖
         return text;

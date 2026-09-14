@@ -3,7 +3,7 @@
 #include "misc/lv_event.h"
 #include "wifi_board.h"
 #include "sensecap_audio_codec.h"
-#include "ui/display/lcd_display.h"
+#include "ui/display/panels/lcd_display.h"
 #include "knob.h"
 #include "config.h"
 #include "led/single_led.h"

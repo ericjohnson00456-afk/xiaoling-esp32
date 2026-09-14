@@ -1,4 +1,4 @@
-#include "lcd_display.h"
+#include "ui/display/panels/lcd_display.h"
 #include "lvgl_theme.h"
 #include "lvgl_theme_setup.h"
 #include "ui/i18n/lang_config.h"

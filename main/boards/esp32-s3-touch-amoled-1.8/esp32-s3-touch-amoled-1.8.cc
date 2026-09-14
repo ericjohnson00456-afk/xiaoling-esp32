@@ -1,6 +1,6 @@
 #include "boards/common/board_events.h"
 #include "wifi_board.h"
-#include "ui/display/lcd_display.h"
+#include "ui/display/panels/lcd_display.h"
 #include "esp_lcd_sh8601.h"
 
 #include "codecs/es8311_audio_codec.h"

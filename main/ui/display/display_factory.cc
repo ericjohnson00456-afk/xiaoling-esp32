@@ -1,8 +1,8 @@
 #include "display_factory.h"
 
-#include "display.h"
-#include "lcd_display.h"
-#include "oled_display.h"
+#include "ui/display/display.h"
+#include "ui/display/panels/lcd_display.h"
+#include "ui/display/panels/oled_display.h"
 
 Display* CreateDisplay(const DisplayHardwareDescriptor& hardware) {
     switch (hardware.type) {

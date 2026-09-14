@@ -1,6 +1,6 @@
 #include "usb_esp32_camera.h"
 #include "display.h"
-#include "lvgl_display.h"
+#include "ui/display/backend/lvgl_display.h"
 #include "board.h"
 #include "system/system_info.h"
 #include "nvs_flash.h"

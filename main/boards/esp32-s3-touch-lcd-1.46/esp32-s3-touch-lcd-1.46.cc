@@ -1,7 +1,7 @@
 #include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "codecs/no_audio_codec.h"
-#include "ui/display/lcd_display.h"
+#include "ui/display/panels/lcd_display.h"
 #include "system_reset.h"
 #include "button.h"
 #include "config.h"
@@ -15,7 +15,7 @@
 #include <esp_lcd_spd2010.h>
 #include <esp_timer.h>
 #include "esp_io_expander_tca9554.h"
-#include "lcd_display.h"
+#include "ui/display/panels/lcd_display.h"
 #include <iot_button.h>
 
 #define TAG "waveshare_lcd_1_46"

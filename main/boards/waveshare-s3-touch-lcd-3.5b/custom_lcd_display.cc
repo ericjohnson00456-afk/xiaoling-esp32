@@ -1,7 +1,7 @@
 
 #include "config.h"
 #include "custom_lcd_display.h"
-#include "lcd_display.h"
+#include "ui/display/panels/lcd_display.h"
 #include "settings.h"
 #include "board.h"
 

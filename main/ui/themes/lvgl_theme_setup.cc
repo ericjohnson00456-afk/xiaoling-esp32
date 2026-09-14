@@ -18,7 +18,7 @@ void RegisterLcdThemes() {
     auto large_icon_font = std::make_shared<LvglBuiltInFont>(&font_awesome_30_4);
 
 #ifndef CONFIG_USE_XIAOLING_MESSAGE_STYLE
-    auto light_theme = new LvglTheme("light");
+    auto light_theme = std::make_unique<LvglTheme>("light");
     light_theme->set_background_color(lv_color_hex(0xFFFFFF));
     light_theme->set_text_color(lv_color_hex(0x000000));
     light_theme->set_chat_background_color(lv_color_hex(0xE0E0E0));
@@ -33,7 +33,7 @@ void RegisterLcdThemes() {
     light_theme->set_large_icon_font(large_icon_font);
 #endif
 
-    auto dark_theme = new LvglTheme("dark");
+    auto dark_theme = std::make_unique<LvglTheme>("dark");
     dark_theme->set_background_color(lv_color_hex(0x000000));
     dark_theme->set_text_color(lv_color_hex(0xFFFFFF));
     dark_theme->set_chat_background_color(lv_color_hex(0x1F1F1F));
@@ -49,9 +49,9 @@ void RegisterLcdThemes() {
 
     auto& theme_manager = LvglThemeManager::GetInstance();
 #ifndef CONFIG_USE_XIAOLING_MESSAGE_STYLE
-    theme_manager.RegisterTheme("light", light_theme);
+    theme_manager.RegisterTheme("light", std::move(light_theme));
 #endif
-    theme_manager.RegisterTheme("dark", dark_theme);
+    theme_manager.RegisterTheme("dark", std::move(dark_theme));
 }
 
 }  // namespace

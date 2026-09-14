@@ -4,7 +4,7 @@
 #include "config.h"
 #include "wifi_board.h"
 
-#include "ui/display/lcd_display.h"
+#include "ui/display/panels/lcd_display.h"
 #include "esp_lcd_sh8601.h"
 #include "lvgl.h"
 #include "mcp_server.h"

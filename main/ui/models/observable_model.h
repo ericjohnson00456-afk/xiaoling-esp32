@@ -50,6 +50,27 @@ public:
     }
 
 protected:
+    // Atomically update the current state and notify a snapshot of observers.
+    // This avoids lost updates when multiple event sources perform a
+    // read-modify-write concurrently.
+    template <typename Mutator>
+    void Update(Mutator&& mutator) {
+        std::vector<Observer> observers;
+        State snapshot;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            mutator(state_);
+            snapshot = state_;
+            observers.reserve(observers_.size());
+            for (const auto& item : observers_) {
+                observers.push_back(item.observer);
+            }
+        }
+        for (const auto& observer : observers) {
+            observer(snapshot);
+        }
+    }
+
     void Publish(State state) {
         std::vector<Observer> observers;
         State snapshot;

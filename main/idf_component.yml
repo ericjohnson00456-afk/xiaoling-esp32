@@ -1,5 +1,7 @@
 ## IDF Component Manager Manifest File
 dependencies:
+  romfs:
+    path: ../components/romfs
   base64_codec:
     path: ../components/base64_codec
   image_codec:

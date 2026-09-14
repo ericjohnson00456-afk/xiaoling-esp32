@@ -1,6 +1,6 @@
 #include "tone_model.h"
 
-#include "resource/assets.h"
+#include "resource/store/asset_store.h"
 #include "ui/i18n/lang_config.h"
 
 #include <esp_log.h>
@@ -15,7 +15,8 @@ ToneModel& ToneModel::GetInstance() {
     return instance;
 }
 
-bool ToneModel::Initialize(Assets& assets, const std::string& directory) {
+bool ToneModel::Initialize(AssetStore& assets, const std::string& directory) {
+    assets_ = &assets;
     urls_.clear();
     items_.clear();
     initialized_ = false;
@@ -94,13 +95,15 @@ bool ToneModel::GetLocalizedData(const std::string& name, const uint8_t** data, 
     if (!initialized_ || data == nullptr || size == nullptr || name.empty()) {
         return false;
     }
-    auto& assets = Assets::GetInstance();
+    if (assets_ == nullptr) {
+        return false;
+    }
     const std::string localized_path = std::string("/locales/") + Lang::CODE + "/" + name + ".ogg";
     void* raw = nullptr;
     size_t length = 0;
-    if (!assets.GetAssetData(localized_path, raw, length)) {
+    if (!assets_->GetAssetData(localized_path, raw, length)) {
         const std::string fallback_path = std::string("/locales/en-US/") + name + ".ogg";
-        if (!assets.GetAssetData(fallback_path, raw, length)) {
+        if (!assets_->GetAssetData(fallback_path, raw, length)) {
             return false;
         }
     }

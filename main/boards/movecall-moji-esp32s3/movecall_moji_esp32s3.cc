@@ -3,7 +3,7 @@
 #include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "codecs/es8311_audio_codec.h"
-#include "ui/display/lcd_display.h"
+#include "ui/display/panels/lcd_display.h"
 #include "button.h"
 #include "config.h"
 #include "led/single_led.h"

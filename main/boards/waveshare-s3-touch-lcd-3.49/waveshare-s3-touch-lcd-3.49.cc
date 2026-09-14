@@ -1,7 +1,7 @@
 #include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "codecs/box_audio_codec.h"
-#include "ui/display/lcd_display.h"
+#include "ui/display/panels/lcd_display.h"
 #include "system_reset.h"
 #include "button.h"
 #include "config.h"

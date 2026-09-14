@@ -1,8 +1,8 @@
 #ifndef LCD_DISPLAY_H
 #define LCD_DISPLAY_H
 
-#include "lvgl_display.h"
-#include "png_animation_player.h"
+#include "ui/display/backend/lvgl_display.h"
+#include "ui/tools/image/png_animation_player.h"
 
 #include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>
