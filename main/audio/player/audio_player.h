@@ -25,6 +25,8 @@ public:
     bool Initialize(AudioService* audio_service);
     uint32_t PlayTtsUrl(const std::string& url);
     uint32_t PlayTone(uint16_t tone_id);
+    bool Pause();
+    bool Resume();
     bool Stop(PlaybackEndReason reason = PlaybackEndReason::kCancelled);
     bool IsPlaying() const;
     void SetEventCallback(EventCallback callback);

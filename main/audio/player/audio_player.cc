@@ -114,6 +114,14 @@ uint32_t AudioPlayer::PlayTone(uint16_t tone_id) {
     return request.session_id;
 }
 
+bool AudioPlayer::Pause() {
+    return engine_ != nullptr && engine_->Pause();
+}
+
+bool AudioPlayer::Resume() {
+    return engine_ != nullptr && engine_->Resume();
+}
+
 bool AudioPlayer::Stop(PlaybackEndReason reason) {
     return engine_ == nullptr || engine_->Stop(reason);
 }

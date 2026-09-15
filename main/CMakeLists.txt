@@ -3,6 +3,9 @@ set(SOURCES "audio/audio_codec.cc"
             "audio/audio_service.cc"
             "audio/opus_wb_encoder.cc"
             "audio/player/audio_player.cc"
+            "audio/player/player_tone.cc"
+            "button/button.cc"
+            "button/button_events.cc"
             "audio/tone/tone_model.cc"
             "audio/player/engine/gmf_player_engine.cc"
             "audio/codecs/no_audio_codec.cc"
@@ -69,7 +72,7 @@ file(GLOB SHELL_CMD_SOURCES
      "${CMAKE_CURRENT_SOURCE_DIR}/shell/cmd/*.cc")
 list(APPEND SOURCES ${SHELL_CMD_SOURCES})
 
-set(INCLUDE_DIRS "." "ui/display" "ui/display/backend" "ui/display/panels"
+set(INCLUDE_DIRS "." "button" "ui/display" "ui/display/backend" "ui/display/panels"
                  "ui/themes" "ui/tools/font" "ui/tools/image" "audio"
                  "audio/player" "audio/player/core" "audio/player/engine" "cloud" "xiaoling" "mcp"
                  "ui" "ui/core" "ui/models" "ui/screens/home" "system" "resource" "shell" "ota")
@@ -953,10 +956,49 @@ function(get_assets_local_file assets_source assets_local_file_var)
     set(${assets_local_file_var} ${ASSETS_LOCAL_FILE} PARENT_SCOPE)
 endfunction()
 
+function(build_split_resources)
+    set(SPLIT_OUTPUT_DIR "${CMAKE_BINARY_DIR}/split_resources")
+    set(SPLIT_RESPAK "${SPLIT_OUTPUT_DIR}/respak.bin")
+    set(SPLIT_TONE "${SPLIT_OUTPUT_DIR}/tone.bin")
+    set(SPLIT_EMOJI "${SPLIT_OUTPUT_DIR}/emoji.bin")
+    set(SPLIT_WAKE_WORD "${SPLIT_OUTPUT_DIR}/wake_word.bin")
 
+    string(REPLACE "basic" "common" BUILTIN_FONT_FILE "${BUILTIN_TEXT_FONT}.bin")
+    set(BUILTIN_FONT_PATH "${XIAOZHI_FONTS_PATH}/cbin/${BUILTIN_FONT_FILE}")
+
+    file(GLOB_RECURSE SPLIT_RESOURCE_FILES
+         "${CMAKE_CURRENT_SOURCE_DIR}/resource/assets/*")
+    add_custom_command(
+        OUTPUT ${SPLIT_RESPAK} ${SPLIT_TONE} ${SPLIT_EMOJI} ${SPLIT_WAKE_WORD}
+        COMMAND python ${PROJECT_DIR}/scripts/build_split_resources.py
+                --resource-root "${CMAKE_CURRENT_SOURCE_DIR}/resource/assets"
+                --output-dir "${SPLIT_OUTPUT_DIR}"
+                --font-file "${BUILTIN_FONT_PATH}"
+                --wake-word-file "${CMAKE_CURRENT_SOURCE_DIR}/audio/wake_words/micro_wake_word/models/${MWW_MODEL_FILE}"
+                --wake-word-name "${MWW_MODEL_WAKE_WORD}"
+        DEPENDS ${PROJECT_DIR}/scripts/build_split_resources.py
+                ${PROJECT_DIR}/scripts/romfs.py ${SPLIT_RESOURCE_FILES}
+        COMMENT "Building split respak/tone/emoji resource images"
+        VERBATIM)
+    add_custom_target(generated_split_resources ALL
+                      DEPENDS ${SPLIT_RESPAK} ${SPLIT_TONE} ${SPLIT_EMOJI} ${SPLIT_WAKE_WORD})
+    esptool_py_flash_to_partition(flash "respak" "${SPLIT_RESPAK}")
+    esptool_py_flash_to_partition(flash "tone" "${SPLIT_TONE}")
+    esptool_py_flash_to_partition(flash "emoji" "${SPLIT_EMOJI}")
+    esptool_py_flash_to_partition(flash "wake_word" "${SPLIT_WAKE_WORD}")
+    message(STATUS "Split resource flashing configured")
+endfunction()
+
+partition_table_get_partition_info(respak_size "--partition-name respak" "size")
 partition_table_get_partition_info(size "--partition-name assets" "size")
 partition_table_get_partition_info(offset "--partition-name assets" "offset")
-if ("${size}" AND "${offset}")
+if ("${respak_size}")
+    if(CONFIG_FLASH_DEFAULT_ASSETS)
+        build_split_resources()
+    else()
+        message(STATUS "Split resource partitions present; default split resource flashing disabled")
+    endif()
+elseif ("${size}" AND "${offset}")
     # Flash assets based on configuration
     if(CONFIG_FLASH_DEFAULT_ASSETS)
         # Build default assets based on configuration

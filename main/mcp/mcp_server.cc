@@ -284,6 +284,19 @@ void McpServer::DoToolCall(const std::string &id, const std::string &tool_name,
                  cJSON_IsString(value)) {
         argument.set_value<std::string>(value->valuestring);
         found = true;
+      } else if (argument.type() == kPropertyTypeString &&
+                 cJSON_IsNumber(value)) {
+        // A few legacy tools advertise a string value but historically also
+        // accepted numeric JSON values (for example volume/brightness).
+        argument.set_value<std::string>(std::to_string(value->valueint));
+        found = true;
+      } else if (argument.type() == kPropertyTypeJson && value != nullptr) {
+        char *serialized = cJSON_PrintUnformatted(value);
+        if (serialized != nullptr) {
+          argument.set_value<std::string>(serialized);
+          cJSON_free(serialized);
+          found = true;
+        }
       }
       if (!argument.has_default_value() && !found) {
         ReplyError("tools/call", id,

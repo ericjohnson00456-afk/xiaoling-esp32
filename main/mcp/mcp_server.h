@@ -106,11 +106,18 @@ using ReturnValue = std::variant<bool, int, std::string, cJSON*, ImageContent*, 
 enum PropertyType {
     kPropertyTypeBoolean,
     kPropertyTypeInteger,
-    kPropertyTypeString
+    kPropertyTypeString,
+    // Arbitrary JSON value (array/object). The serialized value is exposed
+    // through Property::value<std::string>() to tool callbacks.
+    kPropertyTypeJson
 };
 
 struct Description {
     std::string description;
+};
+
+struct JsonSchema {
+    std::string value;
 };
 
 class Property {
@@ -122,6 +129,7 @@ private:
     std::optional<int> min_value_;  // 新增：整数最小值
     std::optional<int> max_value_;  // 新增：整数最大值
     std::string description_;       // 新增：属性描述
+    std::string json_schema_;
 
 public:
     // Required field constructor
@@ -154,6 +162,19 @@ public:
         }
         value_ = default_value;
         if (!desc.description.empty()) description_ = desc.description;
+    }
+
+    // JSON property with a caller-provided schema. The value is serialized
+    // when a tool call is decoded and can be read as std::string.
+    Property(const std::string& name, PropertyType type, const JsonSchema& schema,
+             bool required, const Description& desc = Description{})
+        : name_(name), type_(type), has_default_value_(!required),
+          json_schema_(schema.value) {
+        if (type != kPropertyTypeJson) {
+            throw std::invalid_argument("Schema constructor requires JSON property type");
+        }
+        if (!desc.description.empty()) description_ = desc.description;
+        if (!required) value_ = std::string();
     }
 
     inline const std::string& name() const { return name_; }
@@ -209,6 +230,9 @@ public:
             if (has_default_value_) {
                 cJSON_AddStringToObject(json, "default", value<std::string>().c_str());
             }
+        } else if (type_ == kPropertyTypeJson) {
+            cJSON_Delete(json);
+            return json_schema_;
         }
 
         if (has_description()) {

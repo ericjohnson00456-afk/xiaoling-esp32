@@ -13,6 +13,8 @@ public:
 
     bool Initialize(AudioService* audio_service, EventCallback callback) override;
     bool Play(const PlaybackRequest& request) override;
+    bool Pause() override;
+    bool Resume() override;
     bool Stop(PlaybackEndReason reason) override;
     bool IsPlaying() const override;
 

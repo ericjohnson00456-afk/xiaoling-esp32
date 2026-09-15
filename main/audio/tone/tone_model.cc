@@ -22,8 +22,20 @@ bool ToneModel::Initialize(AssetStore& assets, const std::string& directory) {
     initialized_ = false;
 
     std::vector<std::string> paths;
-    if (!assets.ListAssetFiles(directory, paths)) {
-        ESP_LOGW(TAG, "ROMFS 中没有 tone 目录: %s", directory.c_str());
+    if (directory == "/") {
+        // Prefer the legacy /tone directory when it exists; split tone.bin
+        // packages place numbered files directly at the ROMFS root.
+        if (!assets.ListAssetFiles("/tone", paths)) {
+            assets.ListAssetFiles("/", paths);
+        }
+    } else if (!assets.ListAssetFiles(directory, paths)) {
+        // Split tone.bin packages store numbered files at the ROMFS root;
+        // legacy assets.bin keeps them under /tone.
+        paths.clear();
+        assets.ListAssetFiles("/", paths);
+    }
+    if (paths.empty()) {
+        ESP_LOGW(TAG, "ROMFS 中没有 tone 资源: %s", directory.c_str());
         return false;
     }
 

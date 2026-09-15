@@ -569,10 +569,28 @@ void AudioService::EncodeWakeWord() {
 }
 
 const std::string& AudioService::GetLastWakeWord() const {
+    static const std::string kEmptyWakeWord;
+    if (!wake_word_) {
+        return kEmptyWakeWord;
+    }
     return wake_word_->GetLastDetectedWakeWord();
 }
 
+std::string AudioService::GetWakeWordName() const {
+    if (!wake_word_name_.empty()) {
+        return wake_word_name_;
+    }
+#if CONFIG_USE_MICRO_WAKE_WORD
+    return MICRO_WAKE_WORD_MODEL_WAKE_WORD;
+#else
+    return GetLastWakeWord();
+#endif
+}
+
 std::unique_ptr<AudioStreamPacket> AudioService::PopWakeWordPacket() {
+    if (!wake_word_) {
+        return nullptr;
+    }
     auto packet = std::make_unique<AudioStreamPacket>();
     if (wake_word_->GetWakeWordOpus(packet->payload)) {
         packet->sample_rate = 16000;
@@ -782,11 +800,13 @@ void AudioService::CheckAndUpdateAudioPowerState() {
 }
 
 #if CONFIG_USE_MICRO_WAKE_WORD
-void AudioService::SetMicroWakeWordModel(const void* model_data, size_t model_size) {
+void AudioService::SetMicroWakeWordModel(const void* model_data, size_t model_size,
+                                         const std::string& wake_word) {
     static srmodel_list_t models_list = {.num = 0};
     models_list_ = &models_list;
 
     wake_word_ = std::make_unique<MicroWakeWord>(model_data, model_size);
+    wake_word_name_ = wake_word;
     wake_word_->OnWakeWordDetected([this](const std::string& wake_word) {
         if (callbacks_.on_wake_word_detected) {
             callbacks_.on_wake_word_detected(wake_word);

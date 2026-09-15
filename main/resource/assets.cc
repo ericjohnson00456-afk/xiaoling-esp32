@@ -9,17 +9,31 @@
 #include <esp_timer.h>
 #include <cbin_font.h>
 
+#include <algorithm>
+#include <memory>
+#include <new>
+#include <vector>
+
 #define TAG "Assets"
 
 bool Assets::Apply() {
     void* ptr = nullptr;
     size_t size = 0;
-    if (!GetAssetData("index.json", ptr, size)) {
-        ESP_LOGE(TAG, "The index.json file is not found");
-        return false;
+    cJSON* root = nullptr;
+    if (GetAssetData("index.json", ptr, size)) {
+        root = cJSON_ParseWithLength(static_cast<char*>(ptr), size);
+    } else {
+        // respak.bin from the ARCS-MINI resource layout intentionally contains
+        // only font files and has no legacy index.json. Provide the canonical
+        // font path so the existing theme application path still works.
+        root = cJSON_CreateObject();
+        if (root != nullptr) {
+            std::vector<std::string> font_paths;
+            if (ListAssetFiles("/font", font_paths) && !font_paths.empty()) {
+                cJSON_AddStringToObject(root, "text_font", font_paths.front().c_str());
+            }
+        }
     }
-
-    cJSON* root = cJSON_ParseWithLength(static_cast<char*>(ptr), size);
     if (root == nullptr) {
         ESP_LOGE(TAG, "The index.json file is not valid");
         return false;
@@ -44,7 +58,23 @@ bool Assets::Apply() {
             ESP_LOGE(TAG, "The MWW model file %s is not found", mwwmodel_file.c_str());
         }
     } else {
-        ESP_LOGE(TAG, "The assets does not contain a MWW model");
+        auto& wake_assets = WakeWordStore();
+        std::string model_path;
+        std::string wake_word;
+        if (wake_assets.GetAssetData("/index.json", ptr, size)) {
+            cJSON* wake_index = cJSON_ParseWithLength(static_cast<char*>(ptr), size);
+            const cJSON* model = wake_index ? cJSON_GetObjectItem(wake_index, "model") : nullptr;
+            const cJSON* name = wake_index ? cJSON_GetObjectItem(wake_index, "wake_word") : nullptr;
+            if (cJSON_IsString(model)) model_path = "/" + std::string(model->valuestring);
+            if (cJSON_IsString(name)) wake_word = name->valuestring;
+            cJSON_Delete(wake_index);
+        }
+        if (!model_path.empty() && wake_assets.GetAssetData(model_path, ptr, size) && ptr != nullptr && size != 0) {
+            Application::GetInstance().GetAudioService().SetMicroWakeWordModel(ptr, size, wake_word);
+            ESP_LOGI(TAG, "Loaded MWW model from wake_word partition: %s (%s)", model_path.c_str(), wake_word.c_str());
+        } else {
+            ESP_LOGE(TAG, "The wake_word resource manifest or MWW model is missing");
+        }
     }
 #else // CONFIG_USE_MICRO_WAKE_WORD
     cJSON* srmodels = cJSON_GetObjectItem(root, "srmodels");
@@ -67,6 +97,27 @@ bool Assets::Apply() {
         }
     }
 #endif // CONFIG_USE_MICRO_WAKE_WORD
+
+    // New split resource packages keep wake-word models in wake_word.bin.
+    // Prefer the conventional srmodels.bin name when present; cae_esr.bin is
+    // accepted for the ARCS-MINI package and ignored if unsupported by ESP-SR.
+ #if !CONFIG_USE_MICRO_WAKE_WORD
+    if (models_list_ == nullptr) {
+        auto& wake_assets = WakeWordStore();
+        const char* candidates[] = {"/srmodels.bin", "/cae_esr.bin"};
+        for (const char* candidate : candidates) {
+            if (!wake_assets.GetAssetData(candidate, ptr, size) || ptr == nullptr || size == 0) {
+                continue;
+            }
+            models_list_ = srmodel_load(static_cast<uint8_t*>(ptr));
+            if (models_list_ != nullptr) {
+                Application::GetInstance().GetAudioService().SetModelsList(models_list_);
+                break;
+            }
+            ESP_LOGW(TAG, "Wake-word resource is not an ESP-SR model: %s", candidate);
+        }
+    }
+ #endif
 
     auto& theme_manager = LvglThemeManager::GetInstance();
     auto light_theme = theme_manager.GetTheme("light");
@@ -190,129 +241,98 @@ bool Assets::Apply() {
     return true;
 }
 
-bool Assets::Download(std::string url, std::function<void(int progress, size_t speed)> progress_callback) {
-    ESP_LOGI(TAG, "Downloading new version of assets from %s", url.c_str());
+Assets::Assets()
+    : AssetStore("respak", "assets", true),
+      tone_store_("tone", nullptr, false),
+      emoji_store_("emoji", nullptr, false),
+      wake_word_store_("wake_word", nullptr, false) {}
 
-    // Release the read mapping before writing the replacement package.
-    Unmount();
+AssetStore& Assets::SelectStore(Resource resource) {
+    AssetStore* selected = this;
+    switch (resource) {
+        case Resource::Respak: selected = this; break;
+        case Resource::Tone: selected = &tone_store_; break;
+        case Resource::Emoji: selected = &emoji_store_; break;
+        case Resource::WakeWord: selected = &wake_word_store_; break;
+    }
+    if (selected != this && !selected->partition_valid()) {
+        selected->Mount();
+    }
+    // Older partition tables have one "assets" package. Keep it usable until
+    // the split resource table is flashed.
+    if (selected != this && !selected->partition_valid()) {
+        return *this;
+    }
+    return *selected;
+}
 
-    // 下载新的资源文件
+AssetStore& Assets::ToneStore() { return SelectStore(Resource::Tone); }
+AssetStore& Assets::EmojiStore() { return SelectStore(Resource::Emoji); }
+AssetStore& Assets::WakeWordStore() { return SelectStore(Resource::WakeWord); }
+
+bool Assets::Download(std::string url,
+                      std::function<void(int progress, size_t speed)> progress_callback) {
+    return DownloadResource(Resource::Respak, std::move(url), std::move(progress_callback));
+}
+
+bool Assets::DownloadResource(Resource resource, std::string url,
+                              std::function<void(int progress, size_t speed)> progress_callback) {
+    AssetStore* target = this;
+    switch (resource) {
+        case Resource::Respak: target = this; break;
+        case Resource::Tone: target = &tone_store_; break;
+        case Resource::Emoji: target = &emoji_store_; break;
+        case Resource::WakeWord: target = &wake_word_store_; break;
+    }
+    if (target != this && !target->partition_valid()) {
+        target->Mount();
+    }
+    // Never write a tone/emoji/wake-word URL into the legacy respak/assets
+    // partition when a split partition has not been flashed yet.
+    if (target != this && !target->partition_valid()) {
+        ESP_LOGE(TAG, "Split resource partition is unavailable");
+        return false;
+    }
+    target->Unmount();
     auto network = Board::GetInstance().GetNetwork();
+    if (network == nullptr) {
+        target->Mount();
+        return false;
+    }
     auto http = network->CreateHttp(0);
-
-    if (!http->Open("GET", url)) {
-        ESP_LOGE(TAG, "Failed to open HTTP connection");
+    if (http == nullptr || !http->Open("GET", url) || http->GetStatusCode() != 200) {
+        ESP_LOGE(TAG, "Failed to open resource URL: %s", url.c_str());
+        target->Mount();
+        return false;
+    }
+    const size_t content_length = http->GetBodyLength();
+    if (content_length == 0 || target->partition() == nullptr ||
+        content_length > target->partition()->size) {
+        ESP_LOGE(TAG, "Invalid resource size: %u", static_cast<unsigned>(content_length));
+        http->Close();
+        target->Mount();
         return false;
     }
 
-    if (http->GetStatusCode() != 200) {
-        ESP_LOGE(TAG, "Failed to get assets, status code: %d", http->GetStatusCode());
-        return false;
+    constexpr size_t kBufferSize = 4096;
+    constexpr size_t kSectorSize = 4096;
+    std::unique_ptr<char[]> buffer(new (std::nothrow) char[kBufferSize]);
+    if (!buffer) { http->Close(); target->Mount(); return false; }
+    const size_t erase_size = (content_length + kSectorSize - 1) / kSectorSize * kSectorSize;
+    if (esp_partition_erase_range(target->partition(), 0, erase_size) != ESP_OK) {
+        http->Close(); target->Mount(); return false;
     }
-
-    size_t content_length = http->GetBodyLength();
-    if (content_length == 0) {
-        ESP_LOGE(TAG, "Failed to get content length");
-        return false;
+    size_t written = 0;
+    while (written < content_length) {
+        int ret = http->Read(buffer.get(), std::min(kBufferSize, content_length - written));
+        if (ret <= 0 || esp_partition_write(target->partition(), written, buffer.get(), ret) != ESP_OK) {
+            ESP_LOGE(TAG, "Resource download/write failed at %u", static_cast<unsigned>(written));
+            http->Close(); target->Mount(); return false;
+        }
+        written += static_cast<size_t>(ret);
+        if (progress_callback) progress_callback(static_cast<int>(written * 100 / content_length), ret);
     }
-
-    if (content_length > partition()->size) {
-        ESP_LOGE(TAG, "Assets file size (%u) is larger than partition size (%lu)", content_length, partition()->size);
-        return false;
-    }
-
-    // 定义扇区大小为4KB（ESP32的标准扇区大小）
-    const size_t SECTOR_SIZE = esp_partition_get_main_flash_sector_size();
-
-    // 计算需要擦除的扇区数量
-    size_t sectors_to_erase = (content_length + SECTOR_SIZE - 1) / SECTOR_SIZE; // 向上取整
-    size_t total_erase_size = sectors_to_erase * SECTOR_SIZE;
-
-    ESP_LOGI(TAG, "Sector size: %u, content length: %u, sectors to erase: %u, total erase size: %u",
-             SECTOR_SIZE, content_length, sectors_to_erase, total_erase_size);
-
-    // 写入新的资源文件到分区，一边erase一边写入
-    char buffer[512];
-    size_t total_written = 0;
-    size_t recent_written = 0;
-    size_t current_sector = 0;
-    auto last_calc_time = esp_timer_get_time();
-
-    while (true) {
-        int ret = http->Read(buffer, sizeof(buffer));
-        if (ret < 0) {
-            ESP_LOGE(TAG, "Failed to read HTTP data: %s", esp_err_to_name(ret));
-            return false;
-        }
-
-        if (ret == 0) {
-            break;
-        }
-
-        // 检查是否需要擦除新的扇区
-        size_t write_end_offset = total_written + ret;
-        size_t needed_sectors = (write_end_offset + SECTOR_SIZE - 1) / SECTOR_SIZE;
-
-        // 擦除需要的新扇区
-        while (current_sector < needed_sectors) {
-            size_t sector_start = current_sector * SECTOR_SIZE;
-            size_t sector_end = (current_sector + 1) * SECTOR_SIZE;
-
-            // 确保擦除范围不超过分区大小
-            if (sector_end > partition()->size) {
-                ESP_LOGE(TAG, "Sector end (%u) exceeds partition size (%lu)", sector_end, partition()->size);
-                return false;
-            }
-
-            ESP_LOGD(TAG, "Erasing sector %u (offset: %u, size: %u)", current_sector, sector_start, SECTOR_SIZE);
-            esp_err_t err = esp_partition_erase_range(partition(), sector_start, SECTOR_SIZE);
-            if (err != ESP_OK) {
-                ESP_LOGE(TAG, "Failed to erase sector %u at offset %u: %s", current_sector, sector_start, esp_err_to_name(err));
-                return false;
-            }
-
-            current_sector++;
-        }
-
-        // 写入数据到分区
-        esp_err_t err = esp_partition_write(partition(), total_written, buffer, ret);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to write to assets partition at offset %u: %s", total_written, esp_err_to_name(err));
-            return false;
-        }
-
-        total_written += ret;
-        recent_written += ret;
-
-        // 计算进度和速度
-        if (esp_timer_get_time() - last_calc_time >= 1000000 || total_written == content_length || ret == 0) {
-            size_t progress = total_written * 100 / content_length;
-            size_t speed = recent_written; // 每秒的字节数
-            ESP_LOGI(TAG, "Progress: %u%% (%u/%u), Speed: %u B/s, Sectors erased: %u",
-                     progress, total_written, content_length, speed, current_sector);
-            if (progress_callback) {
-                progress_callback(progress, speed);
-            }
-            last_calc_time = esp_timer_get_time();
-            recent_written = 0; // 重置最近写入的字节数
-        }
-    }
-
     http->Close();
-
-    if (total_written != content_length) {
-        ESP_LOGE(TAG, "Downloaded size (%u) does not match expected size (%u)", total_written, content_length);
-        return false;
-    }
-
-    ESP_LOGI(TAG, "Assets download completed, total written: %u bytes, total sectors erased: %u",
-             total_written, current_sector);
-
-    // 重新初始化资源分区
-    if (!Mount()) {
-        ESP_LOGE(TAG, "Failed to re-initialize assets partition");
-        return false;
-    }
-
+    if (!target->Mount()) return false;
     return true;
 }

@@ -16,6 +16,8 @@
 #include "ota/ota.h"
 #include "audio_service.h"
 #include "audio/player/audio_player.h"
+#include "audio/player/player_tone.h"
+#include "button/button_events.h"
 #include "device_state.h"
 #include "device_state_machine.h"
 #include "boards/common/board_events.h"
@@ -89,6 +91,8 @@ public:
     void DismissAlert();
 
     void AbortSpeaking(AbortReason reason);
+    bool PauseAudio();
+    bool ResumeAudio();
 
     /**
      * Toggle chat state (event-based, thread-safe)
@@ -116,6 +120,7 @@ public:
     void SetAecMode(AecMode mode);
     AecMode GetAecMode() const { return aec_mode_; }
     void PlaySound(const std::string_view& sound);
+    uint32_t PlayAudioUrl(const std::string& url);
     void PlayLocalizedTone(const char* name);
     void PlayTone(uint16_t tone_id);
     AudioService& GetAudioService() { return audio_service_; }
@@ -142,6 +147,7 @@ private:
     std::string last_error_message_;
     AudioService audio_service_;
     AudioPlayer audio_player_;
+    PlayerTone player_tone_{audio_player_};
     uint32_t active_tts_session_id_ = 0;
     std::unique_ptr<Ota> ota_;
 #ifdef CONFIG_LSPLATFORM
@@ -153,7 +159,6 @@ private:
 
     bool aborted_ = false;
     bool assets_version_checked_ = false;
-    bool play_popup_on_listening_ = false;  // Flag to play popup sound after state changes to listening
     int clock_ticks_ = 0;
     TaskHandle_t activation_task_handle_ = nullptr;
 
@@ -175,8 +180,11 @@ private:
     void HandleBoardSystemMessage(const BoardEvents::SystemMessageEvent& event);
     void HandleBoardEmotion(const BoardEvents::EmotionEvent& event);
     void HandleBoardLocalizedText(const BoardEvents::LocalizedTextEvent& event);
+    void HandleButtonEvent(int32_t event_id);
     static void OnBoardInputEvent(void* arg, esp_event_base_t event_base,
                                   int32_t event_id, void* event_data);
+    static void OnButtonEvent(void* arg, esp_event_base_t event_base,
+                              int32_t event_id, void* event_data);
 
     // Activation task (runs in background)
     void ActivationTask();
@@ -187,6 +195,8 @@ private:
     void InitializeXiaolingConn();
     void ShowActivationCode(const std::string& code, const std::string& message, const std::string& qrcode = "");
     void SetListeningMode(ListeningMode mode);
+    void BeginWakeup(ListeningMode mode);
+    void CancelWakeup();
 
     // State change handler called by state machine
     void OnStateChanged(DeviceState old_state, DeviceState new_state);

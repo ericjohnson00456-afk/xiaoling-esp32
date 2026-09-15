@@ -42,6 +42,7 @@ public:
 
     // 获取表情动画；alias 会自动解析，找不到时返回 nullptr。
     const EmojiAnimation* GetAnimation(const std::string& name) const;
+    std::vector<std::string> GetNames() const;
     const std::string& default_emoji() const { return default_emoji_; }
 
     void ClearAnimations();

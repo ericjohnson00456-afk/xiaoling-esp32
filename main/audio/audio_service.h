@@ -91,6 +91,7 @@ public:
     void EncodeWakeWord();
     std::unique_ptr<AudioStreamPacket> PopWakeWordPacket();
     const std::string& GetLastWakeWord() const;
+    std::string GetWakeWordName() const;
     bool IsVoiceDetected() const { return voice_detected_; }
     bool IsIdle();
     bool IsWakeWordRunning() const { return xEventGroupGetBits(event_group_) & AS_EVENT_WAKE_WORD_RUNNING; }
@@ -114,7 +115,8 @@ public:
     bool ReadAudioData(std::vector<int16_t>& data, int sample_rate, int samples);
     void ResetDecoder();
 #if CONFIG_USE_MICRO_WAKE_WORD
-    void SetMicroWakeWordModel(const void* model_data, size_t model_size);
+    void SetMicroWakeWordModel(const void* model_data, size_t model_size,
+                               const std::string& wake_word = {});
 #else // !CONFIG_USE_MICRO_WAKE_WORD
     void SetModelsList(srmodel_list_t* models_list);
 #endif // CONFIG_USE_MICRO_WAKE_WORD
@@ -128,6 +130,7 @@ private:
     AudioServiceCallbacks callbacks_;
     std::unique_ptr<AudioProcessor> audio_processor_;
     std::unique_ptr<WakeWord> wake_word_;
+    std::string wake_word_name_;
     std::unique_ptr<AudioDebugger> audio_debugger_;
     std::unique_ptr<OpusWbEncoder> opus_encoder_;
     std::unique_ptr<OpusDecoderWrapper> opus_decoder_;

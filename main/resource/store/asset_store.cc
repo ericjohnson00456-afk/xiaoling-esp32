@@ -10,8 +10,13 @@
 
 #define TAG "AssetStore"
 
-AssetStore::AssetStore() {
-    Mount();
+AssetStore::AssetStore(const char* partition_label, const char* fallback_label,
+                       bool auto_mount)
+    : partition_label_(partition_label != nullptr ? partition_label : "assets"),
+      fallback_label_(fallback_label != nullptr ? fallback_label : "") {
+    if (auto_mount) {
+        Mount();
+    }
 }
 
 AssetStore::~AssetStore() {
@@ -36,9 +41,16 @@ bool AssetStore::MountLocked() {
 
     partition_ = esp_partition_find_first(ESP_PARTITION_TYPE_ANY,
                                            ESP_PARTITION_SUBTYPE_ANY,
-                                           "assets");
+                                           partition_label_.c_str());
+    if (partition_ == nullptr && !fallback_label_.empty()) {
+        ESP_LOGW(TAG, "Partition %s not found, trying fallback %s",
+                 partition_label_.c_str(), fallback_label_.c_str());
+        partition_ = esp_partition_find_first(ESP_PARTITION_TYPE_ANY,
+                                               ESP_PARTITION_SUBTYPE_ANY,
+                                               fallback_label_.c_str());
+    }
     if (partition_ == nullptr) {
-        ESP_LOGI(TAG, "No assets partition found");
+        ESP_LOGI(TAG, "No resource partition found for %s", partition_label_.c_str());
         return false;
     }
 

@@ -75,6 +75,10 @@ void SingleLed::TurnOff() {
     led_strip_clear(led_strip_);
 }
 
+void SingleLed::Blink(int interval_ms) {
+    StartContinuousBlink(interval_ms);
+}
+
 void SingleLed::BlinkOnce() {
     Blink(1, 100);
 }

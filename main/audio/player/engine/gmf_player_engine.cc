@@ -145,6 +145,22 @@ bool GmfPlayerEngine::Play(const PlaybackRequest& request) {
     return false;
 }
 
+bool GmfPlayerEngine::Pause() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!initialized_ || handle_ == nullptr || !playing_) {
+        return false;
+    }
+    return esp_audio_simple_player_pause(handle_) == ESP_GMF_ERR_OK;
+}
+
+bool GmfPlayerEngine::Resume() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!initialized_ || handle_ == nullptr || !playing_) {
+        return false;
+    }
+    return esp_audio_simple_player_resume(handle_) == ESP_GMF_ERR_OK;
+}
+
 bool GmfPlayerEngine::Stop(PlaybackEndReason reason) {
     {
         std::lock_guard<std::mutex> lock(mutex_);

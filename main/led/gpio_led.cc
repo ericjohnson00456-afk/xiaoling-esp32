@@ -261,3 +261,7 @@ void GpioLed::EventTask(void* arg) {
         led->OnFadeEnd();
     }
 }
+
+void GpioLed::Blink(int interval_ms) {
+    StartContinuousBlink(interval_ms);
+}

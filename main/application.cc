@@ -89,6 +89,8 @@ void Application::Initialize() {
     // dependencies and also gives us one place to apply device-state rules.
     ESP_ERROR_CHECK(esp_event_handler_register(
         BOARD_EVENT, ESP_EVENT_ANY_ID, &Application::OnBoardInputEvent, this));
+    ESP_ERROR_CHECK(esp_event_handler_register(
+        BUTTON_EVENT, ESP_EVENT_ANY_ID, &Application::OnButtonEvent, this));
 
     SetDeviceState(kDeviceStateStarting);
 
@@ -101,7 +103,7 @@ void Application::Initialize() {
 #if CONFIG_LSPLATFORM_BANNERS
     // BannerModel 负责解析和保存数据，HomePresenter 负责轮换与显示。
     BannerModel::GetInstance().SetWakeWordProvider([this]() {
-        return audio_service_.GetLastWakeWord();
+        return audio_service_.GetWakeWordName();
     });
     ui_manager.SetBannerIdleProvider([this]() {
         return GetDeviceState() == kDeviceStateIdle;
@@ -112,7 +114,7 @@ void Application::Initialize() {
     }
 #ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
     // 语音播放初始化前建立 ROMFS tone 索引，播放器随后可按 tone_id 读取资源。
-    ToneModel::GetInstance().Initialize(Assets::GetInstance());
+    ToneModel::GetInstance().Initialize(Assets::GetInstance().ToneStore(), "/");
 #endif
 
     // Print board name/version info
@@ -127,10 +129,11 @@ void Application::Initialize() {
         ESP_LOGE(TAG, "TTS 播放器初始化失败");
     }
     audio_player_.SetEventCallback([this](const PlaybackEvent& event) {
-        if (event.channel != PlaybackChannel::kTts) {
-            return;
-        }
         Schedule([this, event]() {
+            player_tone_.HandlePlaybackEvent(event);
+            if (event.channel != PlaybackChannel::kTts) {
+                return;
+            }
             if (event.state == PlaybackState::kPlaying) {
                 active_tts_session_id_ = event.session_id;
                 if (GetDeviceState() == kDeviceStateIdle ||
@@ -557,7 +560,6 @@ void Application::ActivationTask() {
 }
 
 void Application::CheckAssetsVersion() {
-    // Only allow CheckAssetsVersion to be called once
     if (assets_version_checked_) {
         return;
     }
@@ -565,53 +567,77 @@ void Application::CheckAssetsVersion() {
 
     auto& board = Board::GetInstance();
     auto& assets = Assets::GetInstance();
-
     if (!assets.partition_valid()) {
-        ESP_LOGW(TAG, "Assets partition is disabled for board %s", BOARD_NAME);
+        ESP_LOGW(TAG, "Resource partitions are unavailable for board %s", BOARD_NAME);
         return;
     }
 
     Settings settings("assets", true);
-    // Check if there is a new assets need to be downloaded
-    std::string download_url = settings.GetString("download_url");
+    struct PendingResource {
+        Assets::Resource resource;
+        const char* key;
+        const char* alias_key;
+        const char* label;
+    };
+    const PendingResource pending[] = {
+        {Assets::Resource::Respak, "respak_url", "download_url", "respak"},
+        {Assets::Resource::Tone, "tone_url", nullptr, "tone"},
+        {Assets::Resource::Emoji, "emoji_url", nullptr, "emoji"},
+        {Assets::Resource::WakeWord, "wake_word_url", "wakeword_url", "wake_word"},
+    };
 
-    if (!download_url.empty()) {
-        settings.EraseKey("download_url");
+    bool downloaded = false;
+    bool failed = false;
+    for (const auto& item : pending) {
+        std::string url = settings.GetString(item.key);
+        if (url.empty() && item.alias_key != nullptr) {
+            url = settings.GetString(item.alias_key);
+        }
+        if (url.empty()) {
+            continue;
+        }
+        settings.EraseKey(item.key);
+        if (item.alias_key != nullptr) settings.EraseKey(item.alias_key);
 
-        char message[256];
-        snprintf(message, sizeof(message), Lang::Strings::FOUND_NEW_ASSETS, download_url.c_str());
-        Alert(Lang::Strings::LOADING_ASSETS, message, "cloud_arrow_down", "upgrade");
-
-        // Wait for the audio service to be idle for 3 seconds
-        vTaskDelay(pdMS_TO_TICKS(3000));
+        ESP_LOGI(TAG, "Downloading %s resource from %s", item.label, url.c_str());
         SetDeviceState(kDeviceStateUpgrading);
         board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
-        UiEvents::PostChatMessage("system", Lang::Strings::PLEASE_WAIT);
-
-        bool success = assets.Download(download_url, [](int progress, size_t speed) -> void {
-            std::thread([progress, speed]() {
-                char buffer[32];
-                snprintf(buffer, sizeof(buffer), "%d%% %uKB/s", progress, speed / 1024);
-                UiEvents::PostChatMessage("system", buffer);
-            }).detach();
-        });
-
+        const bool success = assets.DownloadResource(item.resource, std::move(url),
+            [](int progress, size_t speed) {
+                std::thread([progress, speed]() {
+                    char buffer[48];
+                    snprintf(buffer, sizeof(buffer), "%d%% %uKB/s", progress,
+                             static_cast<unsigned>(speed / 1024));
+                    UiEvents::PostChatMessage("system", buffer);
+                }).detach();
+            });
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
-        vTaskDelay(pdMS_TO_TICKS(1000));
-
         if (!success) {
-            Alert(Lang::Strings::ERROR, Lang::Strings::DOWNLOAD_ASSETS_FAILED, "circle_xmark", 94);
-            vTaskDelay(pdMS_TO_TICKS(2000));
-            SetDeviceState(kDeviceStateActivating);
-            return;
+            ESP_LOGE(TAG, "Failed to update %s resource", item.label);
+            failed = true;
+            continue;
         }
+        downloaded = true;
     }
 
-    // Apply assets
+    if (failed && !downloaded) {
+        Alert(Lang::Strings::ERROR, Lang::Strings::DOWNLOAD_ASSETS_FAILED,
+              "circle_xmark", 94);
+        SetDeviceState(kDeviceStateActivating);
+        return;
+    }
+    if (downloaded) {
+        // Tone/emoji/wake-word models may still be referenced by running tasks;
+        // reboot after the transaction so every consumer remaps a new image.
+        UiEvents::PostChatMessage("system", Lang::Strings::PLEASE_WAIT);
+        vTaskDelay(pdMS_TO_TICKS(500));
+        Reboot();
+        return;
+    }
+
     assets.Apply();
 #ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
-    // 资源 OTA 完成后重新建立 tone 索引，避免继续引用旧 ROMFS 地址。
-    ToneModel::GetInstance().Initialize(assets);
+    ToneModel::GetInstance().Initialize(assets.ToneStore(), "/");
     UiApp::ReloadEmojiResources();
 #endif
     UiEvents::PostChatMessage("system", "");
@@ -684,6 +710,10 @@ void Application::InitializeXiaolingConn() {
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
         Schedule([this]() {
             UiEvents::PostChatMessage("system", "");
+            if (player_tone_.IsWakeupPending()) {
+                CancelWakeup();
+                return;
+            }
             if (!audio_player_.IsPlaying()) {
                 SetDeviceState(kDeviceStateIdle);
             }
@@ -828,6 +858,10 @@ void Application::StopListening() {
 }
 
 void Application::HandleToggleChatEvent() {
+    if (player_tone_.IsWakeupPending()) {
+        CancelWakeup();
+        return;
+    }
     auto state = GetDeviceState();
 
     if (state == kDeviceStateActivating) {
@@ -856,7 +890,7 @@ void Application::HandleToggleChatEvent() {
             }
         }
 
-        SetListeningMode(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
+        BeginWakeup(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
     } else if (state == kDeviceStateSpeaking) {
         AbortSpeaking(kAbortReasonNone);
     } else if (state == kDeviceStateListening) {
@@ -865,6 +899,9 @@ void Application::HandleToggleChatEvent() {
 }
 
 void Application::HandleStartListeningEvent() {
+    if (player_tone_.IsWakeupPending()) {
+        return;
+    }
     auto state = GetDeviceState();
 
     if (state == kDeviceStateActivating) {
@@ -889,14 +926,19 @@ void Application::HandleStartListeningEvent() {
             }
         }
 
-        SetListeningMode(kListeningModeManualStop);
+        BeginWakeup(kListeningModeManualStop);
     } else if (state == kDeviceStateSpeaking) {
         AbortSpeaking(kAbortReasonNone);
-        SetListeningMode(kListeningModeManualStop);
+        SetDeviceState(kDeviceStateIdle);
+        BeginWakeup(kListeningModeManualStop);
     }
 }
 
 void Application::HandleStopListeningEvent() {
+    if (player_tone_.IsWakeupPending()) {
+        CancelWakeup();
+        return;
+    }
     auto state = GetDeviceState();
 
     if (state == kDeviceStateAudioTesting) {
@@ -937,13 +979,8 @@ void Application::HandleWakeWordDetectedEvent() {
         while (auto packet = audio_service_.PopWakeWordPacket()) {
             xiaoling_conn_->SendAudio(std::move(packet));
         }
-        SetListeningMode(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
-#else
-        // Set flag to play popup sound after state changes to listening
-        // (PlaySound here would be cleared by ResetDecoder in EnableVoiceProcessing)
-        play_popup_on_listening_ = true;
-        SetListeningMode(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
 #endif
+        BeginWakeup(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
     } else if (state == kDeviceStateSpeaking) {
         AbortSpeaking(kAbortReasonWakeWordDetected);
     } else if (state == kDeviceStateActivating) {
@@ -961,6 +998,80 @@ void Application::AbortSpeaking(AbortReason reason) {
     if (xiaoling_conn_) {
         xiaoling_conn_->SendAbortSpeaking(reason);
     }
+}
+
+void Application::OnButtonEvent(void* arg, esp_event_base_t event_base,
+                                int32_t event_id, void* event_data) {
+    (void)event_base;
+    (void)event_data;
+    auto* app = static_cast<Application*>(arg);
+    if (app != nullptr) {
+        app->Schedule([app, event_id]() { app->HandleButtonEvent(event_id); });
+    }
+}
+
+void Application::HandleButtonEvent(int32_t event_id) {
+    if (event_id == ButtonEvents::kToggleAec) {
+        if (GetDeviceState() == kDeviceStateIdle) {
+            HandleBoardInput({BoardEvents::Input::AecToggle, 0, false});
+        }
+        return;
+    }
+    switch (event_id) {
+        case ButtonEvents::kClick:
+            HandleBoardInput({BoardEvents::Input::PrimaryClick, 0, false});
+            break;
+        case ButtonEvents::kDoubleClick:
+            HandleBoardInput({BoardEvents::Input::PrimaryDoubleClick, 0, false});
+            break;
+        case ButtonEvents::kPressDown:
+            HandleBoardInput({BoardEvents::Input::TouchDown, 0, false});
+            break;
+        case ButtonEvents::kPressUp:
+            HandleBoardInput({BoardEvents::Input::TouchUp, 0, false});
+            break;
+    }
+}
+
+void Application::BeginWakeup(ListeningMode mode) {
+    if (player_tone_.IsWakeupPending() || !xiaoling_conn_) {
+        return;
+    }
+    if (!SetDeviceState(kDeviceStateConnecting)) {
+        return;
+    }
+    audio_service_.EnableWakeWordDetection(false);
+    audio_service_.EnableVoiceProcessing(false);
+    player_tone_.PlayWakeup([this, mode](bool proceed) {
+        if (GetDeviceState() != kDeviceStateConnecting) {
+            return;
+        }
+        if (proceed && xiaoling_conn_ && xiaoling_conn_->IsConnected()) {
+            ESP_LOGI(TAG, "Wakeup tone finished; start audio upload");
+            SetListeningMode(mode);
+        } else {
+            if (xiaoling_conn_) {
+                xiaoling_conn_->SendWakeWordDetected("");
+            }
+            SetDeviceState(kDeviceStateIdle);
+        }
+    });
+}
+
+void Application::CancelWakeup() {
+    player_tone_.CancelWakeup();
+    if (xiaoling_conn_) {
+        xiaoling_conn_->SendWakeWordDetected("");
+    }
+    SetDeviceState(kDeviceStateIdle);
+}
+
+bool Application::PauseAudio() {
+    return audio_player_.Pause();
+}
+
+bool Application::ResumeAudio() {
+    return audio_player_.Resume();
 }
 
 void Application::SetListeningMode(ListeningMode mode) {
@@ -999,6 +1110,12 @@ void Application::CountWatchdogBites() {
 
 void Application::HandleStateChangedEvent() {
     DeviceState new_state = state_machine_.GetState();
+    if (new_state != kDeviceStateConnecting && player_tone_.IsWakeupPending()) {
+        player_tone_.CancelWakeup();
+        if (xiaoling_conn_) {
+            xiaoling_conn_->SendWakeWordDetected("");
+        }
+    }
     clock_ticks_ = 0;
 
     auto& board = Board::GetInstance();
@@ -1043,11 +1160,6 @@ void Application::HandleStateChangedEvent() {
 #endif // CONFIG_LSPLATFORM
             }
 
-            // Play popup sound after ResetDecoder (in EnableVoiceProcessing) has been called
-            if (play_popup_on_listening_) {
-                play_popup_on_listening_ = false;
-                PlayTone(94);
-            }
             break;
         case kDeviceStateSpeaking:
             UiEvents::PostStatus(UiEvents::Status::Speaking);
@@ -1174,13 +1286,8 @@ void Application::WakeWordInvoke(const std::string& wake_word) {
         while (auto packet = audio_service_.PopWakeWordPacket()) {
             xiaoling_conn_->SendAudio(std::move(packet));
         }
-        SetListeningMode(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
-#else
-        // Set flag to play popup sound after state changes to listening
-        // (PlaySound here would be cleared by ResetDecoder in EnableVoiceProcessing)
-        play_popup_on_listening_ = true;
-        SetListeningMode(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
 #endif
+        BeginWakeup(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
     } else if (state == kDeviceStateSpeaking) {
         Schedule([this]() {
             AbortSpeaking(kAbortReasonNone);
@@ -1247,6 +1354,10 @@ void Application::SetAecMode(AecMode mode) {
 
 void Application::PlaySound(const std::string_view& sound) {
     audio_service_.PlaySound(sound);
+}
+
+uint32_t Application::PlayAudioUrl(const std::string& url) {
+    return audio_player_.PlayTtsUrl(url);
 }
 
 void Application::PlayLocalizedTone(const char* name) {

@@ -47,6 +47,18 @@ CircularStrip::~CircularStrip() {
     }
 }
 
+void CircularStrip::TurnOn() {
+    SetAllColor({default_brightness_, default_brightness_, default_brightness_});
+}
+
+void CircularStrip::TurnOff() {
+    SetAllColor({0, 0, 0});
+}
+
+void CircularStrip::Blink(int interval_ms) {
+    Blink({default_brightness_, default_brightness_, default_brightness_}, interval_ms);
+}
+
 
 void CircularStrip::SetAllColor(StripColor color) {
     std::lock_guard<std::mutex> lock(mutex_);

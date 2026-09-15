@@ -20,12 +20,14 @@ struct AssetView {
     bool valid() const { return data != nullptr && size != 0; }
 };
 
-// Shared, storage-only resource access. It knows how to mount the assets
+// Shared, storage-only resource access. It can mount a named resource
 // partition and read both the current ROMFS format and the legacy indexed
 // format, but it does not know anything about UI, audio, or model loading.
 class AssetStore {
 public:
-    AssetStore();
+    explicit AssetStore(const char* partition_label = "assets",
+                        const char* fallback_label = nullptr,
+                        bool auto_mount = true);
     virtual ~AssetStore();
 
     AssetStore(const AssetStore&) = delete;
@@ -46,8 +48,6 @@ public:
     bool partition_valid() const;
     bool checksum_valid() const;
     uint32_t generation() const;
-
-protected:
     const esp_partition_t* partition() const { return partition_; }
 
 private:
@@ -77,4 +77,6 @@ private:
     uint32_t generation_ = 0;
     std::map<std::string, LegacyAsset> assets_;
     romfs* romfs_ = nullptr;
+    std::string partition_label_;
+    std::string fallback_label_;
 };

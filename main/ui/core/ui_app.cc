@@ -33,7 +33,7 @@ bool ReloadEmojiResources() {
     if (dark == nullptr || dark->emoji_model() == nullptr) {
         return false;
     }
-    return dark->emoji_model()->LoadFromAssets(Assets::GetInstance());
+    return dark->emoji_model()->LoadFromAssets(Assets::GetInstance().EmojiStore());
 #else
     return true;
 #endif
@@ -59,7 +59,7 @@ bool Initialize() {
 #ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
     // Home 页面创建前先加载表情动画定义，避免页面打开后再解析 JSON。
     auto emoji_model = std::make_shared<EmojiModel>();
-    if (emoji_model->LoadFromAssets(Assets::GetInstance())) {
+    if (emoji_model->LoadFromAssets(Assets::GetInstance().EmojiStore())) {
         auto& themes = LvglThemeManager::GetInstance();
         if (auto* light = themes.GetTheme("light")) {
             light->set_emoji_model(emoji_model);

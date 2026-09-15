@@ -6,6 +6,7 @@
 #include <esp_log.h>
 
 #include <cstdio>
+#include <cstring>
 #include <utility>
 
 #define TAG "EmojiModel"
@@ -80,8 +81,19 @@ bool ParsePhase(const cJSON* json, AssetStore& assets, EmojiPhase& phase, bool l
         void* data = nullptr;
         size_t size = 0;
         if (!assets.GetAssetData(path, data, size) || data == nullptr || size == 0) {
-            ESP_LOGE(TAG, "找不到动画帧: %s", path);
-            return false;
+            // The legacy package prefixes paths with /emoji, while the
+            // standalone emoji.bin stores emoji.json and frame directories at
+            // the ROMFS root.
+            const char* legacy_prefix = "/emoji/";
+            if (std::strncmp(path, legacy_prefix, std::strlen(legacy_prefix)) == 0) {
+                if (!assets.GetAssetData(path + std::strlen(legacy_prefix), data, size)) {
+                    ESP_LOGE(TAG, "找不到动画帧: %s", path);
+                    return false;
+                }
+            } else {
+                ESP_LOGE(TAG, "找不到动画帧: %s", path);
+                return false;
+            }
         }
         // ROMFS 数据映射在 Flash 中，LvglRawImage 只保存描述信息，不释放 data。
         phase.frames.emplace_back(std::make_shared<LvglRawImage>(data, size));
@@ -143,8 +155,13 @@ bool EmojiModel::LoadFromAssets(AssetStore& assets, const std::string& config_pa
     void* data = nullptr;
     size_t size = 0;
     if (!assets.GetAssetData(config_path, data, size) || data == nullptr || size == 0) {
-        ESP_LOGE(TAG, "找不到表情配置: %s", config_path.c_str());
-        return false;
+        // Split emoji.bin packages keep emoji.json at the ROMFS root, while
+        // legacy assets.bin used /emoji/emoji.json.
+        const std::string fallback = config_path == "/emoji.json" ? "/emoji/emoji.json" : "/emoji.json";
+        if (!assets.GetAssetData(fallback, data, size) || data == nullptr || size == 0) {
+            ESP_LOGE(TAG, "找不到表情配置: %s", config_path.c_str());
+            return false;
+        }
     }
 
     cJSON* root = cJSON_ParseWithLength(static_cast<const char*>(data), size);
@@ -214,4 +231,13 @@ const EmojiAnimation* EmojiModel::GetAnimation(const std::string& name) const {
     }
     ESP_LOGE(TAG, "表情 alias 存在循环: %s", name.c_str());
     return nullptr;
+}
+
+std::vector<std::string> EmojiModel::GetNames() const {
+    std::vector<std::string> names;
+    names.reserve(animations_.size());
+    for (const auto& item : animations_) {
+        names.push_back(item.first);
+    }
+    return names;
 }
