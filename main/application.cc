@@ -203,6 +203,7 @@ void Application::Initialize() {
         switch (event) {
             case NetworkEvent::Scanning:
                 UiEvents::PostNotification(UiEvents::Notification::ScanningWifi, 30000);
+                network_connected_ = false;
                 xEventGroupSetBits(event_group_, MAIN_EVENT_NETWORK_DISCONNECTED);
                 break;
             case NetworkEvent::Connecting: {
@@ -217,10 +218,12 @@ void Application::Initialize() {
             }
             case NetworkEvent::Connected: {
                     UiEvents::PostNotification(UiEvents::Notification::ConnectedToNetwork, 30000, data);
+                network_connected_ = true;
                 xEventGroupSetBits(event_group_, MAIN_EVENT_NETWORK_CONNECTED);
                 break;
             }
             case NetworkEvent::Disconnected:
+                network_connected_ = false;
                 xEventGroupSetBits(event_group_, MAIN_EVENT_NETWORK_DISCONNECTED);
                 break;
             case NetworkEvent::WifiConfigModeEnter:
@@ -790,8 +793,23 @@ void Application::InitializeXiaolingConn() {
     if (xiaoling_conn_->Start()) {
         ESP_LOGI(TAG, "小聆连接和语音模块已就绪");
     } else {
-        ESP_LOGE(TAG, "小聆连接失败，唤醒时将继续重试");
+        ESP_LOGE(TAG, "小聆连接失败，等待连接任务自动重连");
     }
+}
+
+bool Application::EnsureXiaolingReadyForWakeup() {
+    if (xiaoling_conn_->IsConnected()) {
+        return true;
+    }
+    if (network_connected_) {
+        // 网络正常但小聆长连接未就绪（连接中/重连中/会话异常）。
+        ESP_LOGW(TAG, "小聆 WebSocket 尚未连接，播报连接失败提示音");
+        PlayTone(85);
+    } else {
+        ESP_LOGW(TAG, "网络未连接，播报网络未连接提示音");
+        PlayTone(64);
+    }
+    return false;
 }
 
 void Application::ShowActivationCode(const std::string& code, const std::string& message, const std::string& qrcode) {
@@ -900,8 +918,7 @@ void Application::HandleToggleChatEvent() {
     }
 
     if (state == kDeviceStateIdle) {
-        if (!xiaoling_conn_->IsConnected()) {
-            ESP_LOGW(TAG, "小聆 WebSocket 尚未连接，忽略本次唤醒");
+        if (!EnsureXiaolingReadyForWakeup()) {
             return;
         }
 
@@ -934,8 +951,7 @@ void Application::HandleStartListeningEvent() {
     }
 
     if (state == kDeviceStateIdle) {
-        if (!xiaoling_conn_->IsConnected()) {
-            ESP_LOGW(TAG, "小聆 WebSocket 尚未连接，忽略本次开始监听");
+        if (!EnsureXiaolingReadyForWakeup()) {
             return;
         }
 
@@ -976,8 +992,7 @@ void Application::HandleWakeWordDetectedEvent() {
     if (state == kDeviceStateIdle) {
         audio_service_.EncodeWakeWord();
 
-        if (!xiaoling_conn_->IsConnected()) {
-            ESP_LOGW(TAG, "小聆 WebSocket 尚未连接，忽略本次唤醒");
+        if (!EnsureXiaolingReadyForWakeup()) {
             audio_service_.EnableWakeWordDetection(true);
             return;
         }
@@ -1222,7 +1237,9 @@ void Application::HandleStateChangedEvent() {
 #endif // CONFIG_LSPLATFORM
             break;
         case kDeviceStateConnecting:
-            UiEvents::PostStatus(UiEvents::Status::Connecting);
+            // 唤醒提示音阶段的过渡态：连接已就绪，直接预告聆听，避免
+            // "连接中..." 一闪而过。
+            UiEvents::PostStatus(UiEvents::Status::Listening);
             UiEvents::PostEmotion("neutral");
             UiEvents::PostChatMessage("system", "");
             break;
@@ -1357,8 +1374,7 @@ void Application::WakeWordInvoke(const std::string& wake_word) {
     if (state == kDeviceStateIdle) {
         audio_service_.EncodeWakeWord();
 
-        if (!xiaoling_conn_->IsConnected()) {
-            ESP_LOGW(TAG, "小聆 WebSocket 尚未连接，忽略本次唤醒");
+        if (!EnsureXiaolingReadyForWakeup()) {
             audio_service_.EnableWakeWordDetection(true);
             return;
         }

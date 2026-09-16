@@ -93,6 +93,7 @@ private:
     void Run();
     bool ConnectOnce();
     void HandleTransportDisconnected(uint32_t generation);
+    void ForceReconnect();
     void PublishDisconnected();
     void SetSessionActive(bool active);
 

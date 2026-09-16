@@ -238,8 +238,15 @@ void XiaolingConn::Run() {
                 disconnected_event_published_ = true;
             }
         } else if (desired_connected_ && transport_connected_) {
-            reconnect_attempts_ = 0;
             disconnected_event_published_ = false;
+            if (error_occurred_ && protocol_connected_) {
+                // 传输层和协议层都在，但错误标志被闩住（如会话超时后不会再收到
+                // 新的 connected），IsConnected() 恒为 false，主动断开走重连自愈。
+                ESP_LOGW(TAG, "小聆连接带错误标志运行，主动断开重连");
+                ForceReconnect();
+            } else {
+                reconnect_attempts_ = 0;
+            }
             const int64_t now = esp_timer_get_time();
             if (now - last_heartbeat_us_ >= static_cast<int64_t>(kHeartbeatIntervalMs) * 1000) {
                 bool sent = false;
@@ -360,6 +367,25 @@ void XiaolingConn::HandleTransportDisconnected(uint32_t generation) {
     }
     if (task_handle_ != nullptr) {
         xTaskNotifyGive(task_handle_);
+    }
+}
+
+void XiaolingConn::ForceReconnect() {
+    // 复用代际回调路径：断开当前 WebSocket 会触发 OnDisconnected ->
+    // HandleTransportDisconnected，错误标志在重连握手完成前保持闩住，
+    // 直到服务器下发新的 connected 才清除。
+    std::unique_ptr<XiaolingConnWebSocket> websocket;
+    {
+        std::lock_guard<std::mutex> lock(websocket_mutex_);
+        websocket = std::move(websocket_);
+    }
+    if (websocket != nullptr) {
+        websocket->Disconnect();
+    } else {
+        transport_connected_ = false;
+        if (task_handle_ != nullptr) {
+            xTaskNotifyGive(task_handle_);
+        }
     }
 }
 

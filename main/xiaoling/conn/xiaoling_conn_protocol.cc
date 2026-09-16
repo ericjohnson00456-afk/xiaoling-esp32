@@ -183,6 +183,12 @@ void XiaolingConn::HandleIncomingText(const std::string& text) {
             if (on_connected_) {
                 on_connected_();
             }
+        } else if (std::strcmp(action->valuestring, "started") == 0) {
+            // started 证明链路可用，清掉历史会话遗留的错误标志，避免闩死。
+            if (error_occurred_) {
+                ESP_LOGI(TAG, "收到 started，清除遗留错误标志");
+                error_occurred_ = false;
+            }
         } else if (std::strcmp(action->valuestring, "error") == 0) {
             const auto code = ReadScalar(root, "code");
             const auto detail = ReadErrorDetail(root);

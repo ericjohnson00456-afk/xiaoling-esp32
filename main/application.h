@@ -166,6 +166,8 @@ private:
     int clock_ticks_ = 0;
     TaskHandle_t activation_task_handle_ = nullptr;
     std::atomic_bool factory_reset_started_{false};
+    // 由 NetworkEvent::Connected/Disconnected 驱动；唤醒时区分“网络未连”和“WS 未连”。
+    std::atomic_bool network_connected_{false};
 
 
     // Event handlers
@@ -201,6 +203,8 @@ private:
     void CheckAssetsVersion();
     bool CheckNewVersion();
     void InitializeXiaolingConn();
+    // 唤醒入口的连接检查：WS 就绪返回 true；否则按网络状态播报 085/064 提示音。
+    bool EnsureXiaolingReadyForWakeup();
     void ShowActivationCode(const std::string& code, const std::string& message, const std::string& qrcode = "");
     void SetListeningMode(ListeningMode mode);
     void BeginWakeup(ListeningMode mode);
