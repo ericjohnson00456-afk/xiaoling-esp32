@@ -6,7 +6,7 @@ NOTICE: AI 辅助生成, 在实现后台服务时, 请参照代码确认细节!!
 
 ## 协议格式
 
-根据代码 (`main/xiaoling/xiaoling_conn_protocol.cc`, `main/mcp/mcp_server.cc`)，MCP 消息通过小聆 WebSocket 链路传输，内部负载遵循 [JSON-RPC 2.0](https://www.jsonrpc.org/specification) 规范。
+根据代码 (`main/xiaoling/conn/xiaoling_conn_message.cc`, `main/mcp/mcp_server.cc`)，MCP 消息通过小聆 WebSocket 链路传输，内部负载遵循 [JSON-RPC 2.0](https://www.jsonrpc.org/specification) 规范。
 
 整体消息结构示例：
 
