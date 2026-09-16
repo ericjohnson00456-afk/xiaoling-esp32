@@ -5,7 +5,7 @@
 
 #include "codecs/box_audio_codec.h"
 #include "button.h"
-#include "led/single_led.h"
+#include "services/service_ws2812.h"
 #include "mcp_server.h"
 #include "config.h"
 #include "power_save_timer.h"

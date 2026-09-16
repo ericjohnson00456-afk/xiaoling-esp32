@@ -6,7 +6,7 @@
 #include "button.h"
 #include "config.h"
 #include "power_save_timer.h"
-#include "led/single_led.h"
+#include "services/service_ws2812.h"
 #include "../zhengchen-1.54tft-wifi/power_manager.h"
 
 #include <esp_log.h>

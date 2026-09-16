@@ -6,7 +6,7 @@
 #include "codecs/no_audio_codec.h"
 #include "button.h"
 #include "config.h"
-#include "led/single_led.h"
+#include "services/service_ws2812.h"
 #include "i2c_device.h"
 #include "usb_esp32_camera.h"
 

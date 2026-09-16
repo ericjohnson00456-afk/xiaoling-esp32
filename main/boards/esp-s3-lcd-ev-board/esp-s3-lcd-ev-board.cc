@@ -4,7 +4,7 @@
 #include "wifi_board.h"
 #include "codecs/box_audio_codec.h"
 #include "button.h"
-#include "led/single_led.h"
+#include "services/service_ws2812.h"
 #include "pin_config.h"
 #include "esp32_camera.h"
 
@@ -225,7 +225,7 @@ public:
 
     //添加彩灯显示状态，如果亮度太暗可以去更改默认亮度值 DEFAULT_BRIGHTNESS 在led的sigle_led.cc中
     virtual Led* GetLed() override {
-        static SingleLed led(BUILTIN_LED_GPIO);
+        static Ws2812Service led(BUILTIN_LED_GPIO);
         return &led;
     }
 

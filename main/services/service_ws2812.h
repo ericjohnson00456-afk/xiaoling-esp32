@@ -1,22 +1,24 @@
-#ifndef _SINGLE_LED_H_
-#define _SINGLE_LED_H_
+#ifndef XIAOLING_SERVICES_WS2812_H_
+#define XIAOLING_SERVICES_WS2812_H_
 
-#include "led.h"
+#include "service_led.h"
 #include <driver/gpio.h>
 #include <led_strip.h>
 #include <esp_timer.h>
 #include <atomic>
 #include <mutex>
 
-class SingleLed : public Led {
+class Ws2812Service : public Led {
 public:
-    SingleLed(gpio_num_t gpio);
-    virtual ~SingleLed();
+    explicit Ws2812Service(gpio_num_t gpio);
+    ~Ws2812Service() override;
 
     void OnStateChanged() override;
     void TurnOn() override;
     void TurnOff() override;
-    void Blink(int interval_ms) override;
+    void FastBlink() override;
+    void Blink() override;
+    void SlowBlink() override;
 
 private:
     std::mutex mutex_;
@@ -36,4 +38,4 @@ private:
     void SetColor(uint8_t r, uint8_t g, uint8_t b);
 };
 
-#endif // _SINGLE_LED_H_
+#endif  // XIAOLING_SERVICES_WS2812_H_

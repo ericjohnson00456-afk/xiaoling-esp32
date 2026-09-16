@@ -6,7 +6,7 @@
 #include "ui/display/panels/lcd_display.h"
 #include "knob.h"
 #include "config.h"
-#include "led/single_led.h"
+#include "services/service_ws2812.h"
 #include "power_save_timer.h"
 #include "sscma_camera.h"
 #include "lvgl_theme.h"
@@ -619,7 +619,7 @@ public:
     // RGB LED型号为 ws2813 mini, 连接在GPIO 40，供电电压 3.3v, 没有连接 BIN 双信号线
     // 可以直接兼容SingleLED采用的ws2812
     virtual Led* GetLed() override {
-        static SingleLed led(BUILTIN_LED_GPIO);
+        static Ws2812Service led(BUILTIN_LED_GPIO);
         return &led;
     }
 

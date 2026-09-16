@@ -17,7 +17,7 @@
 #include <esp_timer.h>
 #include "esp_io_expander_tca95xx_16bit.h"
 #include "esp32_camera.h"
-#include "led/circular_strip.h"
+#include "services/service_circular_strip.h"
 #include "esp_lcd_jd9853.h"
 
 #define TAG "waveshare_s3_audio_board"

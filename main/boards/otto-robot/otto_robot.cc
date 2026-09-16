@@ -11,7 +11,7 @@
 #include "button.h"
 #include "config.h"
 #include "ui/display/panels/lcd_display.h"
-#include "led/single_led.h"
+#include "services/service_ws2812.h"
 #include "otto_emoji_display.h"
 #include "power_manager.h"
 #include "system_reset.h"

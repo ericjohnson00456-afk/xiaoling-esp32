@@ -9,7 +9,7 @@
 #include <esp_timer.h>
 
 #include "esp_idf_version.h"
-#include "led/circular_strip.h"
+#include "services/service_circular_strip.h"
 #include "sdkconfig.h"
 
 #include "button.h"

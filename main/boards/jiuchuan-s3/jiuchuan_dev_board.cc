@@ -10,7 +10,7 @@
 #include <esp_lcd_panel_vendor.h>
 #include <driver/i2c_master.h>
 #include <driver/spi_common.h>
-#include "led/single_led.h"
+#include "services/service_ws2812.h"
 #include "esp_lcd_panel_gc9301.h"
 
 #include "power_save_timer.h"
@@ -327,7 +327,7 @@ public:
     }
 
     virtual Led* GetLed() override {
-        static SingleLed led(BUILTIN_LED_GPIO);
+        static Ws2812Service led(BUILTIN_LED_GPIO);
         return &led;
     }
 

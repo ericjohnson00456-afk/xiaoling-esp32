@@ -3,7 +3,7 @@
 #include "codecs/es8311_audio_codec.h"
 #include "button.h"
 #include "config.h"
-#include "led/circular_strip.h"
+#include "services/service_circular_strip.h"
 #include "led_strip_control.h"
 
 #include <esp_log.h>

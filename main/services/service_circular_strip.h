@@ -1,7 +1,7 @@
-#ifndef _CIRCULAR_STRIP_H_
-#define _CIRCULAR_STRIP_H_
+#ifndef XIAOLING_SERVICES_CIRCULAR_STRIP_H_
+#define XIAOLING_SERVICES_CIRCULAR_STRIP_H_
 
-#include "led.h"
+#include "service_led.h"
 #include <driver/gpio.h>
 #include <led_strip.h>
 #include <esp_timer.h>
@@ -24,7 +24,9 @@ public:
     void OnStateChanged() override;
     void TurnOn() override;
     void TurnOff() override;
-    void Blink(int interval_ms) override;
+    void FastBlink() override;
+    void Blink() override;
+    void SlowBlink() override;
     void SetBrightness(uint8_t default_brightness, uint8_t low_brightness);
     void SetAllColor(StripColor color);
     void SetSingleColor(uint8_t index, StripColor color);
@@ -51,4 +53,4 @@ private:
     void FadeOut(int interval_ms);
 };
 
-#endif // _CIRCULAR_STRIP_H_
+#endif  // XIAOLING_SERVICES_CIRCULAR_STRIP_H_

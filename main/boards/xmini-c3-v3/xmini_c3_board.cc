@@ -4,7 +4,7 @@
 #include "wifi_board.h"
 #include "codecs/es8311_audio_codec.h"
 #include "button.h"
-#include "led/single_led.h"
+#include "services/service_ws2812.h"
 #include "settings.h"
 #include "config.h"
 #include "power_save_timer.h"
@@ -166,7 +166,7 @@ public:
     }
 
     virtual Led* GetLed() override {
-        static SingleLed led(BUILTIN_LED_GPIO);
+        static Ws2812Service led(BUILTIN_LED_GPIO);
         return &led;
     }
 

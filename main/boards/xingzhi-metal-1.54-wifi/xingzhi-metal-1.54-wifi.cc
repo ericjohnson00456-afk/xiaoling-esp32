@@ -13,7 +13,7 @@
 #include <driver/spi_common.h>
 #include "power_manager.h"
 #include "power_save_timer.h"
-#include "led/single_led.h"
+#include "services/service_ws2812.h"
 #include <driver/rtc_io.h>
 #include <esp_sleep.h>
 #include "cst816x.h"

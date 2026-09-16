@@ -1,4 +1,4 @@
-#include "circular_strip.h"
+#include "service_circular_strip.h"
 #include "application.h"
 #include <esp_log.h>
 
@@ -55,8 +55,16 @@ void CircularStrip::TurnOff() {
     SetAllColor({0, 0, 0});
 }
 
-void CircularStrip::Blink(int interval_ms) {
-    Blink({default_brightness_, default_brightness_, default_brightness_}, interval_ms);
+void CircularStrip::FastBlink() {
+    Blink({default_brightness_, default_brightness_, default_brightness_}, 100);
+}
+
+void CircularStrip::Blink() {
+    Blink({default_brightness_, default_brightness_, default_brightness_}, 500);
+}
+
+void CircularStrip::SlowBlink() {
+    Blink({default_brightness_, default_brightness_, default_brightness_}, 1000);
 }
 
 

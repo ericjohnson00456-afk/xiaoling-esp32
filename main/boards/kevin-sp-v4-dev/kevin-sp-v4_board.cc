@@ -6,7 +6,7 @@
 #include "system_reset.h"
 #include "button.h"
 #include "config.h"
-#include "led/single_led.h"
+#include "services/service_ws2812.h"
 
 #include <esp_log.h>
 #include <esp_lcd_panel_vendor.h>
@@ -149,7 +149,7 @@ public:
     }
 
     virtual Led* GetLed() override {
-        static SingleLed led(BUILTIN_LED_GPIO);
+        static Ws2812Service led(BUILTIN_LED_GPIO);
         return &led;
     }
 

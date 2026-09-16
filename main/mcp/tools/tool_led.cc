@@ -22,9 +22,9 @@ MCP_REGISTER_TOOL(RegisterLedTools, McpToolGroup::kCommon, 120) {
                  [led](const PropertyList &properties) -> ReturnValue {
                    const auto mode = properties["mode"].value<std::string>();
                    if (mode == "off") led->TurnOff();
-                   else if (mode == "fast") led->Blink(200);
-                   else if (mode == "normal") led->Blink(500);
-                   else if (mode == "slow") led->Blink(1000);
+                   else if (mode == "fast") led->FastBlink();
+                   else if (mode == "normal") led->Blink();
+                   else if (mode == "slow") led->SlowBlink();
                    else throw std::runtime_error("mode 必须是 off/normal/fast/slow");
                    return std::string("已完成操作");
                  });

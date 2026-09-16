@@ -7,7 +7,7 @@
 #include "button.h"
 #include "config.h"
 #include "power_save_timer.h"
-#include "led/single_led.h"
+#include "services/service_ws2812.h"
 #include "../xingzhi-cube-1.54tft-wifi/power_manager.h"
 
 #include <driver/rtc_io.h>
@@ -195,7 +195,7 @@ public:
     }
 
     virtual Led* GetLed() override {
-        static SingleLed led(BUILTIN_LED_GPIO);
+        static Ws2812Service led(BUILTIN_LED_GPIO);
         return &led;
     }
 

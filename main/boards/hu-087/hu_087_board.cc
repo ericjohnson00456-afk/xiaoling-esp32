@@ -10,7 +10,7 @@
 #include "button.h"
 #include "codecs/no_audio_codec.h"
 #include "config.h"
-#include "led/single_led.h"
+#include "services/service_ws2812.h"
 #include "system_reset.h"
 
 #define TAG "Hu087Board"

@@ -6,7 +6,7 @@
 #include "button.h"
 #include "config.h"
 #include "i2c_device.h"
-#include "led/circular_strip.h"
+#include "services/service_circular_strip.h"
 
 #include <esp_log.h>
 #include <esp_lcd_panel_vendor.h>

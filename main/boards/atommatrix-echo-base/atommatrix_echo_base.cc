@@ -7,7 +7,7 @@
 
 #include <esp_log.h>
 #include <driver/i2c_master.h>
-#include "led/circular_strip.h"
+#include "services/service_circular_strip.h"
 
 #define TAG "XX+EchoBase"
 

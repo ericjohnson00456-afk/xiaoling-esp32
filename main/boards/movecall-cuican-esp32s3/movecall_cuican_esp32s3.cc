@@ -5,7 +5,7 @@
 #include "codecs/es8311_audio_codec.h"
 #include "button.h"
 #include "config.h"
-#include "led/single_led.h"
+#include "services/service_ws2812.h"
 
 #include <esp_log.h>
 #include <esp_efuse_table.h>
@@ -99,7 +99,7 @@ public:
     }
 
     virtual Led* GetLed() override {
-        static SingleLed led_strip(BUILTIN_LED_GPIO);
+        static Ws2812Service led_strip(BUILTIN_LED_GPIO);
         return &led_strip;
     }
 

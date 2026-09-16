@@ -1,8 +1,8 @@
-#include "single_led.h"
+#include "service_ws2812.h"
 #include "application.h"
 #include <esp_log.h> 
 
-#define TAG "SingleLed"
+#define TAG "Ws2812Service"
 
 #define DEFAULT_BRIGHTNESS 4
 #define HIGH_BRIGHTNESS 16
@@ -11,7 +11,7 @@
 #define BLINK_INFINITE -1
 
 
-SingleLed::SingleLed(gpio_num_t gpio) {
+Ws2812Service::Ws2812Service(gpio_num_t gpio) {
     // If the gpio is not connected, you should use NoLed class
     assert(gpio != GPIO_NUM_NC);
 
@@ -29,7 +29,7 @@ SingleLed::SingleLed(gpio_num_t gpio) {
 
     esp_timer_create_args_t blink_timer_args = {
         .callback = [](void *arg) {
-            auto led = static_cast<SingleLed*>(arg);
+            auto led = static_cast<Ws2812Service*>(arg);
             led->OnBlinkTimer();
         },
         .arg = this,
@@ -40,7 +40,7 @@ SingleLed::SingleLed(gpio_num_t gpio) {
     ESP_ERROR_CHECK(esp_timer_create(&blink_timer_args, &blink_timer_));
 }
 
-SingleLed::~SingleLed() {
+Ws2812Service::~Ws2812Service() {
     esp_timer_stop(blink_timer_);
     if (led_strip_ != nullptr) {
         led_strip_del(led_strip_);
@@ -48,13 +48,13 @@ SingleLed::~SingleLed() {
 }
 
 
-void SingleLed::SetColor(uint8_t r, uint8_t g, uint8_t b) {
+void Ws2812Service::SetColor(uint8_t r, uint8_t g, uint8_t b) {
     r_ = r;
     g_ = g;
     b_ = b;
 }
 
-void SingleLed::TurnOn() {
+void Ws2812Service::TurnOn() {
     if (led_strip_ == nullptr) {
         return;
     }
@@ -65,7 +65,7 @@ void SingleLed::TurnOn() {
     led_strip_refresh(led_strip_);
 }
 
-void SingleLed::TurnOff() {
+void Ws2812Service::TurnOff() {
     if (led_strip_ == nullptr) {
         return;
     }
@@ -75,23 +75,31 @@ void SingleLed::TurnOff() {
     led_strip_clear(led_strip_);
 }
 
-void SingleLed::Blink(int interval_ms) {
-    StartContinuousBlink(interval_ms);
+void Ws2812Service::FastBlink() {
+    StartContinuousBlink(100);
 }
 
-void SingleLed::BlinkOnce() {
+void Ws2812Service::Blink() {
+    StartContinuousBlink(500);
+}
+
+void Ws2812Service::SlowBlink() {
+    StartContinuousBlink(1000);
+}
+
+void Ws2812Service::BlinkOnce() {
     Blink(1, 100);
 }
 
-void SingleLed::Blink(int times, int interval_ms) {
+void Ws2812Service::Blink(int times, int interval_ms) {
     StartBlinkTask(times, interval_ms);
 }
 
-void SingleLed::StartContinuousBlink(int interval_ms) {
+void Ws2812Service::StartContinuousBlink(int interval_ms) {
     StartBlinkTask(BLINK_INFINITE, interval_ms);
 }
 
-void SingleLed::StartBlinkTask(int times, int interval_ms) {
+void Ws2812Service::StartBlinkTask(int times, int interval_ms) {
     if (led_strip_ == nullptr) {
         return;
     }
@@ -104,7 +112,7 @@ void SingleLed::StartBlinkTask(int times, int interval_ms) {
     esp_timer_start_periodic(blink_timer_, interval_ms * 1000);
 }
 
-void SingleLed::OnBlinkTimer() {
+void Ws2812Service::OnBlinkTimer() {
     std::lock_guard<std::mutex> lock(mutex_);
     blink_counter_--;
     if (blink_counter_ & 1) {
@@ -120,7 +128,7 @@ void SingleLed::OnBlinkTimer() {
 }
 
 
-void SingleLed::OnStateChanged() {
+void Ws2812Service::OnStateChanged() {
     auto& app = Application::GetInstance();
     auto device_state = app.GetDeviceState();
     switch (device_state) {

@@ -6,7 +6,7 @@
 #include "config.h"
 #include "esp32_camera.h"
 
-#include "led/gpio_led.h"
+#include "services/service_led.h"
 #include <esp_log.h>
 #include <driver/i2c_master.h>
 #include <driver/gpio.h>
@@ -83,7 +83,7 @@ class DfrobotEsp32S3AiCam : public WifiBoard {
     // Wakenet model only
 
     virtual Led* GetLed() override {
-        static GpioLed led(BUILTIN_LED_GPIO, 0);
+        static LedService led(BUILTIN_LED_GPIO, 0);
         return &led;
     }
 

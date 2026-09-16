@@ -3,7 +3,7 @@
 #include "ui/display/panels/lcd_display.h"
 #include "codecs/es8311_audio_codec.h"
 #include "button.h"
-#include "led/circular_strip.h"
+#include "services/service_circular_strip.h"
 #include "config.h"
 
 #include <esp_lcd_panel_vendor.h>

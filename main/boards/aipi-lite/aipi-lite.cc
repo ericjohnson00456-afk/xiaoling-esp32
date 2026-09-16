@@ -14,7 +14,7 @@
 #include "button.h"
 #include "codecs/es8311_audio_codec.h"
 #include "config.h"
-#include "led/single_led.h"
+#include "services/service_ws2812.h"
 #include "power_manager.h"
 #include "power_save_timer.h"
 #include "system_reset.h"
@@ -193,7 +193,7 @@ class AIPILite : public WifiBoard {
     }
 
     virtual Led* GetLed() override {
-        static SingleLed led(BUILTIN_LED_GPIO);
+        static Ws2812Service led(BUILTIN_LED_GPIO);
         return &led;
     }
 

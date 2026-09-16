@@ -10,7 +10,7 @@
 #include <network_interface.h>
 #include <driver/gpio.h>
 
-#include "led/led.h"
+#include "services/service_led.h"
 #include "backlight.h"
 #include "camera.h"
 #include "image_fetcher.h"

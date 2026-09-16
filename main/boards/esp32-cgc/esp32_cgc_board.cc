@@ -6,7 +6,7 @@
 #include "system_reset.h"
 #include "button.h"
 #include "config.h"
-#include "led/single_led.h"
+#include "services/service_ws2812.h"
 
 #include <esp_log.h>
 #include <driver/i2c_master.h>
