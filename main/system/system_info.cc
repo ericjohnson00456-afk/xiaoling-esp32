@@ -1,5 +1,5 @@
 #include "system_info.h"
-#include "xiaoling/xiaoling_config.h"
+#include "xiaoling/conn/xiaoling_config.h"
 
 #include <freertos/task.h>
 #include <esp_log.h>

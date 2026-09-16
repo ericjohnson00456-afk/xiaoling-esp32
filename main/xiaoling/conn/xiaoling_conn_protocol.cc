@@ -2,8 +2,8 @@
 
 #include "board.h"
 #include "system/system_info.h"
-#include "xiaoling_events.h"
-#include "xiaoling_voice.h"
+#include "xiaoling/xiaoling_events.h"
+#include "xiaoling/session/session_voice.h"
 #include "xiaoling_config.h"
 
 #include <cJSON.h>

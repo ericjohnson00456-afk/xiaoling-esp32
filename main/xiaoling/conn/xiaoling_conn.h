@@ -17,7 +17,7 @@
 #include <freertos/event_groups.h>
 #include <freertos/task.h>
 
-class XiaolingVoice;
+class XiaolingSessionVoice;
 
 enum class XiaolingError {
     ServerNotConnected,
@@ -61,7 +61,7 @@ private:
     static constexpr uint32_t kProtocolConnectTimeoutMs = 10000;
     static constexpr EventBits_t kProtocolConnectedBit = BIT0;
 
-    std::unique_ptr<XiaolingVoice> voice_;
+    std::unique_ptr<XiaolingSessionVoice> voice_;
     EventGroupHandle_t event_group_ = nullptr;
 
     mutable std::mutex websocket_mutex_;
@@ -71,7 +71,10 @@ private:
     std::atomic_bool transport_connected_{false};
     std::atomic_bool protocol_connected_{false};
     std::atomic_bool session_active_{false};
+    std::atomic_bool connecting_{false};
     std::atomic<uint32_t> generation_{0};
+    uint32_t reconnect_attempts_ = 0;
+    bool disconnected_event_published_ = false;
     TaskHandle_t task_handle_ = nullptr;
     int64_t last_heartbeat_us_ = 0;
 
@@ -90,6 +93,7 @@ private:
     void Run();
     bool ConnectOnce();
     void HandleTransportDisconnected(uint32_t generation);
+    void PublishDisconnected();
     void SetSessionActive(bool active);
 
     bool EnsureAuthenticated();

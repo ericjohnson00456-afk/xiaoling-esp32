@@ -33,11 +33,12 @@ set(SOURCES "audio/audio_codec.cc"
             "boards/common/board_events.cc"
             "cloud/cloud_http.cc"
             "cloud/cloud_websocket.cc"
-            "xiaoling/xiaoling_conn.cc"
-            "xiaoling/xiaoling_conn_auth.cc"
-            "xiaoling/xiaoling_conn_protocol.cc"
+            "xiaoling/conn/xiaoling_conn.cc"
+            "xiaoling/conn/xiaoling_conn_auth.cc"
+            "xiaoling/conn/xiaoling_conn_protocol.cc"
             "xiaoling/xiaoling_events.cc"
-            "xiaoling/xiaoling_voice.cc"
+            "xiaoling/session/session_core.cc"
+            "xiaoling/session/session_voice.cc"
             "mcp/mcp_server.cc"
             "system/system_info.cc"
             "application.cc"
@@ -74,7 +75,7 @@ list(APPEND SOURCES ${SHELL_CMD_SOURCES})
 
 set(INCLUDE_DIRS "." "button" "ui/display" "ui/display/backend" "ui/display/panels"
                  "ui/themes" "ui/tools/font" "ui/tools/image" "audio"
-                 "audio/player" "audio/player/core" "audio/player/engine" "cloud" "xiaoling" "mcp"
+                 "audio/player" "audio/player/core" "audio/player/engine" "cloud" "xiaoling" "xiaoling/session" "xiaoling/conn" "mcp"
                  "ui" "ui/core" "ui/models" "ui/screens/home" "system" "resource" "shell" "ota")
 
 # Add board common files
@@ -88,14 +89,13 @@ if(CONFIG_IDF_TARGET_ESP32S3)
     list(APPEND INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/boards/common_esp32s3)
 endif()
 
-# BluFi
+# BluFi（小聆 BLE 配网与上游 esp-blufi 共用 boards/common/blufi.cpp）
+if(CONFIG_PROV_MODE_BLE OR CONFIG_USE_ESP_BLUFI_WIFI_PROVISIONING)
+    list(APPEND SOURCES "boards/common/blufi.cpp")
+endif()
 if(CONFIG_PROV_MODE_BLE)
-list(APPEND SOURCES "blufi/blufi_security.cc"
-                    "blufi/blufi_init.cc"
-                    "blufi/blufi_main.cc")
-list(APPEND INCLUDE_DIRS "blufi")
-set(BLUFI_ASSETS ${CMAKE_CURRENT_SOURCE_DIR}/resource/assets/provisioning/xl_ble_prov.png)
-endif() # CONFIG_PROV_MODE_BLE
+    set(BLUFI_ASSETS ${CMAKE_CURRENT_SOURCE_DIR}/resource/assets/provisioning/xl_ble_prov.png)
+endif()
 
 idf_build_get_property(build_components BUILD_COMPONENTS)
 # Function to find component dynamically by pattern
@@ -650,10 +650,6 @@ else()
 endif()
 endif() # CONFIG_USE_MICRO_WAKE_WORD
 
-# Auto Select Additional Sources
-if (CONFIG_USE_ESP_BLUFI_WIFI_PROVISIONING)
-    list(APPEND SOURCES "boards/common/blufi.cpp")
-endif ()
 # Select language directory according to Kconfig
 if(CONFIG_LANGUAGE_ZH_CN)
     set(LANG_DIR "zh-CN")

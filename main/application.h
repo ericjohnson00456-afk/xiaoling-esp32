@@ -11,12 +11,14 @@
 #include <deque>
 #include <memory>
 #include <cstdint>
+#include <atomic>
 
-#include "xiaoling/xiaoling_conn.h"
+#include "xiaoling/conn/xiaoling_conn.h"
 #include "ota/ota.h"
 #include "audio_service.h"
 #include "audio/player/audio_player.h"
 #include "audio/player/player_tone.h"
+#include "xiaoling/session/session_core.h"
 #include "button/button_events.h"
 #include "device_state.h"
 #include "device_state_machine.h"
@@ -124,6 +126,8 @@ public:
     void PlayLocalizedTone(const char* name);
     void PlayTone(uint16_t tone_id);
     AudioService& GetAudioService() { return audio_service_; }
+    void SetDuplexMode(DuplexMode mode);
+    DuplexMode GetDuplexMode() const { return session_controller_.policy().mode; }
 
     /**
      * Reset protocol resources (thread-safe)
@@ -147,8 +151,10 @@ private:
     std::string last_error_message_;
     AudioService audio_service_;
     AudioPlayer audio_player_;
+    VoiceSessionController session_controller_;
     PlayerTone player_tone_{audio_player_};
     uint32_t active_tts_session_id_ = 0;
+    uint32_t iat_subscription_id_ = 0;
     std::unique_ptr<Ota> ota_;
 #ifdef CONFIG_LSPLATFORM
     Watchdog uplink_watchdog_{5000, "uplink"};
@@ -161,6 +167,7 @@ private:
     bool assets_version_checked_ = false;
     int clock_ticks_ = 0;
     TaskHandle_t activation_task_handle_ = nullptr;
+    std::atomic_bool factory_reset_started_{false};
 
 
     // Event handlers
@@ -181,6 +188,9 @@ private:
     void HandleBoardEmotion(const BoardEvents::EmotionEvent& event);
     void HandleBoardLocalizedText(const BoardEvents::LocalizedTextEvent& event);
     void HandleButtonEvent(int32_t event_id);
+    // 恢复出厂设置：播提示音、擦除全部 NVS，等提示音播完后复位
+    void StartFactoryReset();
+    void FactoryResetTask();
     static void OnBoardInputEvent(void* arg, esp_event_base_t event_base,
                                   int32_t event_id, void* event_data);
     static void OnButtonEvent(void* arg, esp_event_base_t event_base,

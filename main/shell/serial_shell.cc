@@ -1,7 +1,7 @@
 #include "serial_shell.h"
 
-#include "cmd/kv_command.h"
-#include "cmd/system_command.h"
+#include "cmd/kv.h"
+#include "cmd/system.h"
 
 #include <cstdio>
 #include <fcntl.h>

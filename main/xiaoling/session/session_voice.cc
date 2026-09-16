@@ -1,8 +1,8 @@
-#include "xiaoling_voice.h"
+#include "xiaoling/session/session_voice.h"
 
 #include "system/system_info.h"
-#include "xiaoling_events.h"
-#include "xiaoling_config.h"
+#include "xiaoling/xiaoling_events.h"
+#include "xiaoling/conn/xiaoling_config.h"
 
 #include <cJSON.h>
 #include <esp_log.h>
@@ -13,7 +13,7 @@
 #include <cstring>
 #include <utility>
 
-#define TAG "XiaolingVoice"
+#define TAG "XiaolingSessionVoice"
 
 namespace {
 
@@ -44,17 +44,17 @@ std::string JsonToString(cJSON* root) {
 
 }  // 匿名命名空间
 
-XiaolingVoice::XiaolingVoice() {
+XiaolingSessionVoice::XiaolingSessionVoice() {
     event_group_ = xEventGroupCreate();
 }
 
-XiaolingVoice::~XiaolingVoice() {
+XiaolingSessionVoice::~XiaolingSessionVoice() {
     if (event_group_ != nullptr) {
         vEventGroupDelete(event_group_);
     }
 }
 
-void XiaolingVoice::SetTransport(TextSender text_sender,
+void XiaolingSessionVoice::SetTransport(TextSender text_sender,
                                  BinarySender binary_sender,
                                  SessionStateCallback session_state_callback,
                                  ErrorCallback error_callback) {
@@ -64,15 +64,15 @@ void XiaolingVoice::SetTransport(TextSender text_sender,
     error_callback_ = std::move(error_callback);
 }
 
-void XiaolingVoice::SetNarrowbandMode(bool enabled) {
+void XiaolingSessionVoice::SetNarrowbandMode(bool enabled) {
     narrowband_mode_ = enabled;
 }
 
-void XiaolingVoice::OnIncomingAudio(IncomingAudioCallback callback) {
+void XiaolingSessionVoice::OnIncomingAudio(IncomingAudioCallback callback) {
     on_incoming_audio_ = std::move(callback);
 }
 
-bool XiaolingVoice::SendAudio(std::unique_ptr<AudioStreamPacket> packet) {
+bool XiaolingSessionVoice::SendAudio(std::unique_ptr<AudioStreamPacket> packet) {
     if (packet == nullptr || packet->payload.empty() || !binary_sender_) {
         return false;
     }
@@ -89,13 +89,13 @@ bool XiaolingVoice::SendAudio(std::unique_ptr<AudioStreamPacket> packet) {
     return CheckUplinkAudioFormat(*packet) && SendUplinkAudioPacket(*packet);
 }
 
-void XiaolingVoice::SendWakeWordDetected(const std::string& wake_word) {
+void XiaolingSessionVoice::SendWakeWordDetected(const std::string& wake_word) {
     // lschat 没有独立唤醒词帧，唤醒词随下一次 start 的 wake_properties 发送。
     pending_wake_audio_.clear();
     pending_wake_word_ = wake_word;
 }
 
-std::string XiaolingVoice::BuildStartMessage(ListeningMode mode) {
+std::string XiaolingSessionVoice::BuildStartMessage(ListeningMode mode) {
     session_id_ = std::to_string(static_cast<unsigned long>(esp_random()));
 
     cJSON* root = cJSON_CreateObject();
@@ -151,10 +151,10 @@ std::string XiaolingVoice::BuildStartMessage(ListeningMode mode) {
     return text;
 }
 
-void XiaolingVoice::SendStartListening(ListeningMode mode) {
+void XiaolingSessionVoice::SendStartListening(ListeningMode mode) {
     if (!text_sender_) {
         if (error_callback_) {
-            error_callback_(XiaolingVoiceError::kServerError);
+            error_callback_(XiaolingSessionVoiceError::kServerError);
         }
         return;
     }
@@ -167,7 +167,7 @@ void XiaolingVoice::SendStartListening(ListeningMode mode) {
     uplink_audio_format_checked_ = false;
     if (event_group_ == nullptr) {
         if (error_callback_) {
-            error_callback_(XiaolingVoiceError::kServerError);
+            error_callback_(XiaolingSessionVoiceError::kServerError);
         }
         return;
     }
@@ -188,22 +188,22 @@ void XiaolingVoice::SendStartListening(ListeningMode mode) {
         SetSessionActive(false);
         pending_wake_audio_.clear();
         if (error_callback_) {
-            error_callback_(XiaolingVoiceError::kServerTimeout);
+            error_callback_(XiaolingSessionVoiceError::kServerTimeout);
         }
         return;
     }
     if (!FlushPendingWakeAudio() && error_callback_) {
-        error_callback_(XiaolingVoiceError::kServerError);
+        error_callback_(XiaolingSessionVoiceError::kServerError);
     }
 }
 
-void XiaolingVoice::SendStopListening() {
+void XiaolingSessionVoice::SendStopListening() {
     if (session_active_ && text_sender_ && text_sender_("{\"action\":\"end\"}")) {
         audio_upload_enabled_ = false;
     }
 }
 
-void XiaolingVoice::SendAbortSpeaking(AbortReason reason) {
+void XiaolingSessionVoice::SendAbortSpeaking(AbortReason reason) {
     (void)reason;
     if (session_active_ && text_sender_ && text_sender_("{\"action\":\"cancel\"}")) {
         audio_upload_enabled_ = false;
@@ -211,7 +211,7 @@ void XiaolingVoice::SendAbortSpeaking(AbortReason reason) {
     }
 }
 
-bool XiaolingVoice::FlushPendingWakeAudio() {
+bool XiaolingSessionVoice::FlushPendingWakeAudio() {
     while (!pending_wake_audio_.empty()) {
         auto packet = std::move(pending_wake_audio_.front());
         pending_wake_audio_.pop_front();
@@ -226,7 +226,7 @@ bool XiaolingVoice::FlushPendingWakeAudio() {
     return true;
 }
 
-bool XiaolingVoice::CheckUplinkAudioFormat(const AudioStreamPacket& packet) {
+bool XiaolingSessionVoice::CheckUplinkAudioFormat(const AudioStreamPacket& packet) {
     if (uplink_audio_format_checked_) {
         return true;
     }
@@ -266,7 +266,7 @@ bool XiaolingVoice::CheckUplinkAudioFormat(const AudioStreamPacket& packet) {
     return true;
 }
 
-bool XiaolingVoice::SendUplinkAudioPacket(const AudioStreamPacket& packet) {
+bool XiaolingSessionVoice::SendUplinkAudioPacket(const AudioStreamPacket& packet) {
     if (!binary_sender_) {
         return false;
     }
@@ -287,7 +287,7 @@ bool XiaolingVoice::SendUplinkAudioPacket(const AudioStreamPacket& packet) {
     return binary_sender_(framed.data(), framed.size());
 }
 
-void XiaolingVoice::HandleBinary(std::vector<uint8_t> payload) {
+void XiaolingSessionVoice::HandleBinary(std::vector<uint8_t> payload) {
     if (on_incoming_audio_) {
         on_incoming_audio_(std::make_unique<AudioStreamPacket>(AudioStreamPacket{
             .sample_rate = kServerSampleRate,
@@ -298,7 +298,7 @@ void XiaolingVoice::HandleBinary(std::vector<uint8_t> payload) {
     }
 }
 
-void XiaolingVoice::HandleMessage(const cJSON* root) {
+void XiaolingSessionVoice::HandleMessage(const cJSON* root) {
     const auto* action = ReadString(root, "action");
     if (action == nullptr) {
         return;
@@ -344,7 +344,7 @@ void XiaolingVoice::HandleMessage(const cJSON* root) {
     }
 }
 
-void XiaolingVoice::Reset() {
+void XiaolingSessionVoice::Reset() {
     audio_upload_enabled_ = false;
     SetSessionActive(false);
     pending_wake_word_.clear();
@@ -356,14 +356,14 @@ void XiaolingVoice::Reset() {
     ResetResultState();
 }
 
-void XiaolingVoice::SetSessionActive(bool active) {
+void XiaolingSessionVoice::SetSessionActive(bool active) {
     session_active_ = active;
     if (session_state_callback_) {
         session_state_callback_(active);
     }
 }
 
-void XiaolingVoice::ResetResultState() {
+void XiaolingSessionVoice::ResetResultState() {
     EndIat();
     EndTtsText();
     iat_active_ = false;
@@ -372,7 +372,7 @@ void XiaolingVoice::ResetResultState() {
     last_tts_text_.clear();
 }
 
-void XiaolingVoice::HandleIat(const cJSON* data) {
+void XiaolingSessionVoice::HandleIat(const cJSON* data) {
     const auto* text = ReadString(data, "text");
     if (text == nullptr) {
         return;
@@ -393,7 +393,7 @@ void XiaolingVoice::HandleIat(const cJSON* data) {
     }
 }
 
-void XiaolingVoice::HandleTts(const cJSON* data) {
+void XiaolingSessionVoice::HandleTts(const cJSON* data) {
     auto& events = XiaolingEventBus::GetInstance();
     if (const auto* content = ReadString(data, "content")) {
         std::string url;
@@ -429,7 +429,7 @@ void XiaolingVoice::HandleTts(const cJSON* data) {
     }
 }
 
-void XiaolingVoice::EndIat() {
+void XiaolingSessionVoice::EndIat() {
     if (!iat_active_) {
         return;
     }
@@ -437,7 +437,7 @@ void XiaolingVoice::EndIat() {
     iat_active_ = false;
 }
 
-void XiaolingVoice::EndTtsText() {
+void XiaolingSessionVoice::EndTtsText() {
     if (tts_text_active_) {
         XiaolingEventBus::GetInstance().Publish(XIAOLING_TTS_TXT_END, last_tts_text_);
         tts_text_active_ = false;

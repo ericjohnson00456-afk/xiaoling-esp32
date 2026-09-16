@@ -21,6 +21,12 @@ void BindWakeupButton(Button& button, bool double_click_toggles_aec) {
     button.OnDoubleClick([double_click_toggles_aec]() {
         Post(double_click_toggles_aec ? kToggleAec : kDoubleClick);
     });
+    button.OnMultipleClick([]() { Post(kTripleClick); }, 3);
+    // 连按 8 下及以上恢复出厂设置。esp-button 的多击回调按精确次数匹配，
+    // 因此逐档注册 8~15 次，超过 15 次的连按不常见。
+    for (uint8_t clicks = 8; clicks <= 15; ++clicks) {
+        button.OnMultipleClick([]() { Post(kFactoryReset); }, clicks);
+    }
 }
 
 }

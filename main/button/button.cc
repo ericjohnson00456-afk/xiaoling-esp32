@@ -39,6 +39,9 @@ Button::~Button() {
     if (button_handle_ != NULL) {
         iot_button_delete(button_handle_);
     }
+    for (auto* handler : multiple_click_handlers_) {
+        delete handler;
+    }
 }
 
 void Button::OnPressDown(std::function<void()> callback) {
@@ -110,16 +113,18 @@ void Button::OnMultipleClick(std::function<void()> callback, uint8_t click_count
     if (button_handle_ == nullptr) {
         return;
     }
-    on_multiple_click_ = callback;
+    auto* handler = new MultipleClickHandler{std::move(callback)};
+    multiple_click_handlers_.push_back(handler);
     button_event_args_t event_args = {
         .multiple_clicks = {
             .clicks = click_count
         }
     };
     iot_button_register_cb(button_handle_, BUTTON_MULTIPLE_CLICK, &event_args, [](void* handle, void* usr_data) {
-        Button* button = static_cast<Button*>(usr_data);
-        if (button->on_multiple_click_) {
-            button->on_multiple_click_();
+        (void)handle;
+        auto* handler = static_cast<MultipleClickHandler*>(usr_data);
+        if (handler->callback) {
+            handler->callback();
         }
-    }, this);
+    }, handler);
 }

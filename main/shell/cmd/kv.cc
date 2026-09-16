@@ -1,4 +1,4 @@
-#include "kv_command.h"
+#include "kv.h"
 
 #include "settings.h"
 
@@ -11,6 +11,7 @@
 
 #include <esp_console.h>
 #include <nvs.h>
+#include <nvs_flash.h>
 
 namespace {
 
@@ -20,7 +21,7 @@ void PrintUsage() {
     std::printf(
         "Usage:\n"
         "  kv show [namespace]\n"
-        "  kv clean <namespace>\n"
+        "  kv clean\n"
         "  kv del <namespace> <key>\n"
         "  kv set <string|int|bool> <namespace> <key> <value>\n"
         "  kv get <string|int|bool> <namespace> <key>\n"
@@ -152,17 +153,25 @@ int HandleShow(int argc, char** argv) {
     return ret == ESP_ERR_NVS_NOT_FOUND ? 0 : 1;
 }
 
-int HandleClean(int argc, char** argv) {
-    if (argc != 2 || !IsValidNvsName(argv[1])) {
+int HandleClean(int argc, char**) {
+    if (argc != 1) {
         PrintUsage();
         return 1;
     }
-    Settings settings(argv[1], true);
-    if (!ValidateSettings(settings, argv[1])) {
+
+    // Wipe the whole default NVS partition, then bring it back fresh. Handles
+    // opened by other modules become stale, so a reboot is required.
+    esp_err_t ret = nvs_flash_erase();
+    if (ret != ESP_OK) {
+        std::printf("failed to erase NVS: %s\n", esp_err_to_name(ret));
         return 1;
     }
-    settings.EraseAll();
-    std::printf("flash clear %s success\n", argv[1]);
+    ret = nvs_flash_init();
+    if (ret != ESP_OK) {
+        std::printf("failed to re-initialize NVS: %s\n", esp_err_to_name(ret));
+        return 1;
+    }
+    std::printf("NVS erased. Run 'reboot' to start clean.\n");
     return 0;
 }
 

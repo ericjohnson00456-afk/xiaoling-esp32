@@ -20,15 +20,17 @@
 #include <ssid_manager.h>
 #include "afsk_demod.h"
 
-#ifdef CONFIG_PROV_MODE_BLE
-#include "blufi/blufi.h"
-#else //!CONFIG_PROV_MODE_BLE
-
-#ifdef CONFIG_USE_ESP_BLUFI_WIFI_PROVISIONING
+#if defined(CONFIG_PROV_MODE_BLE) || defined(CONFIG_USE_ESP_BLUFI_WIFI_PROVISIONING)
 #include "blufi.h"
 #endif
 
-#endif //CONFIG_PROV_MODE_BLE
+#ifdef CONFIG_PROV_MODE_BLE
+#include "application.h"
+#include "ui/tools/image/lvgl_image.h"
+
+extern const char xl_ble_prov_png_start[] asm("_binary_xl_ble_prov_png_start");
+extern const char xl_ble_prov_png_end[] asm("_binary_xl_ble_prov_png_end");
+#endif
 
 static const char *TAG = "WifiBoard";
 
@@ -185,9 +187,30 @@ void WifiBoard::StartWifiConfigMode() {
     // Transition to wifi configuring state
     BoardEvents::PostInput(BoardEvents::Input::EnterWifiConfigState);
 
+#if defined(CONFIG_PROV_MODE_BLE) || defined(CONFIG_USE_ESP_BLUFI_WIFI_PROVISIONING)
+    // initialize esp-blufi protocol
+    auto &blufi = Blufi::GetInstance();
 #ifdef CONFIG_PROV_MODE_BLE
-    blufi_start();
+    // 小聆小程序流程：广播名 "Xiaoling-XXXX"，WiFi 连接成功后上报 pid/did，
+    // 小程序 "done" 握手完成后重启设备
+    Blufi::Config config;
+    config.name_prefix = "Xiaoling";
+    config.report_identity = true;
+    config.restart_on_complete = true;
+    blufi.init(config);
+
+    // 配网提示界面与提示音由应用层资源提供
+    Assets::GetInstance().Apply();
+    auto qrcode = std::make_unique<LvglRawImage>((void *)xl_ble_prov_png_start,
+                                                 (size_t)(xl_ble_prov_png_end - xl_ble_prov_png_start));
+    auto display = Board::GetInstance().GetDisplay();
+    display->ShowActivation(std::move(qrcode), "扫码或搜索“小聆AI”小程序\n选择ESP32 - 蓝牙配网");
+    // 配网提示音由应用层根据当前语言从 ROMFS 加载。
+    Application::GetInstance().PlayTone(70);
 #else //!CONFIG_PROV_MODE_BLE
+    blufi.init();
+#endif //CONFIG_PROV_MODE_BLE
+#endif //CONFIG_PROV_MODE_BLE || CONFIG_USE_ESP_BLUFI_WIFI_PROVISIONING
 
 #ifdef CONFIG_USE_HOTSPOT_WIFI_PROVISIONING
     auto& wifi_manager = WifiManager::GetInstance();
@@ -196,11 +219,6 @@ void WifiBoard::StartWifiConfigMode() {
 
     // Show config prompt after a short delay
     BoardEvents::PostWifiConfigHint(wifi_manager.GetApSsid(), wifi_manager.GetApWebUrl());
-#endif
-#if CONFIG_USE_ESP_BLUFI_WIFI_PROVISIONING
-    auto &blufi = Blufi::GetInstance();
-    // initialize esp-blufi protocol
-    blufi.init();
 #endif
 #if CONFIG_USE_ACOUSTIC_WIFI_PROVISIONING
     // Start acoustic provisioning task
@@ -216,8 +234,6 @@ void WifiBoard::StartWifiConfigMode() {
         vTaskDelete(NULL);
     }, "acoustic_wifi", 4096, reinterpret_cast<void*>(channel), 2, NULL);
 #endif
-
-#endif //CONFIG_PROV_MODE_BLE
 }
 
 void WifiBoard::EnterWifiConfigMode() {

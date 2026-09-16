@@ -64,6 +64,7 @@ bool CloudWebSocket::Connect(const std::string& url, const CloudWebSocketHeaders
         }
     });
 
+
     websocket_->OnDisconnected([this]() {
         ESP_LOGI(TAG, "WebSocket transport disconnected");
         if (on_disconnected_ != nullptr) {
@@ -131,6 +132,7 @@ void CloudWebSocket::OnText(std::function<void(std::string)> callback) {
 void CloudWebSocket::OnBinary(std::function<void(std::vector<uint8_t>)> callback) {
     on_binary_ = std::move(callback);
 }
+
 
 void CloudWebSocket::OnConnected(std::function<void()> callback) {
     on_connected_ = std::move(callback);

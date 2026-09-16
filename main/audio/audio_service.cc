@@ -1,5 +1,5 @@
 #include "audio_service.h"
-#include "xiaoling/xiaoling_config.h"
+#include "xiaoling/conn/xiaoling_config.h"
 #include <esp_log.h>
 #include <cstring>
 
@@ -264,8 +264,12 @@ void AudioService::AudioInputTask() {
             }
         }
 
-        ESP_LOGE(TAG, "Should not be here, bits: %lx", bits);
-        break;
+        /* 唤醒词/AFE 停用瞬间，本任务可能读到残留的 RUNNING 位但对应模块已
+           无数据可喂（如 GetFeedSize()==0）。这是正常的并发时序，清掉残留位
+           后继续等待；绝不能 break —— 任务退出后上行音频永久失效。 */
+        ESP_LOGW(TAG, "Stale audio input event bits: %lx, clearing", bits);
+        xEventGroupClearBits(event_group_, bits & (AS_EVENT_AUDIO_TESTING_RUNNING |
+            AS_EVENT_WAKE_WORD_RUNNING | AS_EVENT_AUDIO_PROCESSOR_RUNNING));
     }
 
     ESP_LOGW(TAG, "Audio input task stopped");
@@ -396,7 +400,9 @@ void AudioService::OpusCodecTask() {
             if (task->type == kAudioTaskTypeEncodeToSendQueue) {
                 {
                     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
-                    audio_send_queue_.push_back(std::move(packet));
+                    if (uplink_enabled_ && task->uplink_generation == uplink_generation_) {
+                        audio_send_queue_.push_back(std::move(packet));
+                    }
                 }
                 if (callbacks_.on_send_queue_available) {
                     callbacks_.on_send_queue_available();
@@ -459,6 +465,8 @@ void AudioService::PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t
     
     /* Push the task to the encode queue */
     std::unique_lock<std::mutex> lock(audio_queue_mutex_);
+    if (type == kAudioTaskTypeEncodeToSendQueue && !uplink_enabled_) return;
+    task->uplink_generation = uplink_generation_;
 
     /* If the task is to send queue, we need to set the timestamp */
     if (type == kAudioTaskTypeEncodeToSendQueue && !timestamp_queue_.empty()) {
@@ -470,7 +478,12 @@ void AudioService::PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t
         timestamp_queue_.pop_front();
     }
 
-    audio_queue_cv_.wait(lock, [this]() { return audio_encode_queue_.size() < MAX_ENCODE_TASKS_IN_QUEUE; });
+    audio_queue_cv_.wait(lock, [this, &task]() {
+        return service_stopped_ || task->uplink_generation != uplink_generation_ ||
+               audio_encode_queue_.size() < MAX_ENCODE_TASKS_IN_QUEUE;
+    });
+    if (service_stopped_ || (type == kAudioTaskTypeEncodeToSendQueue &&
+        (!uplink_enabled_ || task->uplink_generation != uplink_generation_))) return;
     audio_encode_queue_.push_back(std::move(task));
     audio_queue_cv_.notify_all();
 }
@@ -617,12 +630,23 @@ void AudioService::EnableWakeWordDetection(bool enable) {
         wake_word_->Start();
         xEventGroupSetBits(event_group_, AS_EVENT_WAKE_WORD_RUNNING);
     } else {
-        wake_word_->Stop();
+        /* 先清除事件位再 Stop，缩小输入任务读到残留 RUNNING 位的窗口 */
         xEventGroupClearBits(event_group_, AS_EVENT_WAKE_WORD_RUNNING);
+        wake_word_->Stop();
     }
 }
 
 void AudioService::EnableVoiceProcessing(bool enable) {
+    if (enable == IsAudioProcessorRunning()) return;
+    {
+        std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+        uplink_enabled_ = enable;
+        ++uplink_generation_;
+        audio_encode_queue_.clear();
+        audio_send_queue_.clear();
+        timestamp_queue_.clear();
+        audio_queue_cv_.notify_all();
+    }
     ESP_LOGD(TAG, "%s voice processing", enable ? "Enabling" : "Disabling");
     if (enable) {
         if (!audio_processor_initialized_) {
@@ -630,15 +654,36 @@ void AudioService::EnableVoiceProcessing(bool enable) {
             audio_processor_initialized_ = true;
         }
 
-        /* We should make sure no audio is playing */
-        ResetDecoder();
+        // Playback belongs to AudioPlayer and may run concurrently in full duplex.
         audio_input_need_warmup_ = true;
         audio_processor_->Start();
         xEventGroupSetBits(event_group_, AS_EVENT_AUDIO_PROCESSOR_RUNNING);
     } else {
-        audio_processor_->Stop();
+        /* 先清除事件位再 Stop，缩小输入任务读到残留 RUNNING 位的窗口 */
         xEventGroupClearBits(event_group_, AS_EVENT_AUDIO_PROCESSOR_RUNNING);
+        audio_processor_->Stop();
     }
+}
+
+bool AudioService::SupportsDeviceAec() const {
+#if CONFIG_USE_DEVICE_AEC && CONFIG_USE_AUDIO_PROCESSOR
+    return codec_ && codec_->duplex() && codec_->input_reference();
+#else
+    return false;
+#endif
+}
+
+bool AudioService::SupportsAec() const {
+#if CONFIG_USE_DEVICE_AEC || CONFIG_USE_SERVER_AEC
+    return SupportsDeviceAec() ||
+#if CONFIG_USE_SERVER_AEC
+           true;
+#else
+           false;
+#endif
+#else
+    return false;
+#endif
 }
 
 void AudioService::EnableAudioTesting(bool enable) {

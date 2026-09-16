@@ -70,7 +70,8 @@ enum AudioTaskType {
 struct AudioTask {
     AudioTaskType type;
     std::vector<int16_t> pcm;
-    uint32_t timestamp;
+    uint32_t timestamp = 0;
+    uint32_t uplink_generation = 0;
 };
 
 struct DebugStatistics {
@@ -102,6 +103,8 @@ public:
     void EnableVoiceProcessing(bool enable);
     void EnableAudioTesting(bool enable);
     void EnableDeviceAec(bool enable);
+    bool SupportsDeviceAec() const;
+    bool SupportsAec() const;
 
     void SetCallbacks(AudioServiceCallbacks& callbacks);
 
@@ -168,6 +171,8 @@ private:
     bool voice_detected_ = false;
     bool service_stopped_ = true;
     bool audio_input_need_warmup_ = false;
+    uint32_t uplink_generation_ = 0;
+    bool uplink_enabled_ = false;
 
     esp_timer_handle_t audio_power_timer_ = nullptr;
     std::chrono::steady_clock::time_point last_input_time_;

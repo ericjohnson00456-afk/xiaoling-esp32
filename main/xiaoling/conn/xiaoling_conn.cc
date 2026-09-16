@@ -2,8 +2,8 @@
 
 #include "board.h"
 #include "system/system_info.h"
-#include "xiaoling_events.h"
-#include "xiaoling_voice.h"
+#include "xiaoling/xiaoling_events.h"
+#include "xiaoling/session/session_voice.h"
 
 #include <esp_log.h>
 #include <esp_timer.h>
@@ -14,7 +14,7 @@
 
 XiaolingConn::XiaolingConn() {
     event_group_ = xEventGroupCreate();
-    voice_ = std::make_unique<XiaolingVoice>();
+    voice_ = std::make_unique<XiaolingSessionVoice>();
     voice_->SetTransport(
         [this](const std::string& text) {
             return SendText(text);
@@ -25,8 +25,8 @@ XiaolingConn::XiaolingConn() {
         [this](bool active) {
             SetSessionActive(active);
         },
-        [this](XiaolingVoiceError error) {
-            SetError(error == XiaolingVoiceError::kServerTimeout
+        [this](XiaolingSessionVoiceError error) {
+            SetError(error == XiaolingSessionVoiceError::kServerTimeout
                          ? XiaolingError::ServerTimeout
                          : XiaolingError::ServerError);
         });
@@ -60,13 +60,12 @@ bool XiaolingConn::Connect() {
         return false;
     }
 
-    const auto bits = xEventGroupWaitBits(event_group_, kProtocolConnectedBit,
-                                          pdTRUE, pdFALSE,
-                                          pdMS_TO_TICKS(kProtocolConnectTimeoutMs));
-    if (!(bits & kProtocolConnectedBit) || !protocol_connected_) {
-        ESP_LOGE(TAG, "等待小聆 connected 消息超时");
-        SetError(XiaolingError::ServerTimeout);
-        StopSupervisor();
+    // WebSocket 的建立交给底层网络组件；本层只建立一次并启动心跳观测任务。
+    connecting_ = true;
+    const bool connected = ConnectOnce();
+    connecting_ = false;
+    if (!connected) {
+        SetError(XiaolingError::ServerNotConnected);
         return false;
     }
     return true;
@@ -187,9 +186,9 @@ void XiaolingConn::StopSupervisor() {
     if (websocket != nullptr) {
         websocket->Disconnect();
     }
-    transport_connected_ = false;
+    const bool was_transport_connected = transport_connected_.exchange(false);
     session_active_ = false;
-    if (protocol_connected_.exchange(false)) {
+    if (was_transport_connected || protocol_connected_.exchange(false)) {
         XiaolingEventBus::GetInstance().Publish(XIAOLING_DISCONNECTED);
         if (on_disconnected_) {
             on_disconnected_();
@@ -225,9 +224,22 @@ void XiaolingConn::TaskEntry(void* arg) {
 void XiaolingConn::Run() {
     last_heartbeat_us_ = esp_timer_get_time();
     while (running_) {
-        if (desired_connected_ && !transport_connected_) {
-            ConnectOnce();
-        } else if (desired_connected_ && transport_connected_ && !session_active_) {
+        if (desired_connected_ && !transport_connected_ && !connecting_) {
+            if (reconnect_attempts_ < 3) {
+                ++reconnect_attempts_;
+                ESP_LOGW(TAG, "小聆 WebSocket 断开，开始第 %lu 次重连",
+                         static_cast<unsigned long>(reconnect_attempts_));
+                if (ConnectOnce()) {
+                    reconnect_attempts_ = 0;
+                    disconnected_event_published_ = false;
+                }
+            } else if (!disconnected_event_published_) {
+                PublishDisconnected();
+                disconnected_event_published_ = true;
+            }
+        } else if (desired_connected_ && transport_connected_) {
+            reconnect_attempts_ = 0;
+            disconnected_event_published_ = false;
             const int64_t now = esp_timer_get_time();
             if (now - last_heartbeat_us_ >= static_cast<int64_t>(kHeartbeatIntervalMs) * 1000) {
                 bool sent = false;
@@ -242,7 +254,7 @@ void XiaolingConn::Run() {
             }
         }
 
-        const auto wait_ms = transport_connected_ ? kHeartbeatIntervalMs : kReconnectIntervalMs;
+        const auto wait_ms = transport_connected_ ? 250 : kReconnectIntervalMs;
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(wait_ms));
     }
     task_handle_ = nullptr;
@@ -335,7 +347,7 @@ void XiaolingConn::HandleTransportDisconnected(uint32_t generation) {
     if (generation != generation_.load()) {
         return;
     }
-    transport_connected_ = false;
+    const bool was_transport_connected = transport_connected_.exchange(false);
     session_active_ = false;
     if (voice_ != nullptr) {
         voice_->Reset();
@@ -343,15 +355,19 @@ void XiaolingConn::HandleTransportDisconnected(uint32_t generation) {
     if (event_group_ != nullptr) {
         xEventGroupSetBits(event_group_, kProtocolConnectedBit);
     }
-    if (protocol_connected_.exchange(false)) {
-        ESP_LOGI(TAG, "小聆连接已断开");
-        XiaolingEventBus::GetInstance().Publish(XIAOLING_DISCONNECTED);
-        if (on_disconnected_) {
-            on_disconnected_();
-        }
+    if (was_transport_connected || protocol_connected_.exchange(false)) {
+        ESP_LOGI(TAG, "小聆连接已断开，等待自动重连");
     }
     if (task_handle_ != nullptr) {
         xTaskNotifyGive(task_handle_);
+    }
+}
+
+void XiaolingConn::PublishDisconnected() {
+    ESP_LOGE(TAG, "小聆 WebSocket 连续 3 次重连失败");
+    XiaolingEventBus::GetInstance().Publish(XIAOLING_DISCONNECTED);
+    if (on_disconnected_) {
+        on_disconnected_();
     }
 }
 

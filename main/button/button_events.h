@@ -11,9 +11,11 @@ namespace ButtonEvents {
 enum Action : int32_t {
     kClick,
     kDoubleClick,
+    kTripleClick,
     kPressDown,
     kPressUp,
     kToggleAec,
+    kFactoryReset,
 };
 
 esp_err_t Post(Action action);

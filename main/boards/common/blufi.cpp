@@ -1,17 +1,20 @@
 #include "blufi.h"
 #include <algorithm>
 #include <cassert>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 
-#include "application.h"
 #include "esp_bt.h"
 #include "esp_log.h"
 #include "esp_mac.h"
+#include "esp_netif.h"
 #include "esp_system.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "system/system_info.h"
 #include "wifi_manager.h"
 
 // Bluedroid specific
@@ -25,6 +28,7 @@
 #ifdef CONFIG_BT_NIMBLE_ENABLED
 #include "console/console.h"
 #include "host/ble_hs.h"
+#include "host/util/util.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 #include "services/gap/ble_svc_gap.h"
@@ -62,7 +66,6 @@ void esp_blufi_btc_deinit(void);
 }
 
 // mbedTLS for security
-#include <wifi_station.h>
 #include "esp_crc.h"
 #include "esp_random.h"
 #include "mbedtls/md5.h"
@@ -70,6 +73,31 @@ void esp_blufi_btc_deinit(void);
 
 // Logging Tag
 static const char *BLUFI_TAG = "BLUFI_CLASS";
+
+#ifdef CONFIG_BT_BLUEDROID_ENABLED
+// Advertising payload carrying the Blufi service UUID and device name.
+static const uint8_t kBlufiServiceUuid128[16] = {
+    /* LSB <--------------------------------------------------------------------------------> MSB */
+    //first uuid, 16bit, [12],[13] is the value
+    0xfb, 0x34, 0x9b, 0x5f, 0x80, 0x00, 0x00, 0x80, 0x00, 0x10, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00,
+};
+// esp_ble_gap_config_adv_data takes a non-const pointer, hence the mutable static.
+static esp_ble_adv_data_t kBlufiAdvData = {
+    .set_scan_rsp = false,
+    .include_name = true,
+    .include_txpower = true,
+    .min_interval = 0x0006,  //slave connection min interval, Time = min_interval * 1.25 msec
+    .max_interval = 0x0010,  //slave connection max interval, Time = max_interval * 1.25 msec
+    .appearance = 0x00,
+    .manufacturer_len = 0,
+    .p_manufacturer_data = nullptr,
+    .service_data_len = 0,
+    .p_service_data = nullptr,
+    .service_uuid_len = 16,
+    .p_service_uuid = const_cast<uint8_t *>(kBlufiServiceUuid128),
+    .flag = 0x6,
+};
+#endif
 
 static wifi_mode_t GetWifiModeWithFallback(const WifiManager &wifi) {
     if (wifi.IsConfigMode()) {
@@ -96,6 +124,8 @@ Blufi::Blufi()
       m_sta_got_ip(false),
       m_provisioned(false),
       m_deinited(false),
+      m_prov_state(false),
+      m_auth_state(false),
       m_sta_ssid_len(0),
       m_sta_is_connecting(false) {
     // Initialize member variables
@@ -112,8 +142,189 @@ Blufi::~Blufi() {
     }
 }
 
-esp_err_t Blufi::init() {
+void Blufi::_generate_ble_name() {
+    uint8_t mac[6];
+#if CONFIG_IDF_TARGET_ESP32P4
+    esp_wifi_get_mac(WIFI_IF_AP, mac);
+#else
+    esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP);
+#endif
+    snprintf(m_ble_name, sizeof(m_ble_name), "%s-%02X%02X",
+             config_.name_prefix ? config_.name_prefix : "ESP32", mac[4], mac[5]);
+}
+
+void Blufi::_advertise() {
+#ifdef CONFIG_BT_BLUEDROID_ENABLED
+    // The Blufi component's GAP handler starts advertising once the adv data is set.
+    esp_ble_gap_set_device_name(m_ble_name);
+    esp_ble_gap_config_adv_data(&kBlufiAdvData);
+#else
+    // Device name is set in _host_init via the GAP service.
+    esp_blufi_adv_start();
+#endif
+}
+
+void Blufi::_report_identity() {
+    // AUTH_INFO 应答，与 ls26 NETCFG_BLE_AUTH_INFO 对齐：
+    // {"code":0,"product_id":"...","device_id":"..."}
+    std::string pid = SystemInfo::GetProductId();
+    std::string did = SystemInfo::GetMacAddress();
+    char data[256];
+    snprintf(data, sizeof(data), "{\"code\":0,\"product_id\":\"%s\",\"device_id\":\"%s\"}",
+             pid.c_str(), did.c_str());
+    esp_err_t ret = esp_blufi_send_custom_data((uint8_t *)data, strlen(data));
+    if (ret != ESP_OK) {
+        ESP_LOGE(BLUFI_TAG, "Report identity failed: %s", esp_err_to_name(ret));
+    }
+}
+
+void Blufi::_notify_wifi_connected() {
+    // 网络连接成功通知：小程序以 pid/did 推送作为配网成功的信号，
+    // 与 AUTH_INFO 应答是两种消息，格式不能混用
+    std::string pid = SystemInfo::GetProductId();
+    std::string did = SystemInfo::GetMacAddress();
+    char data[128];
+    snprintf(data, sizeof(data), "{\"pid\":\"%s\",\"did\":\"%s\"}", pid.c_str(), did.c_str());
+    esp_err_t ret = esp_blufi_send_custom_data((uint8_t *)data, strlen(data));
+    if (ret != ESP_OK) {
+        ESP_LOGE(BLUFI_TAG, "Notify wifi connected failed: %s", esp_err_to_name(ret));
+    }
+}
+
+void Blufi::_restart() {
+    xTaskCreate(
+        [](void *ctx) {
+            // Give the "done" reply time to be flushed to the phone.
+            vTaskDelay(pdMS_TO_TICKS(500));
+            ESP_LOGI(BLUFI_TAG, "BLUFI config done, restarting");
+            esp_restart();
+        },
+        "blufi_restart", 3072, this, 5, nullptr);
+}
+
+void Blufi::_connect_direct() {
+    // 直连路径不经过 WifiStation，需自建 STA netif 供 DHCP 使用；若已存在
+    //（如 WifiStation 曾启动过）则复用，避免重复创建
+    if (esp_netif_get_handle_from_ifkey("WIFI_STA_DEF") == nullptr) {
+        esp_netif_create_default_wifi_sta();
+    }
+    esp_wifi_set_mode(WIFI_MODE_STA);
+    esp_err_t ret = esp_wifi_start();
+    if (ret != ESP_OK) {
+        ESP_LOGE(BLUFI_TAG, "esp_wifi_start failed: %s", esp_err_to_name(ret));
+    }
+    // 已连接同一 AP 时不会有 wifi 回调，先断开（沿用原版逻辑）。
+    // 扫描与连接放到 _wait_direct_connect 任务里做，避免阻塞 BTC 任务
+    esp_wifi_disconnect();
+
+    if (xTaskCreate(
+            [](void *ctx) {
+                static_cast<Blufi *>(ctx)->_wait_direct_connect();
+            },
+            "blufi_wifi_conn", 4096, this, 5, nullptr) != pdTRUE) {
+        ESP_LOGE(BLUFI_TAG, "Failed to create blufi_wifi_conn task");
+    }
+}
+
+void Blufi::_wait_direct_connect() {
+    constexpr int kConnectTimeoutMs = 25000;
+    constexpr TickType_t kDelayTick = pdMS_TO_TICKS(200);
+    int waited_ms = 0;
+    int last_retry_ms = 0;
+    wifi_ap_record_t ap{};
+    bool associated = false;
+
+    // 只做一次按 SSID 过滤的扫描，拿到信道/BSSID 后锁定：之后 connect 及其
+    // 重试全部免扫描直连。BLE 共存下 esp_wifi_connect 的隐式全信道扫描既抢
+    // 射频又吃内存，是 auth 反复 0x200 失败的主因之一
+    wifi_scan_config_t scan_conf = {};
+    scan_conf.ssid = m_sta_config.sta.ssid;
+    if (esp_wifi_scan_start(&scan_conf, true) == ESP_OK &&
+        esp_wifi_scan_get_ap_record(&ap) == ESP_OK) {
+        m_sta_config.sta.bssid_set = true;
+        memcpy(m_sta_config.sta.bssid, ap.bssid, sizeof(ap.bssid));
+        m_sta_config.sta.channel = ap.primary;
+        m_sta_config.sta.scan_method = WIFI_FAST_SCAN;
+        ESP_LOGI(BLUFI_TAG, "AP found: channel=%d bssid=" MACSTR " rssi=%d",
+                 ap.primary, MAC2STR(ap.bssid), ap.rssi);
+        esp_wifi_clear_ap_list();
+    } else {
+        // 没扫到（超范围/隐藏 SSID 等）：退回驱动隐式扫描连接
+        ESP_LOGW(BLUFI_TAG, "AP %s not found in scan, fallback to driver scan connect",
+                 m_sta_config.sta.ssid);
+    }
+    esp_wifi_set_config(WIFI_IF_STA, &m_sta_config);
+    esp_wifi_connect();
+
+    while (waited_ms < kConnectTimeoutMs) {
+        vTaskDelay(kDelayTick);
+        waited_ms += 200;
+        if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+            associated = true;
+            break;
+        }
+        // 未关联则每 2 秒重新发起连接（信道已锁定，重连不触发扫描）
+        if (waited_ms - last_retry_ms >= 2000) {
+            last_retry_ms = waited_ms;
+            esp_wifi_connect();
+        }
+    }
+
+    // 关联成功后等 DHCP（上限沿用 25s，个别路由器较慢）。
+    // 原版语义：拿到 IP 才算配网成功，只有关联时上报 NO_IP 中间态
+    bool got_ip = false;
+    if (associated) {
+        esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+        for (int i = 0; i < kConnectTimeoutMs / 200 && netif != nullptr; ++i) {
+            esp_netif_ip_info_t ip{};
+            if (esp_netif_get_ip_info(netif, &ip) == ESP_OK && ip.ip.addr != 0) {
+                got_ip = true;
+                break;
+            }
+            vTaskDelay(kDelayTick);
+        }
+    }
+
+    wifi_mode_t mode = WIFI_MODE_STA;
+    esp_wifi_get_mode(&mode);
+    esp_blufi_extra_info_t info = {};
+    info.sta_ssid = m_sta_ssid;
+    info.sta_ssid_len = m_sta_ssid_len;
+
+    if (associated) {
+        m_sta_is_connecting = false;
+        m_sta_connected = true;
+        m_sta_got_ip = got_ip;
+        memcpy(m_sta_bssid, ap.bssid, sizeof(m_sta_bssid));
+        memcpy(info.sta_bssid, m_sta_bssid, sizeof(info.sta_bssid));
+        info.sta_bssid_set = true;
+        esp_blufi_send_wifi_conn_report(mode, got_ip ? ESP_BLUFI_STA_CONN_SUCCESS : ESP_BLUFI_STA_NO_IP,
+                                        0, &info);
+        ESP_LOGI(BLUFI_TAG, "connected to WiFi (got_ip=%d)", got_ip);
+
+        // 小聆流程：拿到 IP 才推送 pid/did 通知配网成功，等待 "done" 握手
+        if (got_ip) {
+            m_prov_state = true;
+            if (config_.report_identity) {
+                vTaskDelay(pdMS_TO_TICKS(300));
+                _notify_wifi_connected();
+            }
+        }
+    } else {
+        m_sta_is_connecting = false;
+        esp_blufi_send_wifi_conn_report(mode, ESP_BLUFI_STA_CONN_FAIL, 0, &info);
+        ESP_LOGE(BLUFI_TAG, "Failed to connect to WiFi");
+    }
+    vTaskDelete(nullptr);
+}
+
+esp_err_t Blufi::init(const Config &config) {
     esp_err_t ret;
+    config_ = config;
+    m_prov_state = false;
+    m_auth_state = false;
+    // The name must be ready before the host init (NimBLE GAP service reads it).
+    _generate_ble_name();
     inited_ = true;
     m_provisioned = false;
     m_deinited = false;
@@ -253,6 +464,7 @@ esp_err_t Blufi::_host_init() {
     ble_hs_cfg.reset_cb = _nimble_on_reset;
     ble_hs_cfg.sync_cb = _nimble_on_sync;
     ble_hs_cfg.gatts_register_cb = esp_blufi_gatt_svr_register_cb;
+    ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
 
     // Security Manager settings (can be customized)
     ble_hs_cfg.sm_io_cap = 4;  // IO capability: No Input, No Output
@@ -262,6 +474,12 @@ esp_err_t Blufi::_host_init() {
 
     int rc = esp_blufi_gatt_svr_init();
     assert(rc == 0);
+
+#if CONFIG_BT_NIMBLE_GAP_SERVICE
+    // Set the default device name.
+    rc = ble_svc_gap_device_name_set(m_ble_name);
+    assert(rc == 0);
+#endif
 
     ble_store_config_init();  // Configure the BLE storage
     esp_blufi_btc_init();
@@ -428,6 +646,11 @@ void Blufi::_dh_negotiate_data_handler(uint8_t *data, int len, uint8_t **output_
                 btc_blufi_report_error(ESP_BLUFI_DH_PARAM_ERROR);
                 return;
             }
+            if (len < (m_sec->dh_param_len + 1)) {
+                ESP_LOGE(BLUFI_TAG, "Invalid dh param len");
+                btc_blufi_report_error(ESP_BLUFI_DH_PARAM_ERROR);
+                return;
+            }
             uint8_t *param = m_sec->dh_param;
             memcpy(m_sec->dh_param, &data[1], m_sec->dh_param_len);
             int ret = mbedtls_dhm_read_params(m_sec->dhm, &param, &param[m_sec->dh_param_len]);
@@ -438,8 +661,13 @@ void Blufi::_dh_negotiate_data_handler(uint8_t *data, int len, uint8_t **output_
             }
 
             const int dhm_len = mbedtls_dhm_get_len(m_sec->dhm);
+            if (dhm_len > DH_SELF_PUB_KEY_LEN) {
+                ESP_LOGE(BLUFI_TAG, "dhm len not support %d", dhm_len);
+                btc_blufi_report_error(ESP_BLUFI_DH_PARAM_ERROR);
+                return;
+            }
 
-            ret = mbedtls_dhm_make_public(m_sec->dhm, dhm_len, m_sec->self_public_key, dhm_len,
+            ret = mbedtls_dhm_make_public(m_sec->dhm, dhm_len, m_sec->self_public_key, DH_SELF_PUB_KEY_LEN,
                                           myrand, NULL);
             if (ret != 0) {
                 ESP_LOGE(BLUFI_TAG, "mbedtls_dhm_make_public failed: %d", ret);
@@ -515,6 +743,7 @@ int Blufi::_aes_decrypt(uint8_t iv8, uint8_t *crypt_data, int crypt_len) {
     iv0[0] = iv8;
     int ret = mbedtls_aes_crypt_cfb128(m_sec->aes, MBEDTLS_AES_DECRYPT, crypt_len, &iv_offset, iv0,
                                        crypt_data, crypt_data);
+
     if (ret != 0) {
         ESP_LOGE(BLUFI_TAG, "AES decrypt failed: %d", ret);
         return ret;
@@ -544,7 +773,7 @@ void Blufi::_handle_event(esp_blufi_cb_event_t event, esp_blufi_cb_param_t *para
     switch (event) {
         case ESP_BLUFI_EVENT_INIT_FINISH:
             ESP_LOGI(BLUFI_TAG, "BLUFI init finish");
-            esp_blufi_adv_start();
+            _advertise();
             break;
         case ESP_BLUFI_EVENT_DEINIT_FINISH:
             ESP_LOGI(BLUFI_TAG, "BLUFI deinit finish");
@@ -552,6 +781,7 @@ void Blufi::_handle_event(esp_blufi_cb_event_t event, esp_blufi_cb_param_t *para
         case ESP_BLUFI_EVENT_BLE_CONNECT:
             ESP_LOGI(BLUFI_TAG, "BLUFI ble connect");
             m_ble_is_connected = true;
+            memcpy(m_remote_bda, param->connect.remote_bda, sizeof(m_remote_bda));
             esp_blufi_adv_stop();
             _security_init();
             break;
@@ -559,8 +789,12 @@ void Blufi::_handle_event(esp_blufi_cb_event_t event, esp_blufi_cb_param_t *para
             ESP_LOGI(BLUFI_TAG, "BLUFI ble disconnect");
             m_ble_is_connected = false;
             _security_deinit();
-            if (!m_provisioned) {
-                esp_blufi_adv_start();
+            if (config_.restart_on_complete) {
+                // 小聆流程：配网握手未完成，回到广播等待手机重连
+                m_prov_state = false;
+                _advertise();
+            } else if (!m_provisioned) {
+                _advertise();
             } else {
                 esp_blufi_adv_stop();
                 if (!m_deinited) {
@@ -583,7 +817,11 @@ void Blufi::_handle_event(esp_blufi_cb_event_t event, esp_blufi_cb_param_t *para
             }
             switch (param->wifi_mode.op_mode) {
                 case WIFI_MODE_STA:
-                    wifi_manager.StartStation();
+                    // 凭据未保存时不启动 STA：esp-wifi-connect 会对空 SSID 发起
+                    // 约 5 秒的全信道扫描，抢射频和内存，纯配网流程用不上
+                    if (!SsidManager::GetInstance().GetSsidList().empty()) {
+                        wifi_manager.StartStation();
+                    }
                     break;
                 case WIFI_MODE_AP:
                     wifi_manager.StartConfigAp();
@@ -600,7 +838,7 @@ void Blufi::_handle_event(esp_blufi_cb_event_t event, esp_blufi_cb_param_t *para
             break;
         }
         case ESP_BLUFI_EVENT_REQ_CONNECT_TO_AP: {
-            ESP_LOGI(BLUFI_TAG, "BLUFI request wifi connect to AP via esp-wifi-connect");
+            ESP_LOGI(BLUFI_TAG, "BLUFI request wifi connect to AP");
             std::string ssid(reinterpret_cast<const char *>(m_sta_config.sta.ssid));
             std::string password(reinterpret_cast<const char *>(m_sta_config.sta.password));
 
@@ -622,6 +860,23 @@ void Blufi::_handle_event(esp_blufi_cb_event_t event, esp_blufi_cb_param_t *para
             m_sta_conn_info = {};  // Reset connection info
             m_sta_conn_info.sta_ssid = m_sta_ssid;
             m_sta_conn_info.sta_ssid_len = m_sta_ssid_len;
+
+            // 凭据已收完，接下来的 BLE 流量只剩状态上报。放宽连接间隔给 WiFi
+            // 让出射频：共存下若 BLE 保持短间隔轮询，auth/assoc 帧会频繁超时
+            esp_ble_conn_update_params_t conn_params = {};
+            memcpy(conn_params.bda, m_remote_bda, sizeof(conn_params.bda));
+            conn_params.min_int = 64;   // 80ms
+            conn_params.max_int = 96;   // 120ms
+            conn_params.latency = 0;
+            conn_params.timeout = 500;  // 5s
+            esp_ble_gap_update_conn_params(&conn_params);
+
+            if (config_.restart_on_complete) {
+                // 小聆流程：收到 ssid/pwd 免扫描直连，不经过 esp-wifi-connect
+                //（它每次连接都要全信道扫描；直连只扫描一次锁定信道）
+                _connect_direct();
+                break;
+            }
 
             wifi_manager.StartStation();
 
@@ -646,7 +901,6 @@ void Blufi::_handle_event(esp_blufi_cb_event_t event, esp_blufi_cb_param_t *para
                         self->m_sta_is_connecting = false;
                         self->m_sta_connected = true;
                         self->m_sta_got_ip = true;
-                        self->m_provisioned = true;
 
                         auto current_ssid = wifi.GetSsid();
                         if (!current_ssid.empty()) {
@@ -669,9 +923,19 @@ void Blufi::_handle_event(esp_blufi_cb_event_t event, esp_blufi_cb_param_t *para
                                                         softap_conn_num, &info);
                         ESP_LOGI(BLUFI_TAG, "connected to WiFi");
 
-                        // Close BluFi session after successful provisioning to free resources.
-                        if (self->m_ble_is_connected) {
-                            esp_blufi_disconnect();
+                        if (self->config_.restart_on_complete) {
+                            // 小聆流程：保持 BLE 连接，推送 pid/did 后等待小程序 "done" 握手
+                            self->m_prov_state = true;
+                            if (self->config_.report_identity) {
+                                vTaskDelay(pdMS_TO_TICKS(300));
+                                self->_notify_wifi_connected();
+                            }
+                        } else {
+                            self->m_provisioned = true;
+                            // Close BluFi session after successful provisioning to free resources.
+                            if (self->m_ble_is_connected) {
+                                esp_blufi_disconnect();
+                            }
                         }
                     } else {
                         self->m_sta_is_connecting = false;
@@ -701,27 +965,39 @@ void Blufi::_handle_event(esp_blufi_cb_event_t event, esp_blufi_cb_param_t *para
             break;
         case ESP_BLUFI_EVENT_GET_WIFI_STATUS: {
             auto &wifi = WifiManager::GetInstance();
-            wifi_mode_t mode = GetWifiModeWithFallback(wifi);
+            wifi_mode_t mode = WIFI_MODE_STA;
+            esp_wifi_get_mode(&mode);
             const int softap_conn_num = _get_softap_conn_num();
 
-            if (wifi.IsInitialized() && wifi.IsConnected()) {
-                m_sta_connected = true;
-                m_sta_got_ip = true;
-
-                auto current_ssid = wifi.GetSsid();
-                if (!current_ssid.empty()) {
-                    m_sta_ssid_len =
-                        static_cast<int>(std::min(current_ssid.size(), sizeof(m_sta_ssid)));
-                    memcpy(m_sta_ssid, current_ssid.c_str(), m_sta_ssid_len);
+            // 直连路径不经过 WifiStation，wifi.IsConnected() 恒为 false，
+            // 必须同时看直连任务维护的 m_sta_* 标志，否则轮询永远收到 FAIL
+            bool sta_connected = m_sta_connected || (wifi.IsInitialized() && wifi.IsConnected());
+            if (sta_connected) {
+                if (wifi.IsInitialized() && wifi.IsConnected()) {
+                    // WifiStation 路径：补全 SSID/BSSID 与 IP 状态
+                    m_sta_connected = true;
+                    m_sta_got_ip = true;
+                    auto current_ssid = wifi.GetSsid();
+                    if (!current_ssid.empty()) {
+                        m_sta_ssid_len =
+                            static_cast<int>(std::min(current_ssid.size(), sizeof(m_sta_ssid)));
+                        memcpy(m_sta_ssid, current_ssid.c_str(), m_sta_ssid_len);
+                    }
+                    wifi_ap_record_t ap_info{};
+                    if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
+                        memcpy(m_sta_bssid, ap_info.bssid, sizeof(m_sta_bssid));
+                    }
                 }
 
                 esp_blufi_extra_info_t info;
                 memset(&info, 0, sizeof(esp_blufi_extra_info_t));
                 memcpy(info.sta_bssid, m_sta_bssid, 6);
+                info.sta_bssid_set = true;
                 info.sta_ssid = m_sta_ssid;
                 info.sta_ssid_len = m_sta_ssid_len;
-                esp_blufi_send_wifi_conn_report(mode, ESP_BLUFI_STA_CONN_SUCCESS, softap_conn_num,
-                                                &info);
+                esp_blufi_send_wifi_conn_report(
+                    mode, m_sta_got_ip ? ESP_BLUFI_STA_CONN_SUCCESS : ESP_BLUFI_STA_NO_IP,
+                    softap_conn_num, &info);
             } else if (m_sta_is_connecting) {
                 esp_blufi_send_wifi_conn_report(mode, ESP_BLUFI_STA_CONNECTING, softap_conn_num,
                                                 &m_sta_conn_info);
@@ -738,16 +1014,115 @@ void Blufi::_handle_event(esp_blufi_cb_event_t event, esp_blufi_cb_param_t *para
             ESP_LOGI(BLUFI_TAG, "Recv STA BSSID");
             break;
         case ESP_BLUFI_EVENT_RECV_STA_SSID:
+            if (param->sta_ssid.ssid_len >= sizeof(m_sta_config.sta.ssid)) {
+                esp_blufi_send_error_info(ESP_BLUFI_DATA_FORMAT_ERROR);
+                ESP_LOGE(BLUFI_TAG, "Invalid STA SSID");
+                break;
+            }
             strncpy((char *)m_sta_config.sta.ssid, (char *)param->sta_ssid.ssid,
                     param->sta_ssid.ssid_len);
             m_sta_config.sta.ssid[param->sta_ssid.ssid_len] = '\0';
             ESP_LOGI(BLUFI_TAG, "Recv STA SSID: %s", m_sta_config.sta.ssid);
             break;
         case ESP_BLUFI_EVENT_RECV_STA_PASSWD:
+            if (param->sta_passwd.passwd_len >= sizeof(m_sta_config.sta.password)) {
+                esp_blufi_send_error_info(ESP_BLUFI_DATA_FORMAT_ERROR);
+                ESP_LOGE(BLUFI_TAG, "Invalid STA PASSWORD");
+                break;
+            }
             strncpy((char *)m_sta_config.sta.password, (char *)param->sta_passwd.passwd,
                     param->sta_passwd.passwd_len);
             m_sta_config.sta.password[param->sta_passwd.passwd_len] = '\0';
-            ESP_LOGI(BLUFI_TAG, "Recv STA PASSWORD : %s", m_sta_config.sta.password);
+            ESP_LOGI(BLUFI_TAG, "Recv STA PASSWORD");
+            break;
+        case ESP_BLUFI_EVENT_GET_WIFI_LIST: {
+            // 手机请求 WiFi 列表：确保 STA 已启动后执行一次扫描
+            auto &wifi_manager = WifiManager::GetInstance();
+            if (!wifi_manager.IsInitialized()) {
+                ESP_LOGE(BLUFI_TAG, "WifiManager not initialized for scan");
+                break;
+            }
+            if (!wifi_manager.IsConfigMode() && !wifi_manager.IsConnected()) {
+                wifi_manager.StartStation();
+            }
+            wifi_scan_config_t scan_config = {};
+            esp_err_t ret = esp_wifi_scan_start(&scan_config, true);
+            if (ret != ESP_OK) {
+                ESP_LOGE(BLUFI_TAG, "WiFi scan failed: %s", esp_err_to_name(ret));
+                esp_blufi_send_error_info(ESP_BLUFI_WIFI_SCAN_FAIL);
+                break;
+            }
+
+            uint16_t ap_count = 0;
+            esp_wifi_scan_get_ap_num(&ap_count);
+            if (ap_count == 0) {
+                ESP_LOGI(BLUFI_TAG, "Nothing AP found");
+                esp_wifi_clear_ap_list();
+                break;
+            }
+            wifi_ap_record_t *ap_list =
+                (wifi_ap_record_t *)malloc(sizeof(wifi_ap_record_t) * ap_count);
+            esp_blufi_ap_record_t *blufi_list =
+                ap_list ? (esp_blufi_ap_record_t *)malloc(ap_count * sizeof(esp_blufi_ap_record_t))
+                        : nullptr;
+            if (!ap_list || !blufi_list) {
+                ESP_LOGE(BLUFI_TAG, "malloc error for AP list");
+                free(ap_list);
+                free(blufi_list);
+                esp_wifi_clear_ap_list();
+                break;
+            }
+            esp_err_t err = esp_wifi_scan_get_ap_records(&ap_count, ap_list);
+            if (err != ESP_OK) {
+                ESP_LOGE(BLUFI_TAG, "Get AP records failed: %s", esp_err_to_name(err));
+                free(ap_list);
+                free(blufi_list);
+                break;
+            }
+            for (int i = 0; i < ap_count; ++i) {
+                blufi_list[i].rssi = ap_list[i].rssi;
+                memcpy(blufi_list[i].ssid, ap_list[i].ssid, sizeof(blufi_list[i].ssid));
+            }
+            if (m_ble_is_connected) {
+                esp_blufi_send_wifi_list(ap_count, blufi_list);
+            } else {
+                ESP_LOGI(BLUFI_TAG, "BLUFI BLE is not connected yet");
+            }
+            free(ap_list);
+            free(blufi_list);
+            break;
+        }
+        case ESP_BLUFI_EVENT_RECV_CUSTOM_DATA: {
+            // 小聆小程序握手：配网成功后手机发送 "done"，设备回复 "done" 后完成
+            ESP_LOGI(BLUFI_TAG, "Recv Custom Data %u", (unsigned)param->custom_data.data_len);
+            char data[20] = {0};
+            strncpy(data, (const char *)param->custom_data.data,
+                    std::min<size_t>(param->custom_data.data_len, sizeof(data) - 1));
+            if (m_prov_state && strcmp(data, "done") == 0) {
+                SsidManager::GetInstance().AddSsid((const char *)m_sta_config.sta.ssid,
+                                                   (const char *)m_sta_config.sta.password);
+                const char done[] = "done";
+                esp_err_t ret = esp_blufi_send_custom_data((uint8_t *)done, strlen(done));
+                if (ret == ESP_OK) {
+                    ESP_LOGI(BLUFI_TAG, "BLUFI auth done");
+                    m_auth_state = true;
+                    if (config_.restart_on_complete) {
+                        _restart();
+                    }
+                }
+            } else if (strcmp(data, "done") != 0) {
+                // AUTH_INFO 查询等其他自定义数据：回复产品身份
+                _report_identity();
+            }
+            break;
+        }
+        case ESP_BLUFI_EVENT_RECV_SLAVE_DISCONNECT_BLE:
+            ESP_LOGI(BLUFI_TAG, "blufi close a gatt connection");
+            esp_blufi_disconnect();
+            break;
+        case ESP_BLUFI_EVENT_REPORT_ERROR:
+            ESP_LOGE(BLUFI_TAG, "BLUFI report error, error code %d", param->report_error.state);
+            esp_blufi_send_error_info(param->report_error.state);
             break;
         default:
             ESP_LOGW(BLUFI_TAG, "Unhandled event: %d", event);

@@ -15,6 +15,7 @@ class PlayerEngine;
 class AudioPlayer {
 public:
     using EventCallback = std::function<void(const PlaybackEvent&)>;
+    using TtsUrlCallback = std::function<void()>;
 
     AudioPlayer();
     ~AudioPlayer();
@@ -30,6 +31,7 @@ public:
     bool Stop(PlaybackEndReason reason = PlaybackEndReason::kCancelled);
     bool IsPlaying() const;
     void SetEventCallback(EventCallback callback);
+    void SetTtsUrlCallback(TtsUrlCallback callback);
 
 private:
     void HandleEngineEvent(const PlaybackEvent& event);
@@ -38,5 +40,6 @@ private:
     std::atomic<uint32_t> next_session_id_{1};
     mutable std::mutex callback_mutex_;
     EventCallback event_callback_;
+    TtsUrlCallback tts_url_callback_;
     uint32_t xiaoling_tts_subscription_id_ = 0;
 };

@@ -16,23 +16,23 @@
 
 struct cJSON;
 
-enum class XiaolingVoiceError {
+enum class XiaolingSessionVoiceError {
     kServerError,
     kServerTimeout,
 };
 
 // 小聆语音会话层：负责会话控制、上下行音频和 IAT/TTS 事件转换。
-class XiaolingVoice final {
+class XiaolingSessionVoice final {
 public:
     using TextSender = std::function<bool(const std::string&)>;
     using BinarySender = std::function<bool(const uint8_t*, size_t)>;
     using SessionStateCallback = std::function<void(bool)>;
-    using ErrorCallback = std::function<void(XiaolingVoiceError)>;
+    using ErrorCallback = std::function<void(XiaolingSessionVoiceError)>;
     using IncomingAudioCallback =
         std::function<void(std::unique_ptr<AudioStreamPacket>)>;
 
-    XiaolingVoice();
-    ~XiaolingVoice();
+    XiaolingSessionVoice();
+    ~XiaolingSessionVoice();
 
     void SetTransport(TextSender text_sender,
                       BinarySender binary_sender,

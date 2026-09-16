@@ -1,7 +1,7 @@
 #include "audio_player.h"
 
 #include "engine/gmf_player_engine.h"
-#include "xiaoling_events.h"
+#include "xiaoling/xiaoling_events.h"
 #include "audio/tone/tone_model.h"
 
 #include <esp_log.h>
@@ -55,6 +55,10 @@ bool AudioPlayer::Initialize(AudioService* audio_service) {
     if (xiaoling_tts_subscription_id_ == 0) {
         xiaoling_tts_subscription_id_ = XiaolingEventBus::GetInstance().Subscribe(
             XIAOLING_TTS_URL, [this](const XiaolingEvent& event) {
+                {
+                    std::lock_guard<std::mutex> lock(callback_mutex_);
+                    if (tts_url_callback_) tts_url_callback_();
+                }
                 if (PlayTtsUrl(event.text) == 0) {
                     ESP_LOGE(TAG, "订阅到 TTS URL，但提交流式播放失败");
                 }
@@ -133,6 +137,11 @@ bool AudioPlayer::IsPlaying() const {
 void AudioPlayer::SetEventCallback(EventCallback callback) {
     std::lock_guard<std::mutex> lock(callback_mutex_);
     event_callback_ = std::move(callback);
+}
+
+void AudioPlayer::SetTtsUrlCallback(TtsUrlCallback callback) {
+    std::lock_guard<std::mutex> lock(callback_mutex_);
+    tts_url_callback_ = std::move(callback);
 }
 
 void AudioPlayer::HandleEngineEvent(const PlaybackEvent& event) {

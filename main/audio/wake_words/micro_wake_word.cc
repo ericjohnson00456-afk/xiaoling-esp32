@@ -93,6 +93,10 @@ bool MicroWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list) {
 }
 
 void MicroWakeWord::Feed(const std::vector<int16_t>& data) {
+    // 与 Stop() 互斥：推理期间模型/arena 不会被卸载。
+    // 注意：detection_callback_ 只设置事件位（见 Application::Start），
+    // 不会同步回调进 MicroWakeWord，持锁调用不会死锁。
+    std::lock_guard<std::mutex> lock(mutex_);
     if (!running_ || data.empty()) {
         return;
     }
@@ -137,6 +141,7 @@ void MicroWakeWord::OnWakeWordDetected(std::function<void(const std::string& wak
 }
 
 void MicroWakeWord::Start() {
+    std::lock_guard<std::mutex> lock(mutex_);
     if (!initialized_) {
         ESP_LOGE(TAG, "MicroWakeWord not initialized");
         return;
@@ -158,6 +163,7 @@ void MicroWakeWord::Start() {
 }
 
 void MicroWakeWord::Stop() {
+    std::lock_guard<std::mutex> lock(mutex_);
     if (!running_) {
         return;
     }
