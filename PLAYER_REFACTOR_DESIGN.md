@@ -48,14 +48,15 @@ ESP-GMF/简单播放器负责：
 
 ## 3. 目录结构
 
-新的播放器代码统一放在 `main/audio/player/`：
+新的播放器代码统一放在 `main/player/`：
 
 ```text
-main/audio/
-├── audio_codec.*              # 音频硬件抽象
-├── audio_service.*            # 现有采集、AEC/VAD、唤醒词、Opus 上行
-├── processors/                # 音频前端处理
-├── wake_words/                # 唤醒词
+main/
+├── audio/
+│   ├── audio_codec.*          # 音频硬件抽象
+│   ├── audio_service.*        # 现有采集、AEC/VAD、唤醒词、Opus 上行
+│   ├── processors/            # 音频前端处理
+│   └── wake_words/            # 唤醒词
 └── player/                    # 新的下行播放系统
     ├── audio_player.*
     ├── core/
@@ -282,7 +283,7 @@ Opus 上行编码
 音频硬件和 PA 控制
 ```
 
-逐步迁移到 `main/audio/player`：
+逐步迁移到 `main/player`：
 
 ```text
 Opus 下行解码
@@ -299,7 +300,7 @@ SetDecodeSampleRate()
 
 ## 11. 实施顺序
 
-1. 建立 `main/audio/player` 目录和公共接口。
+1. 建立 `main/player` 目录和公共接口。
 2. 接入 `esp_audio_simple_player`/ESP-GMF，先验证单个 HTTP MP3。
 3. 增加 ROMFS/assets MP3 Source。
 4. 接入统一 ES8311/I2S 输出。

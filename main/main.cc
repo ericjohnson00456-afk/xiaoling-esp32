@@ -9,8 +9,6 @@
 #include <freertos/task.h>
 
 #include "application.h"
-#include "serial_shell.h"
-#include "system/system_info.h"
 
 #define TAG "main"
 
@@ -41,8 +39,5 @@ extern "C" void app_main(void)
     // Initialize and run the application
     auto& app = Application::GetInstance();
     app.Initialize();
-    if (!SerialShell::GetInstance().Initialize()) {
-        ESP_LOGW(TAG, "Serial shell initialization failed");
-    }
     app.Run();  // This function runs the main event loop and never returns
 }

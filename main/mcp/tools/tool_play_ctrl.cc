@@ -14,10 +14,10 @@ MCP_REGISTER_TOOL(RegisterPlaybackControl, McpToolGroup::kCommon, 23) {
       [](const PropertyList &properties) -> ReturnValue {
         const auto intent = properties["intent"].value<std::string>();
         if (intent == "PAUSE") {
-          if (!Application::GetInstance().PauseAudio())
+          if (!Application::GetInstance().GetAudioPlayer().Pause())
             throw std::runtime_error("当前没有可暂停的播放会话");
         } else if (intent == "RESUME_PLAY") {
-          if (!Application::GetInstance().ResumeAudio())
+          if (!Application::GetInstance().GetAudioPlayer().Resume())
             throw std::runtime_error("当前没有可恢复的播放会话");
         } else if (intent == "STOP") {
           Application::GetInstance().AbortSpeaking(kAbortReasonNone);

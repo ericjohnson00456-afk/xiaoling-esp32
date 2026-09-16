@@ -51,17 +51,27 @@ bool XiaolingConn::Connect() {
         return false;
     }
 
+    // Serialize an explicit connect with the supervisor's reconnect attempt.
+    // StartSupervisor() creates the task immediately, so setting this guard
+    // after starting it allows the task to race ConnectOnce() and create two
+    // WebSocket transports for the same connection object.
+    bool was_connecting = false;
+    if (!connecting_.compare_exchange_strong(was_connecting, true)) {
+        ESP_LOGW(TAG, "小聆 WebSocket 正在连接，跳过重复连接请求");
+        return false;
+    }
+
     Disconnect();
     error_occurred_ = false;
     protocol_connected_ = false;
     xEventGroupClearBits(event_group_, kProtocolConnectedBit);
     if (!StartSupervisor()) {
+        connecting_ = false;
         SetError(XiaolingError::ServerNotConnected);
         return false;
     }
 
     // WebSocket 的建立交给底层网络组件；本层只建立一次并启动心跳观测任务。
-    connecting_ = true;
     const bool connected = ConnectOnce();
     connecting_ = false;
     if (!connected) {
@@ -226,10 +236,16 @@ void XiaolingConn::Run() {
     while (running_) {
         if (desired_connected_ && !transport_connected_ && !connecting_) {
             if (reconnect_attempts_ < 3) {
+                bool was_connecting = false;
+                if (!connecting_.compare_exchange_strong(was_connecting, true)) {
+                    continue;
+                }
                 ++reconnect_attempts_;
                 ESP_LOGW(TAG, "小聆 WebSocket 断开，开始第 %lu 次重连",
                          static_cast<unsigned long>(reconnect_attempts_));
-                if (ConnectOnce()) {
+                const bool connected = ConnectOnce();
+                connecting_ = false;
+                if (connected) {
                     reconnect_attempts_ = 0;
                     disconnected_event_published_ = false;
                 }

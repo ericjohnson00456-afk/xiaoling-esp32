@@ -1,6 +1,7 @@
 #include "audio_service.h"
 #include "xiaoling/conn/xiaoling_config.h"
 #include <esp_log.h>
+#include <algorithm>
 #include <cstring>
 
 #if CONFIG_USE_AUDIO_PROCESSOR
@@ -11,6 +12,7 @@
 
 #if CONFIG_USE_MICRO_WAKE_WORD
 #include "wake_words/micro_wake_word.h"
+#include "wake_words/micro_wake_word/model_wake_word.h"
 #else // CONFIG_USE_MICRO_WAKE_WORD
 #if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32P4
 #include "wake_words/afe_wake_word.h"
@@ -193,6 +195,9 @@ bool AudioService::ReadAudioData(std::vector<int16_t>& data, int sample_rate, in
 }
 
 void AudioService::AudioInputTask() {
+    std::vector<int16_t> wake_pending;
+    std::vector<int16_t> processor_pending;
+    std::vector<int16_t> testing_pending;
     while (true) {
         EventBits_t bits = xEventGroupWaitBits(event_group_, AS_EVENT_AUDIO_TESTING_RUNNING |
             AS_EVENT_WAKE_WORD_RUNNING | AS_EVENT_AUDIO_PROCESSOR_RUNNING,
@@ -207,66 +212,80 @@ void AudioService::AudioInputTask() {
             continue;
         }
 
-        /* Used for audio testing in NetworkConfiguring mode by clicking the BOOT button */
-        if (bits & AS_EVENT_AUDIO_TESTING_RUNNING) {
+        const bool testing_running = (bits & AS_EVENT_AUDIO_TESTING_RUNNING) != 0;
+        if (testing_running) {
             if (audio_testing_queue_.size() >= AUDIO_TESTING_MAX_DURATION_MS / OPUS_FRAME_DURATION_MS) {
                 ESP_LOGW(TAG, "Audio testing queue is full, stopping audio testing");
                 EnableAudioTesting(false);
                 continue;
             }
+        } else testing_pending.clear();
+
+        const bool wake_running = (bits & AS_EVENT_WAKE_WORD_RUNNING) != 0;
+        const bool processor_running = (bits & AS_EVENT_AUDIO_PROCESSOR_RUNNING) != 0;
+        if (!wake_running) wake_pending.clear();
+        if (!processor_running) processor_pending.clear();
+
+        const size_t wake_samples = wake_running ? wake_word_->GetFeedSize() : 0;
+        const size_t processor_samples = processor_running ? audio_processor_->GetFeedSize() : 0;
+        const size_t testing_samples = testing_running ? OPUS_FRAME_DURATION_MS * 16000 / 1000 : 0;
+        size_t samples = 0;
+        for (const size_t feed_size : {wake_samples, processor_samples, testing_samples}) {
+            if (feed_size > 0 && (samples == 0 || feed_size < samples)) samples = feed_size;
+        }
+        if (samples > 0) {
             std::vector<int16_t> data;
-            int samples = OPUS_FRAME_DURATION_MS * 16000 / 1000;
-            if (ReadAudioData(data, 16000, samples)) {
-                // If input channels is 2, we need to fetch the left channel data
-                if (codec_->input_channels() == 2) {
-                    auto mono_data = std::vector<int16_t>(data.size() / 2);
-                    for (size_t i = 0, j = 0; i < mono_data.size(); ++i, j += 2) {
-                        mono_data[i] = data[j];
-                    }
-                    data = std::move(mono_data);
-                }
-                PushTaskToEncodeQueue(kAudioTaskTypeEncodeToTestingQueue, std::move(data));
+            if (!ReadAudioData(data, 16000, samples)) {
                 continue;
             }
-        }
 
-        /* Feed the wake word */
-        if (bits & AS_EVENT_WAKE_WORD_RUNNING) {
-            std::vector<int16_t> data;
-            int samples = wake_word_->GetFeedSize();
-            if (samples > 0) {
-                if (ReadAudioData(data, 16000, samples)) {
+            const size_t channels = codec_->input_channels();
+            if (testing_samples > 0 && (xEventGroupGetBits(event_group_) & AS_EVENT_AUDIO_TESTING_RUNNING)) {
+                for (size_t i = 0; i < data.size(); i += channels) {
+                    testing_pending.push_back(data[i]);
+                }
+                while (testing_pending.size() >= testing_samples) {
+                    std::vector<int16_t> frame(testing_pending.begin(), testing_pending.begin() + testing_samples);
+                    testing_pending.erase(testing_pending.begin(), testing_pending.begin() + testing_samples);
+                    PushTaskToEncodeQueue(kAudioTaskTypeEncodeToTestingQueue, std::move(frame));
+                }
+            }
+            if (processor_samples > 0) {
+                processor_pending.insert(processor_pending.end(), data.begin(), data.end());
+                const size_t frame_size = processor_samples * channels;
+                while (processor_pending.size() >= frame_size && IsAudioProcessorRunning()) {
+                    std::vector<int16_t> frame(processor_pending.begin(), processor_pending.begin() + frame_size);
+                    processor_pending.erase(processor_pending.begin(), processor_pending.begin() + frame_size);
+                    audio_processor_->Feed(std::move(frame));
+                }
+            }
+            if (wake_samples > 0 && IsWakeWordRunning()) {
 #if CONFIG_USE_MICRO_WAKE_WORD
-                    // If input channels is 2, we need to fetch the left channel data for MicroWakeWord
-                    if (codec_->input_channels() == 2) {
-                        auto mono_data = std::vector<int16_t>(data.size() / 2);
-                        for (size_t i = 0, j = 0; i < mono_data.size(); ++i, j += 2) {
-                            mono_data[i] = data[j];
-                        }
-                        data = std::move(mono_data);
+                if (channels == 2) {
+                    for (size_t i = 0; i < data.size(); i += 2) {
+                        wake_pending.push_back(data[i]);
                     }
+                } else
 #endif // CONFIG_USE_MICRO_WAKE_WORD
-                    wake_word_->Feed(data);
-                    continue;
+                {
+                    wake_pending.insert(wake_pending.end(), data.begin(), data.end());
+                }
+#if CONFIG_USE_MICRO_WAKE_WORD
+                const size_t wake_channels = 1;
+#else
+                const size_t wake_channels = channels;
+#endif
+                const size_t frame_size = wake_samples * wake_channels;
+                while (wake_pending.size() >= frame_size && IsWakeWordRunning()) {
+                    std::vector<int16_t> frame(wake_pending.begin(), wake_pending.begin() + frame_size);
+                    wake_pending.erase(wake_pending.begin(), wake_pending.begin() + frame_size);
+                    wake_word_->Feed(frame);
                 }
             }
+            continue;
         }
 
-        /* Feed the audio processor */
-        if (bits & AS_EVENT_AUDIO_PROCESSOR_RUNNING) {
-            std::vector<int16_t> data;
-            int samples = audio_processor_->GetFeedSize();
-            if (samples > 0) {
-                if (ReadAudioData(data, 16000, samples)) {
-                    audio_processor_->Feed(std::move(data));
-                    continue;
-                }
-            }
-        }
-
-        /* 唤醒词/AFE 停用瞬间，本任务可能读到残留的 RUNNING 位但对应模块已
-           无数据可喂（如 GetFeedSize()==0）。这是正常的并发时序，清掉残留位
-           后继续等待；绝不能 break —— 任务退出后上行音频永久失效。 */
+        /* A module can stop between reading the event bits and its feed size. */
         ESP_LOGW(TAG, "Stale audio input event bits: %lx, clearing", bits);
         xEventGroupClearBits(event_group_, bits & (AS_EVENT_AUDIO_TESTING_RUNNING |
             AS_EVENT_WAKE_WORD_RUNNING | AS_EVENT_AUDIO_PROCESSOR_RUNNING));
@@ -594,7 +613,7 @@ std::string AudioService::GetWakeWordName() const {
         return wake_word_name_;
     }
 #if CONFIG_USE_MICRO_WAKE_WORD
-    return MICRO_WAKE_WORD_MODEL_WAKE_WORD;
+    return kMicroWakeWordModelWakeWord;
 #else
     return GetLastWakeWord();
 #endif
@@ -615,6 +634,9 @@ std::unique_ptr<AudioStreamPacket> AudioService::PopWakeWordPacket() {
 
 void AudioService::EnableWakeWordDetection(bool enable) {
     if (!wake_word_) {
+        return;
+    }
+    if (enable && IsWakeWordRunning()) {
         return;
     }
 
@@ -655,13 +677,15 @@ void AudioService::EnableVoiceProcessing(bool enable) {
         }
 
         // Playback belongs to AudioPlayer and may run concurrently in full duplex.
-        audio_input_need_warmup_ = true;
+        audio_input_need_warmup_ = !IsWakeWordRunning();
+        audio_processor_->EnableDeviceAec(device_aec_requested_);
         audio_processor_->Start();
         xEventGroupSetBits(event_group_, AS_EVENT_AUDIO_PROCESSOR_RUNNING);
     } else {
         /* 先清除事件位再 Stop，缩小输入任务读到残留 RUNNING 位的窗口 */
         xEventGroupClearBits(event_group_, AS_EVENT_AUDIO_PROCESSOR_RUNNING);
         audio_processor_->Stop();
+        audio_processor_->EnableDeviceAec(false);
     }
 }
 
@@ -700,13 +724,10 @@ void AudioService::EnableAudioTesting(bool enable) {
 }
 
 void AudioService::EnableDeviceAec(bool enable) {
-    ESP_LOGI(TAG, "%s device AEC", enable ? "Enabling" : "Disabling");
-    if (!audio_processor_initialized_) {
-        audio_processor_->Initialize(codec_, OPUS_FRAME_DURATION_MS, models_list_);
-        audio_processor_initialized_ = true;
+    device_aec_requested_ = enable;
+    if (audio_processor_initialized_ && IsAudioProcessorRunning()) {
+        audio_processor_->EnableDeviceAec(enable);
     }
-
-    audio_processor_->EnableDeviceAec(enable);
 }
 
 void AudioService::SetCallbacks(AudioServiceCallbacks& callbacks) {
@@ -857,6 +878,7 @@ void AudioService::SetMicroWakeWordModel(const void* model_data, size_t model_si
             callbacks_.on_wake_word_detected(wake_word);
         }
     });
+    EnableWakeWordDetection(true);
 }
 #else // !CONFIG_USE_MICRO_WAKE_WORD
 void AudioService::SetModelsList(srmodel_list_t* models_list) {
@@ -880,10 +902,12 @@ void AudioService::SetModelsList(srmodel_list_t* models_list) {
 
     if (wake_word_) {
         wake_word_->OnWakeWordDetected([this](const std::string& wake_word) {
+            xEventGroupClearBits(event_group_, AS_EVENT_WAKE_WORD_RUNNING);
             if (callbacks_.on_wake_word_detected) {
                 callbacks_.on_wake_word_detected(wake_word);
             }
         });
+        EnableWakeWordDetection(true);
     }
 }
 #endif // CONFIG_USE_MICRO_WAKE_WORD

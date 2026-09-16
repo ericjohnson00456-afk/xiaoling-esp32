@@ -23,14 +23,10 @@ bool ToneModel::Initialize(AssetStore& assets, const std::string& directory) {
 
     std::vector<std::string> paths;
     if (directory == "/") {
-        // Prefer the legacy /tone directory when it exists; split tone.bin
-        // packages place numbered files directly at the ROMFS root.
         if (!assets.ListAssetFiles("/tone", paths)) {
             assets.ListAssetFiles("/", paths);
         }
     } else if (!assets.ListAssetFiles(directory, paths)) {
-        // Split tone.bin packages store numbered files at the ROMFS root;
-        // legacy assets.bin keeps them under /tone.
         paths.clear();
         assets.ListAssetFiles("/", paths);
     }
@@ -104,10 +100,7 @@ const char* ToneModel::GetUrl(uint16_t tone_id) const {
 }
 
 bool ToneModel::GetLocalizedData(const std::string& name, const uint8_t** data, size_t* size) const {
-    if (!initialized_ || data == nullptr || size == nullptr || name.empty()) {
-        return false;
-    }
-    if (assets_ == nullptr) {
+    if (!initialized_ || data == nullptr || size == nullptr || name.empty() || assets_ == nullptr) {
         return false;
     }
     const std::string localized_path = std::string("/locales/") + Lang::CODE + "/" + name + ".ogg";

@@ -90,7 +90,7 @@ bool XiaolingSessionVoice::SendAudio(std::unique_ptr<AudioStreamPacket> packet) 
 }
 
 void XiaolingSessionVoice::SendWakeWordDetected(const std::string& wake_word) {
-    // lschat 没有独立唤醒词帧，唤醒词随下一次 start 的 wake_properties 发送。
+    // 云端不处理 wake_properties；本地仅用唤醒状态缓存 start 前的音频并设置 oneshot。
     pending_wake_audio_.clear();
     pending_wake_word_ = wake_word;
 }
@@ -136,14 +136,6 @@ std::string XiaolingSessionVoice::BuildStartMessage(ListeningMode mode) {
         cJSON_AddStringToObject(asr_properties, "oneshot", "1");
     }
     cJSON_AddItemToObject(params, "asr_properties", asr_properties);
-
-    if (!pending_wake_word_.empty()) {
-        cJSON* wake_properties = cJSON_CreateObject();
-        cJSON* words = cJSON_CreateArray();
-        cJSON_AddItemToArray(words, cJSON_CreateString(pending_wake_word_.c_str()));
-        cJSON_AddItemToObject(wake_properties, "words", words);
-        cJSON_AddItemToObject(params, "wake_properties", wake_properties);
-    }
 
     const auto text = JsonToString(root);
     cJSON_Delete(root);

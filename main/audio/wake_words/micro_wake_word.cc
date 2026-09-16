@@ -1,4 +1,5 @@
 #include "micro_wake_word.h"
+#include "micro_wake_word/model_wake_word.h"
 #include "micro_wake_word/streaming_model.h"
 #include "micro_wake_word/preprocessor_settings.h"
 
@@ -82,7 +83,7 @@ bool MicroWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list) {
         (const uint8_t *)model_data_,
         (float)MICRO_WAKE_WORD_MODEL_PROBABILITY_CUTOFF / 100.0f,
         5,
-        MICRO_WAKE_WORD_MODEL_WAKE_WORD,
+        kMicroWakeWordModelWakeWord,
         128 * 1024);
 
     wake_word_models_.push_back(std::move(model));

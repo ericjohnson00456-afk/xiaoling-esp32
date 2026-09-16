@@ -16,8 +16,7 @@
 #include "xiaoling/conn/xiaoling_conn.h"
 #include "ota/ota.h"
 #include "audio_service.h"
-#include "audio/player/audio_player.h"
-#include "audio/player/player_tone.h"
+#include "player/audio_player.h"
 #include "xiaoling/session/session_core.h"
 #include "button/button_events.h"
 #include "system/device_status.h"
@@ -92,8 +91,6 @@ public:
     void DismissAlert();
 
     void AbortSpeaking(AbortReason reason);
-    bool PauseAudio();
-    bool ResumeAudio();
 
     /**
      * Toggle chat state (event-based, thread-safe)
@@ -121,10 +118,10 @@ public:
     void SetAecMode(AecMode mode);
     AecMode GetAecMode() const { return aec_mode_; }
     void PlaySound(const std::string_view& sound);
-    uint32_t PlayAudioUrl(const std::string& url);
     void PlayLocalizedTone(const char* name);
     void PlayTone(uint16_t tone_id);
     AudioService& GetAudioService() { return audio_service_; }
+    AudioPlayer& GetAudioPlayer() { return audio_player_; }
     void SetDuplexMode(DuplexMode mode);
     DuplexMode GetDuplexMode() const { return session_controller_.policy().mode; }
 
@@ -150,7 +147,6 @@ private:
     AudioService audio_service_;
     AudioPlayer audio_player_;
     VoiceSessionController session_controller_;
-    PlayerTone player_tone_{audio_player_};
     uint32_t active_tts_session_id_ = 0;
     uint32_t iat_subscription_id_ = 0;
     std::unique_ptr<Ota> ota_;

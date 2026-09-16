@@ -173,6 +173,7 @@ private:
     bool audio_input_need_warmup_ = false;
     uint32_t uplink_generation_ = 0;
     bool uplink_enabled_ = false;
+    bool device_aec_requested_ = false;
 
     esp_timer_handle_t audio_power_timer_ = nullptr;
     std::chrono::steady_clock::time_point last_input_time_;

@@ -8,6 +8,7 @@
 #include "mcp_server.h"
 #include "resource/assets.h"
 #include "settings.h"
+#include "serial_shell.h"
 #include "system/time_sync.h"
 #include "ui/core/ui_app.h"
 #include "ui/core/ui_manager.h"
@@ -15,7 +16,7 @@
 #include "voice_model.h"
 #include "xiaoling/xiaoling_events.h"
 #include "wifi_model.h"
-#include "audio/tone/tone_model.h"
+#include "player/resource/tone_model.h"
 
 #ifdef CONFIG_LSPLATFORM
 #include "image_fetcher.h"
@@ -128,6 +129,7 @@ void Application::Initialize() {
     // Setup the audio service
     auto codec = board.GetAudioCodec();
     audio_service_.Initialize(codec);
+    audio_service_.EnableDeviceAec(aec_mode_ == kAecOnDeviceSide);
     audio_service_.Start();
 
     if (!audio_player_.Initialize(&audio_service_)) {
@@ -135,7 +137,7 @@ void Application::Initialize() {
     }
     audio_player_.SetEventCallback([this](const PlaybackEvent& event) {
         Schedule([this, event]() {
-            player_tone_.HandlePlaybackEvent(event);
+            audio_player_.DispatchPlaybackEvent(event);
             if (event.channel != PlaybackChannel::kTts) {
                 return;
             }
@@ -258,6 +260,11 @@ void Application::Initialize() {
 
     // Update the status bar immediately to show the network state
     UiEvents::PostStatusBarUpdate(true);
+
+    // Serial debug shell (independent module, failure is non-fatal)
+    if (!SerialShell::GetInstance().Initialize()) {
+        ESP_LOGW(TAG, "Serial shell initialization failed");
+    }
 }
 
 void Application::OnBoardInputEvent(void* arg, esp_event_base_t event_base,
@@ -730,7 +737,7 @@ void Application::InitializeXiaolingConn() {
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
         Schedule([this]() {
             UiEvents::PostChatMessage("system", "");
-            if (player_tone_.IsWakeupPending()) {
+            if (audio_player_.IsWakeupPending()) {
                 CancelWakeup();
                 return;
             }
@@ -893,7 +900,7 @@ void Application::StopListening() {
 }
 
 void Application::HandleToggleChatEvent() {
-    if (player_tone_.IsWakeupPending()) {
+    if (audio_player_.IsWakeupPending()) {
         CancelWakeup();
         return;
     }
@@ -931,7 +938,7 @@ void Application::HandleToggleChatEvent() {
 }
 
 void Application::HandleStartListeningEvent() {
-    if (player_tone_.IsWakeupPending()) {
+    if (audio_player_.IsWakeupPending()) {
         return;
     }
     auto state = GetDeviceState();
@@ -964,7 +971,7 @@ void Application::HandleStartListeningEvent() {
 }
 
 void Application::HandleStopListeningEvent() {
-    if (player_tone_.IsWakeupPending()) {
+    if (audio_player_.IsWakeupPending()) {
         CancelWakeup();
         return;
     }
@@ -984,13 +991,16 @@ void Application::HandleStopListeningEvent() {
 
 void Application::HandleWakeWordDetectedEvent() {
     if (!xiaoling_conn_) {
+        audio_service_.EnableWakeWordDetection(true);
         return;
     }
 
     auto state = GetDeviceState();
 
     if (state == kDeviceStateIdle) {
+#if CONFIG_SEND_WAKE_WORD_DATA
         audio_service_.EncodeWakeWord();
+#endif
 
         if (!EnsureXiaolingReadyForWakeup()) {
             audio_service_.EnableWakeWordDetection(true);
@@ -1015,6 +1025,7 @@ void Application::HandleWakeWordDetectedEvent() {
         // Restart the activation check if the wake word is detected during activation
         SetDeviceState(kDeviceStateIdle);
     }
+    audio_service_.EnableWakeWordDetection(true);
 }
 
 void Application::AbortSpeaking(AbortReason reason) {
@@ -1112,15 +1123,14 @@ void Application::FactoryResetTask() {
 }
 
 void Application::BeginWakeup(ListeningMode mode) {
-    if (player_tone_.IsWakeupPending() || !xiaoling_conn_) {
+    if (audio_player_.IsWakeupPending() || !xiaoling_conn_) {
         return;
     }
     if (!SetDeviceState(kDeviceStateConnecting)) {
         return;
     }
-    audio_service_.EnableWakeWordDetection(false);
     audio_service_.EnableVoiceProcessing(false);
-    player_tone_.PlayWakeup([this, mode](bool proceed) {
+    audio_player_.PlayWakeup([this, mode](bool proceed) {
         if (GetDeviceState() != kDeviceStateConnecting) {
             return;
         }
@@ -1157,19 +1167,11 @@ void Application::BeginWakeup(ListeningMode mode) {
 }
 
 void Application::CancelWakeup() {
-    player_tone_.CancelWakeup();
+    audio_player_.CancelWakeup();
     if (xiaoling_conn_) {
         xiaoling_conn_->SendWakeWordDetected("");
     }
     SetDeviceState(kDeviceStateIdle);
-}
-
-bool Application::PauseAudio() {
-    return audio_player_.Pause();
-}
-
-bool Application::ResumeAudio() {
-    return audio_player_.Resume();
 }
 
 void Application::SetListeningMode(ListeningMode mode) {
@@ -1208,8 +1210,8 @@ void Application::CountWatchdogBites() {
 
 void Application::HandleStateChangedEvent() {
     DeviceState new_state = DeviceStatus::GetState();
-    if (new_state != kDeviceStateConnecting && player_tone_.IsWakeupPending()) {
-        player_tone_.CancelWakeup();
+    if (new_state != kDeviceStateConnecting && audio_player_.IsWakeupPending()) {
+        audio_player_.CancelWakeup();
         if (xiaoling_conn_) {
             xiaoling_conn_->SendWakeWordDetected("");
         }
@@ -1256,7 +1258,6 @@ void Application::HandleStateChangedEvent() {
                 // Send the start listening command
                 xiaoling_conn_->SendStartListening(listening_mode_);
                 audio_service_.EnableVoiceProcessing(true);
-                audio_service_.EnableWakeWordDetection(false);
 #ifdef CONFIG_LSPLATFORM
                 uplink_watchdog_.Start();
 #endif // CONFIG_LSPLATFORM
@@ -1270,8 +1271,6 @@ void Application::HandleStateChangedEvent() {
             if (listening_mode_ != kListeningModeRealtime ||
                 session_controller_.policy().mode == DuplexMode::kSimplex) {
                 audio_service_.EnableVoiceProcessing(false);
-                // Only AFE wake word can be detected in speaking mode
-                audio_service_.EnableWakeWordDetection(audio_service_.IsAfeWakeWord());
 #ifdef CONFIG_LSPLATFORM
                 uplink_watchdog_.Stop();
 #endif // CONFIG_LSPLATFORM
@@ -1280,10 +1279,10 @@ void Application::HandleStateChangedEvent() {
             if (!audio_player_.IsPlaying()) {
                 audio_service_.ResetDecoder();
             }
+            audio_service_.EnableWakeWordDetection(true);
             break;
         case kDeviceStateWifiConfiguring:
             audio_service_.EnableVoiceProcessing(false);
-            audio_service_.EnableWakeWordDetection(false);
             break;
         default:
             // Do nothing
@@ -1486,10 +1485,6 @@ void Application::SetDuplexMode(DuplexMode mode) {
 
 void Application::PlaySound(const std::string_view& sound) {
     audio_service_.PlaySound(sound);
-}
-
-uint32_t Application::PlayAudioUrl(const std::string& url) {
-    return audio_player_.PlayTtsUrl(url);
 }
 
 void Application::PlayLocalizedTone(const char* name) {

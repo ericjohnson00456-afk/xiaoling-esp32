@@ -1,7 +1,7 @@
 #include "gmf_player_engine.h"
 
 #include "audio_service.h"
-#include "audio/tone/tone_model.h"
+#include "../resource/tone_model.h"
 
 #include <esp_err.h>
 #include <esp_log.h>

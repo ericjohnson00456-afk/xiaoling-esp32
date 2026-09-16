@@ -2,12 +2,13 @@
 set(SOURCES "audio/audio_codec.cc"
             "audio/audio_service.cc"
             "xiaoling/voice/opus_wb_encoder.cc"
-            "audio/player/audio_player.cc"
-            "audio/player/player_tone.cc"
+            "player/audio_player.cc"
+            "player/channels/tone_player.cc"
+            "player/channels/tts_player.cc"
             "button/button.cc"
             "button/button_events.cc"
-            "audio/tone/tone_model.cc"
-            "audio/player/engine/gmf_player_engine.cc"
+            "player/resource/tone_model.cc"
+            "player/engine/gmf_player_engine.cc"
             "audio/codecs/no_audio_codec.cc"
             "audio/codecs/box_audio_codec.cc"
             "audio/codecs/es8311_audio_codec.cc"
@@ -73,7 +74,7 @@ list(APPEND SOURCES ${SHELL_CMD_SOURCES})
 
 set(INCLUDE_DIRS "." "button" "ui/display" "ui/display/backend" "ui/display/panels"
                  "ui/themes" "ui/tools/font" "ui/tools/image" "audio"
-                 "audio/player" "audio/player/core" "audio/player/engine" "xiaoling" "xiaoling/session" "xiaoling/conn" "mcp"
+                 "player" "player/core" "player/engine" "player/channels" "player/resource" "xiaoling" "xiaoling/session" "xiaoling/conn" "mcp"
                  "ui" "ui/core" "ui/models" "ui/screens/home" "system" "resource" "shell" "ota")
 
 # Add board common files
@@ -751,7 +752,6 @@ idf_component_register(SRCS ${SOURCES}
 
 if(CONFIG_USE_MICRO_WAKE_WORD)
     target_compile_definitions(${COMPONENT_LIB} PRIVATE
-        MICRO_WAKE_WORD_MODEL_WAKE_WORD=\"${MWW_MODEL_WAKE_WORD}\"
         MICRO_WAKE_WORD_MODEL_PROBABILITY_CUTOFF=${MWW_MODEL_PROB_CUTOFF}
     )
 endif()
