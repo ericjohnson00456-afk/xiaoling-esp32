@@ -1,7 +1,7 @@
 # Define source files
 set(SOURCES "audio/audio_codec.cc"
             "audio/audio_service.cc"
-            "audio/opus_wb_encoder.cc"
+            "xiaoling/voice/opus_wb_encoder.cc"
             "audio/player/audio_player.cc"
             "audio/player/player_tone.cc"
             "button/button.cc"

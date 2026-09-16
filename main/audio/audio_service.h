@@ -18,7 +18,7 @@
 
 #include "audio_codec.h"
 #include "audio_processor.h"
-#include "opus_wb_encoder.h"
+#include "xiaoling/voice/opus_wb_encoder.h"
 #include "processors/audio_debugger.h"
 #include "wake_word.h"
 #include "xiaoling/xiaoling_types.h"
