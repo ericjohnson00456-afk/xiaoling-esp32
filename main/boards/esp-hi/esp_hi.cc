@@ -21,7 +21,6 @@
 #include "servo_dog_ctrl.h"
 #include "led_strip.h"
 #include "driver/rmt_tx.h"
-#include "device_state.h"
 
 #include "sdkconfig.h"
 

@@ -83,11 +83,7 @@ Application::~Application() {
 }
 
 bool Application::SetDeviceState(DeviceState state) {
-    const bool transitioned = state_machine_.TransitionTo(state);
-    if (transitioned) {
-        BoardEvents::UpdateRuntimeState(state);
-    }
-    return transitioned;
+    return DeviceStatus::TransitionTo(state);
 }
 
 void Application::Initialize() {
@@ -190,7 +186,7 @@ void Application::Initialize() {
     audio_service_.SetCallbacks(callbacks);
 
     // Add state change listeners
-    state_machine_.AddStateChangeListener([this](DeviceState old_state, DeviceState new_state) {
+    DeviceStatus::AddStateChangeListener([this](DeviceState old_state, DeviceState new_state) {
         xEventGroupSetBits(event_group_, MAIN_EVENT_STATE_CHANGED);
     });
 
@@ -1196,7 +1192,7 @@ void Application::CountWatchdogBites() {
 #endif // CONFIG_LSPLATFORM
 
 void Application::HandleStateChangedEvent() {
-    DeviceState new_state = state_machine_.GetState();
+    DeviceState new_state = DeviceStatus::GetState();
     if (new_state != kDeviceStateConnecting && player_tone_.IsWakeupPending()) {
         player_tone_.CancelWakeup();
         if (xiaoling_conn_) {

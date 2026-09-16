@@ -6,7 +6,7 @@
 #include <string_view>
 #include <atomic>
 
-#include "device_state.h"
+#include "system/device_status.h"
 
 #include <esp_err.h>
 #include <esp_event.h>
@@ -103,7 +103,6 @@ esp_err_t PostLocalizedText(LocalizedText key);
 // Read-only runtime state projection for hardware callbacks. Boards can use
 // this snapshot without depending on Application.
 DeviceState GetRuntimeState();
-void UpdateRuntimeState(DeviceState state);
 
 }  // namespace BoardEvents
 

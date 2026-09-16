@@ -7,10 +7,6 @@
 
 ESP_EVENT_DEFINE_BASE(BOARD_EVENT);
 
-namespace {
-std::atomic<DeviceState> runtime_state{kDeviceStateUnknown};
-}
-
 namespace BoardEvents {
 
 esp_err_t PostInput(Input input, int32_t value, bool percent) {
@@ -62,11 +58,7 @@ esp_err_t PostLocalizedText(LocalizedText key) {
 }
 
 DeviceState GetRuntimeState() {
-    return runtime_state.load(std::memory_order_acquire);
-}
-
-void UpdateRuntimeState(DeviceState state) {
-    runtime_state.store(state, std::memory_order_release);
+    return DeviceStatus::GetState();
 }
 
 }  // namespace BoardEvents

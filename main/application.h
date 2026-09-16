@@ -20,8 +20,7 @@
 #include "audio/player/player_tone.h"
 #include "xiaoling/session/session_core.h"
 #include "button/button_events.h"
-#include "device_state.h"
-#include "device_state_machine.h"
+#include "system/device_status.h"
 #include "boards/common/board_events.h"
 #include "system/watchdog.h"
 
@@ -71,7 +70,7 @@ public:
      */
     void Run();
 
-    DeviceState GetDeviceState() const { return state_machine_.GetState(); }
+    DeviceState GetDeviceState() const { return DeviceStatus::GetState(); }
     bool IsVoiceDetected() const { return audio_service_.IsVoiceDetected(); }
 
     /**
@@ -145,7 +144,6 @@ private:
     std::unique_ptr<XiaolingConn> xiaoling_conn_;
     EventGroupHandle_t event_group_ = nullptr;
     esp_timer_handle_t clock_timer_handle_ = nullptr;
-    DeviceStateMachine state_machine_;
     ListeningMode listening_mode_ = kListeningModeAutoStop;
     AecMode aec_mode_ = kAecOff;
     std::string last_error_message_;
