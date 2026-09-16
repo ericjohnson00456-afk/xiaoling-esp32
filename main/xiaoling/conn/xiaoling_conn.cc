@@ -178,7 +178,7 @@ void XiaolingConn::StopSupervisor() {
         xTaskNotifyGive(task_handle_);
     }
 
-    std::unique_ptr<CloudWebSocket> websocket;
+    std::unique_ptr<XiaolingConnWebSocket> websocket;
     {
         std::lock_guard<std::mutex> lock(websocket_mutex_);
         websocket = std::move(websocket_);
@@ -272,14 +272,14 @@ bool XiaolingConn::ConnectOnce() {
     if (url.empty() || access_token.empty()) {
         return false;
     }
-    const CloudWebSocketHeaders headers = {
+    const XiaolingWsHeaders headers = {
         {"Authorization", NormalizeBearerToken(access_token)},
         {"Device-Id", SystemInfo::GetCloudDeviceId()},
         {"Client-Id", Board::GetInstance().GetUuid()},
     };
 
     const uint32_t generation = generation_.fetch_add(1) + 1;
-    auto websocket = std::make_unique<CloudWebSocket>(1);
+    auto websocket = std::make_unique<XiaolingConnWebSocket>(1);
     websocket->OnText([this, generation](std::string text) {
         if (generation == generation_.load()) {
             HandleIncomingText(text);
@@ -306,7 +306,7 @@ bool XiaolingConn::ConnectOnce() {
                  static_cast<unsigned long>(generation), error);
     });
 
-    std::unique_ptr<CloudWebSocket> previous;
+    std::unique_ptr<XiaolingConnWebSocket> previous;
     {
         std::lock_guard<std::mutex> lock(websocket_mutex_);
         previous = std::move(websocket_);
@@ -330,7 +330,7 @@ bool XiaolingConn::ConnectOnce() {
         return false;
     }
     if (!running_ || !desired_connected_ || generation != generation_.load()) {
-        std::unique_ptr<CloudWebSocket> stale_websocket;
+        std::unique_ptr<XiaolingConnWebSocket> stale_websocket;
         {
             std::lock_guard<std::mutex> lock(websocket_mutex_);
             stale_websocket = std::move(websocket_);

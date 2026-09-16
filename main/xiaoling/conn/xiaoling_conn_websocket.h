@@ -1,5 +1,5 @@
-#ifndef CLOUD_WEBSOCKET_H
-#define CLOUD_WEBSOCKET_H
+#ifndef XIAOLING_CONN_WEBSOCKET_H
+#define XIAOLING_CONN_WEBSOCKET_H
 
 #include <cstdint>
 #include <functional>
@@ -8,15 +8,15 @@
 #include <utility>
 #include <vector>
 
-using CloudWebSocketHeaders = std::vector<std::pair<std::string, std::string>>;
+using XiaolingWsHeaders = std::vector<std::pair<std::string, std::string>>;
 
-// 对 managed_components WebSocket 实现的薄封装，不解析小聆业务消息。
-class CloudWebSocket final {
+// 小聆连接内部使用的 WebSocket 传输薄封装，不解析小聆业务消息。
+class XiaolingConnWebSocket final {
 public:
-    explicit CloudWebSocket(int connect_id = 1);
-    ~CloudWebSocket();
+    explicit XiaolingConnWebSocket(int connect_id = 1);
+    ~XiaolingConnWebSocket();
 
-    bool Connect(const std::string& url, const CloudWebSocketHeaders& headers = {});
+    bool Connect(const std::string& url, const XiaolingWsHeaders& headers = {});
     void Disconnect();
     bool IsConnected() const;
 
@@ -41,4 +41,4 @@ private:
     uint32_t rx_binary_sequence_ = 0;
 };
 
-#endif // CLOUD_WEBSOCKET_H
+#endif  // XIAOLING_CONN_WEBSOCKET_H

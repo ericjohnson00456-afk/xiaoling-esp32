@@ -1,4 +1,4 @@
-#include "cloud_websocket.h"
+#include "xiaoling_conn_websocket.h"
 
 #include "board.h"
 #include "web_socket.h"
@@ -7,17 +7,17 @@
 
 #include <utility>
 
-#define TAG "CloudWebSocket"
+#define TAG "XiaolingWs"
 
-CloudWebSocket::CloudWebSocket(int connect_id)
+XiaolingConnWebSocket::XiaolingConnWebSocket(int connect_id)
     : connect_id_(connect_id) {
 }
 
-CloudWebSocket::~CloudWebSocket() {
+XiaolingConnWebSocket::~XiaolingConnWebSocket() {
     Disconnect();
 }
 
-bool CloudWebSocket::Connect(const std::string& url, const CloudWebSocketHeaders& headers) {
+bool XiaolingConnWebSocket::Connect(const std::string& url, const XiaolingWsHeaders& headers) {
     Disconnect();
     rx_binary_sequence_ = 0;
 
@@ -88,7 +88,7 @@ bool CloudWebSocket::Connect(const std::string& url, const CloudWebSocketHeaders
     return true;
 }
 
-void CloudWebSocket::Disconnect() {
+void XiaolingConnWebSocket::Disconnect() {
     if (websocket_ == nullptr) {
         return;
     }
@@ -96,15 +96,15 @@ void CloudWebSocket::Disconnect() {
     websocket_.reset();
 }
 
-bool CloudWebSocket::IsConnected() const {
+bool XiaolingConnWebSocket::IsConnected() const {
     return websocket_ != nullptr && websocket_->IsConnected();
 }
 
-bool CloudWebSocket::SendText(const std::string& text) {
+bool XiaolingConnWebSocket::SendText(const std::string& text) {
     return IsConnected() && websocket_->Send(text);
 }
 
-bool CloudWebSocket::SendBinary(const uint8_t* data, size_t size) {
+bool XiaolingConnWebSocket::SendBinary(const uint8_t* data, size_t size) {
     if (!IsConnected()) {
         ESP_LOGW(TAG, "WS TX binary skipped: transport is disconnected, bytes=%u",
                  static_cast<unsigned>(size));
@@ -117,7 +117,7 @@ bool CloudWebSocket::SendBinary(const uint8_t* data, size_t size) {
     return true;
 }
 
-bool CloudWebSocket::Ping() {
+bool XiaolingConnWebSocket::Ping() {
     if (!IsConnected()) {
         return false;
     }
@@ -125,23 +125,23 @@ bool CloudWebSocket::Ping() {
     return true;
 }
 
-void CloudWebSocket::OnText(std::function<void(std::string)> callback) {
+void XiaolingConnWebSocket::OnText(std::function<void(std::string)> callback) {
     on_text_ = std::move(callback);
 }
 
-void CloudWebSocket::OnBinary(std::function<void(std::vector<uint8_t>)> callback) {
+void XiaolingConnWebSocket::OnBinary(std::function<void(std::vector<uint8_t>)> callback) {
     on_binary_ = std::move(callback);
 }
 
 
-void CloudWebSocket::OnConnected(std::function<void()> callback) {
+void XiaolingConnWebSocket::OnConnected(std::function<void()> callback) {
     on_connected_ = std::move(callback);
 }
 
-void CloudWebSocket::OnDisconnected(std::function<void()> callback) {
+void XiaolingConnWebSocket::OnDisconnected(std::function<void()> callback) {
     on_disconnected_ = std::move(callback);
 }
 
-void CloudWebSocket::OnError(std::function<void(int)> callback) {
+void XiaolingConnWebSocket::OnError(std::function<void(int)> callback) {
     on_error_ = std::move(callback);
 }

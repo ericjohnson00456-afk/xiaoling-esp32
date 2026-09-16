@@ -2,7 +2,6 @@
 
 #include "ui/i18n/lang_config.h"
 #include "board.h"
-#include "cloud/cloud_http.h"
 #include "system/system_info.h"
 #include "xiaoling_config.h"
 
@@ -13,6 +12,8 @@
 #include <cctype>
 #include <cstdio>
 #include <ctime>
+#include <utility>
+#include <vector>
 
 #define TAG "XiaolingConn"
 
@@ -42,6 +43,43 @@ std::string CalculateChecksum(const std::string& input) {
         std::snprintf(checksum + i * 2, 3, "%02x", digest[i]);
     }
     return checksum;
+}
+
+}  // 匿名命名空间
+
+// 直接使用 managed_components 的 HTTP 客户端完成鉴权 POST（沿用仓库内 ota/assets 的裸用方式）。
+namespace {
+
+bool PostJsonForToken(const std::string& url, const std::string& body,
+                      const std::vector<std::pair<std::string, std::string>>& headers,
+                      int& status_code, std::string& response_body) {
+    auto network = Board::GetInstance().GetNetwork();
+    if (network == nullptr) {
+        ESP_LOGE(TAG, "Network interface is unavailable");
+        return false;
+    }
+
+    auto http = network->CreateHttp(0);
+    if (http == nullptr) {
+        ESP_LOGE(TAG, "Failed to create HTTP client");
+        return false;
+    }
+
+    http->SetHeader("Content-Type", "application/json");
+    for (const auto& [name, value] : headers) {
+        http->SetHeader(name.c_str(), value.c_str());
+    }
+    http->SetContent(std::string(body));
+
+    if (!http->Open("POST", url)) {
+        ESP_LOGE(TAG, "Failed to open POST request: %s", url.c_str());
+        return false;
+    }
+
+    status_code = http->GetStatusCode();
+    response_body = http->ReadAll();
+    http->Close();
+    return true;
 }
 
 }  // 匿名命名空间
@@ -98,23 +136,23 @@ bool XiaolingConn::Authenticate(const std::string& extra_code) {
     const std::string request_body(request_text);
     cJSON_free(request_text);
 
-    const CloudHttpHeaders headers = {
+    const std::vector<std::pair<std::string, std::string>> headers = {
         {"Activation-Version", "1"},
         {"Device-Id", device_id},
         {"Client-Id", Board::GetInstance().GetUuid()},
         {"User-Agent", SystemInfo::GetUserAgent()},
         {"Accept-Language", Lang::CODE},
     };
-    CloudHttpResponse response;
-    CloudHttp http;
-    if (!http.PostJson(url, request_body, response, headers) ||
-        response.status_code < 200 || response.status_code >= 300) {
-        ESP_LOGE(TAG, "小聆鉴权失败: status=%d", response.status_code);
+    int status_code = 0;
+    std::string response_body;
+    if (!PostJsonForToken(url, request_body, headers, status_code, response_body) ||
+        status_code < 200 || status_code >= 300) {
+        ESP_LOGE(TAG, "小聆鉴权失败: status=%d", status_code);
         SetError(XiaolingError::ServerNotConnected);
         return false;
     }
 
-    cJSON* root = cJSON_ParseWithLength(response.body.data(), response.body.size());
+    cJSON* root = cJSON_ParseWithLength(response_body.data(), response_body.size());
     if (root == nullptr) {
         ESP_LOGE(TAG, "小聆鉴权响应不是有效 JSON");
         return false;

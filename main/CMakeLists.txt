@@ -31,11 +31,10 @@ set(SOURCES "audio/audio_codec.cc"
             "ui/tools/image/image_fetcher.cc"
             "ui/tools/image/png_animation_player.cc"
             "boards/common/board_events.cc"
-            "cloud/cloud_http.cc"
-            "cloud/cloud_websocket.cc"
             "xiaoling/conn/xiaoling_conn.cc"
             "xiaoling/conn/xiaoling_conn_auth.cc"
             "xiaoling/conn/xiaoling_conn_protocol.cc"
+            "xiaoling/conn/xiaoling_conn_websocket.cc"
             "xiaoling/xiaoling_events.cc"
             "xiaoling/session/session_core.cc"
             "xiaoling/session/session_voice.cc"
@@ -74,7 +73,7 @@ list(APPEND SOURCES ${SHELL_CMD_SOURCES})
 
 set(INCLUDE_DIRS "." "button" "ui/display" "ui/display/backend" "ui/display/panels"
                  "ui/themes" "ui/tools/font" "ui/tools/image" "audio"
-                 "audio/player" "audio/player/core" "audio/player/engine" "cloud" "xiaoling" "xiaoling/session" "xiaoling/conn" "mcp"
+                 "audio/player" "audio/player/core" "audio/player/engine" "xiaoling" "xiaoling/session" "xiaoling/conn" "mcp"
                  "ui" "ui/core" "ui/models" "ui/screens/home" "system" "resource" "shell" "ota")
 
 # Add board common files

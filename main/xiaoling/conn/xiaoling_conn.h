@@ -1,7 +1,7 @@
 #ifndef XIAOLING_CONN_H
 #define XIAOLING_CONN_H
 
-#include "cloud/cloud_websocket.h"
+#include "xiaoling_conn_websocket.h"
 #include "xiaoling_types.h"
 
 #include <atomic>
@@ -65,7 +65,7 @@ private:
     EventGroupHandle_t event_group_ = nullptr;
 
     mutable std::mutex websocket_mutex_;
-    std::unique_ptr<CloudWebSocket> websocket_;
+    std::unique_ptr<XiaolingConnWebSocket> websocket_;
     std::atomic_bool running_{false};
     std::atomic_bool desired_connected_{false};
     std::atomic_bool transport_connected_{false};
