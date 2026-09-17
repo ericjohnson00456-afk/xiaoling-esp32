@@ -154,7 +154,6 @@ void XiaolingSessionVoice::SendStartListening(ListeningMode mode) {
         text_sender_("{\"action\":\"cancel\"}");
     }
 
-    listening_mode_ = mode;
     audio_upload_enabled_ = false;
     uplink_audio_format_checked_ = false;
     if (event_group_ == nullptr) {
@@ -341,9 +340,7 @@ void XiaolingSessionVoice::HandleMessage(const cJSON* root) {
     if (sub == nullptr) {
         return;
     }
-    if (std::strcmp(sub, "vad") == 0 && listening_mode_ != kListeningModeRealtime) {
-        audio_upload_enabled_ = false;
-    } else if (std::strcmp(sub, "iat") == 0) {
+    if (std::strcmp(sub, "iat") == 0) {
         HandleIat(data);
     } else if (std::strcmp(sub, "tts") == 0) {
         HandleTts(data);

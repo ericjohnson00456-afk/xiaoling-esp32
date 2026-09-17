@@ -74,7 +74,6 @@ private:
 
     std::atomic_bool session_active_{false};
     std::atomic_bool audio_upload_enabled_{false};
-    ListeningMode listening_mode_ = kListeningModeAutoStop;
     bool narrowband_mode_ = false;
     std::string session_id_;
     std::string pending_wake_word_;

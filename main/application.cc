@@ -1208,27 +1208,24 @@ void Application::BeginWakeup(ListeningMode mode) {
         });
     });
     if (iat_subscription_id_ == 0) {
+        auto on_iat_text = [this](const XiaolingEvent& event) {
+            Schedule([this, text = event.text]() {
+                if (text.empty() || iat_utterance_active_) {
+                    return;
+                }
+                iat_utterance_active_ = true;
+                if (session_controller_.policy().allow_barge_in &&
+                    !audio_player_.IsWakeupPending() &&
+                    GetDeviceState() == kDeviceStateSpeaking && audio_player_.IsPlaying()) {
+                    // Keep the cloud session and stop only local TTS on real speech.
+                    audio_player_.StopNonMusic(PlaybackEndReason::kPreempted);
+                }
+            });
+        };
         iat_subscription_id_ = XiaolingEventBus::GetInstance().Subscribe(
-            XIAOLING_IAT_START, [this](const XiaolingEvent& event) {
-                Schedule([this, text = event.text]() {
-                    iat_utterance_active_ = !text.empty();
-                    if (session_controller_.policy().allow_barge_in &&
-                        !audio_player_.IsWakeupPending() &&
-                        GetDeviceState() == kDeviceStateSpeaking && audio_player_.IsPlaying()) {
-                        // In full duplex, keep the cloud session and stop only the
-                        // local TTS output when the server recognizes barge-in.
-                        audio_player_.StopNonMusic(PlaybackEndReason::kPreempted);
-                    }
-                });
-            });
+            XIAOLING_IAT_START, on_iat_text);
         iat_update_subscription_id_ = XiaolingEventBus::GetInstance().Subscribe(
-            XIAOLING_IAT_UPDATE, [this](const XiaolingEvent& event) {
-                Schedule([this, text = event.text]() {
-                    if (!text.empty()) {
-                        iat_utterance_active_ = true;
-                    }
-                });
-            });
+            XIAOLING_IAT_UPDATE, on_iat_text);
         iat_end_subscription_id_ = XiaolingEventBus::GetInstance().Subscribe(
             XIAOLING_IAT_END, [this](const XiaolingEvent&) {
                 Schedule([this]() { iat_utterance_active_ = false; });
