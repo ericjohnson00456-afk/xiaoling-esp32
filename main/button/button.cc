@@ -1,4 +1,5 @@
 #include "button/button.h"
+#include "button/button_events.h"
 
 #include <button_gpio.h>
 #include <esp_log.h>
@@ -42,6 +43,39 @@ Button::~Button() {
     for (auto* handler : multiple_click_handlers_) {
         delete handler;
     }
+}
+
+esp_err_t Button::EnableEventPublishing() {
+    if (button_handle_ == nullptr) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (event_publishing_enabled_) {
+        return ESP_OK;
+    }
+    esp_err_t result = iot_button_register_cb(button_handle_, BUTTON_PRESS_REPEAT_DONE, nullptr,
+        [](void* handle, void* user_data) {
+            auto* button = static_cast<Button*>(user_data);
+            const auto count = iot_button_get_repeat(static_cast<button_handle_t>(handle));
+            if (count == 0) {
+                ESP_LOGW(TAG, "Ignore completed press sequence with zero clicks");
+                return;
+            }
+            ButtonEvents::Post(ButtonEvents::ClassifyClick(count), button, count);
+        }, this);
+    if (result != ESP_OK) {
+        return result;
+    }
+    result = iot_button_register_cb(button_handle_, BUTTON_LONG_PRESS_START, nullptr,
+        [](void* handle, void* user_data) {
+            (void)handle;
+            ButtonEvents::Post(ButtonEvents::kLongPress, static_cast<Button*>(user_data));
+        }, this);
+    if (result != ESP_OK) {
+        iot_button_unregister_cb(button_handle_, BUTTON_PRESS_REPEAT_DONE, nullptr);
+        return result;
+    }
+    event_publishing_enabled_ = true;
+    return ESP_OK;
 }
 
 void Button::OnPressDown(std::function<void()> callback) {

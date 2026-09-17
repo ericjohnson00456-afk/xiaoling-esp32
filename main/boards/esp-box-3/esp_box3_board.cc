@@ -5,7 +5,6 @@
 #include "codecs/box_audio_codec.h"
 #include "esp_lcd_ili9341.h"
 #include "button.h"
-#include "button/button_events.h"
 #include "config.h"
 
 #include <esp_log.h>
@@ -71,11 +70,7 @@ private:
     }
 
     void InitializeButtons() {
-#if CONFIG_USE_DEVICE_AEC
-        ButtonEvents::BindWakeupButton(boot_button_, true);
-#else
-        ButtonEvents::BindWakeupButton(boot_button_);
-#endif
+        ESP_ERROR_CHECK(boot_button_.EnableEventPublishing());
     }
 
     void InitializeIli9341Display() {

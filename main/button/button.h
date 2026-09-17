@@ -21,6 +21,7 @@ public:
     void OnClick(std::function<void()> callback);
     void OnDoubleClick(std::function<void()> callback);
     void OnMultipleClick(std::function<void()> callback, uint8_t click_count = 3);
+    esp_err_t EnableEventPublishing();
 
 protected:
     gpio_num_t gpio_num_;
@@ -31,6 +32,7 @@ protected:
     std::function<void()> on_long_press_;
     std::function<void()> on_click_;
     std::function<void()> on_double_click_;
+    bool event_publishing_enabled_ = false;
     // esp-button 按精确次数匹配多击回调，允许注册多个不同次数，各自独立持有
     struct MultipleClickHandler {
         std::function<void()> callback;

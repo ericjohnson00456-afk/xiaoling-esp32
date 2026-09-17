@@ -8,17 +8,27 @@ ESP_EVENT_DECLARE_BASE(BUTTON_EVENT);
 
 namespace ButtonEvents {
 
-enum Action : int32_t {
-    kClick,
-    kDoubleClick,
-    kTripleClick,
-    kPressDown,
-    kPressUp,
-    kToggleAec,
-    kFactoryReset,
+enum Gesture : int32_t {
+    kShortPress1,
+    kShortPress2,
+    kShortPress3,
+    kShortPress4,
+    kShortPress5To7,
+    kShortPress8OrMore,
+    kLongPress,
 };
 
-esp_err_t Post(Action action);
-void BindWakeupButton(Button& button, bool double_click_toggles_aec = false);
+struct Event {
+    const Button* source;
+    uint8_t click_count; // 0 for long press
+};
+
+constexpr Gesture ClassifyClick(uint8_t count) {
+    return count == 1 ? kShortPress1 : count == 2 ? kShortPress2 :
+           count == 3 ? kShortPress3 : count == 4 ? kShortPress4 :
+           count < 8 ? kShortPress5To7 : kShortPress8OrMore;
+}
+
+esp_err_t Post(Gesture gesture, const Button* source, uint8_t click_count = 0);
 
 }

@@ -1098,28 +1098,29 @@ void Application::AbortSpeaking(AbortReason reason) {
 void Application::OnButtonEvent(void* arg, esp_event_base_t event_base,
                                 int32_t event_id, void* event_data) {
     (void)event_base;
-    (void)event_data;
     auto* app = static_cast<Application*>(arg);
-    if (app != nullptr) {
+    if (app != nullptr && event_data != nullptr) {
         app->Schedule([app, event_id]() { app->HandleButtonEvent(event_id); });
     }
 }
 
 void Application::HandleButtonEvent(int32_t event_id) {
-    if (event_id == ButtonEvents::kToggleAec) {
+#if CONFIG_USE_DEVICE_AEC
+    if (event_id == ButtonEvents::kShortPress2) {
         if (GetDeviceState() == kDeviceStateIdle) {
             HandleBoardInput({BoardEvents::Input::AecToggle, 0, false});
         }
         return;
     }
+#endif
     switch (event_id) {
-        case ButtonEvents::kClick:
+        case ButtonEvents::kShortPress1:
             HandleBoardInput({BoardEvents::Input::PrimaryClick, 0, false});
             break;
-        case ButtonEvents::kDoubleClick:
+        case ButtonEvents::kShortPress2:
             HandleBoardInput({BoardEvents::Input::PrimaryDoubleClick, 0, false});
             break;
-        case ButtonEvents::kTripleClick: {
+        case ButtonEvents::kShortPress3: {
             auto mode = GetDuplexMode();
             DuplexMode next = mode == DuplexMode::kSimplex ? DuplexMode::kHalfDuplex :
                               mode == DuplexMode::kHalfDuplex ? DuplexMode::kFullDuplex :
@@ -1130,13 +1131,7 @@ void Application::HandleButtonEvent(int32_t event_id) {
             SetDuplexMode(next);
             break;
         }
-        case ButtonEvents::kPressDown:
-            HandleBoardInput({BoardEvents::Input::TouchDown, 0, false});
-            break;
-        case ButtonEvents::kPressUp:
-            HandleBoardInput({BoardEvents::Input::TouchUp, 0, false});
-            break;
-        case ButtonEvents::kFactoryReset:
+        case ButtonEvents::kShortPress8OrMore:
             StartFactoryReset();
             break;
     }

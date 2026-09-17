@@ -1,32 +1,27 @@
 #include "button_events.h"
-#include "button.h"
-
 #include <esp_log.h>
 
 ESP_EVENT_DEFINE_BASE(BUTTON_EVENT);
 
 namespace ButtonEvents {
 
-esp_err_t Post(Action action) {
-    const auto result = esp_event_post(BUTTON_EVENT, action, nullptr, 0, 0);
+static_assert(ClassifyClick(1) == kShortPress1);
+static_assert(ClassifyClick(2) == kShortPress2);
+static_assert(ClassifyClick(3) == kShortPress3);
+static_assert(ClassifyClick(4) == kShortPress4);
+static_assert(ClassifyClick(5) == kShortPress5To7);
+static_assert(ClassifyClick(7) == kShortPress5To7);
+static_assert(ClassifyClick(8) == kShortPress8OrMore);
+static_assert(ClassifyClick(UINT8_MAX) == kShortPress8OrMore);
+
+esp_err_t Post(Gesture gesture, const Button* source, uint8_t click_count) {
+    const Event event{source, click_count};
+    const auto result = esp_event_post(BUTTON_EVENT, gesture, &event, sizeof(event), 0);
     if (result != ESP_OK) {
         ESP_LOGW("ButtonEvents", "Failed to post button event %ld: %s",
-                 static_cast<long>(action), esp_err_to_name(result));
+                 static_cast<long>(gesture), esp_err_to_name(result));
     }
     return result;
-}
-
-void BindWakeupButton(Button& button, bool double_click_toggles_aec) {
-    button.OnClick([]() { Post(kClick); });
-    button.OnDoubleClick([double_click_toggles_aec]() {
-        Post(double_click_toggles_aec ? kToggleAec : kDoubleClick);
-    });
-    button.OnMultipleClick([]() { Post(kTripleClick); }, 3);
-    // 连按 8 下及以上恢复出厂设置。esp-button 的多击回调按精确次数匹配，
-    // 因此逐档注册 8~15 次，超过 15 次的连按不常见。
-    for (uint8_t clicks = 8; clicks <= 15; ++clicks) {
-        button.OnMultipleClick([]() { Post(kFactoryReset); }, clicks);
-    }
 }
 
 }

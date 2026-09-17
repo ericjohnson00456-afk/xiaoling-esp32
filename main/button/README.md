@@ -1,11 +1,19 @@
-# 按键与唤醒
+# 按键事件
 
-`button.h/.cc` 封装 GPIO、ADC 按键驱动与手势回调。板级代码负责引脚和硬件配置；
-`button_events.h/.cc` 绑定唤醒按键，并通过默认 ESP 事件循环发布 `BUTTON_EVENT`。
-BOX3 单击发布 `kClick`；启用设备端 AEC 时，双击发布 `kToggleAec`。
+`button.h/.cc` 封装 GPIO、ADC 按键驱动。板级代码负责引脚和硬件配置，并对需要
+发布事件的按键调用 `EnableEventPublishing()`。按键对象只识别手势，通过默认 ESP
+事件循环发布 `BUTTON_EVENT`，不包含唤醒、AEC、恢复出厂等业务逻辑。
+
+事件 ID 分为 `kShortPress1`、`kShortPress2`、`kShortPress3`、`kShortPress4`、
+`kShortPress5To7`、`kShortPress8OrMore` 和 `kLongPress`。事件数据为
+`ButtonEvents::Event`，包含按键对象 `source`；短按事件还包含实际连击次数
+`click_count`，长按时该值为 0。
+
+目前 BOX3 的主按键启用事件发布，Application 统一订阅 `BUTTON_EVENT`，再转交主任务
+执行原有业务。4 次、5-7 次和长按事件当前没有业务动作，后续逻辑可直接订阅对应事件。
 `boards/common/button.h` 保留为旧板级 include 路径的转发头。
 
-Application 将按键事件转交主任务，检查当前设备状态并发起唤醒。
+Application 检查当前设备状态并发起唤醒。
 旧板型使用的 `BoardEvents::Input::PrimaryClick/TouchDown/TouchUp` 仍走同一唤醒流程。
 配网、音频测试和 AEC 切换保留原有状态限制。
 
