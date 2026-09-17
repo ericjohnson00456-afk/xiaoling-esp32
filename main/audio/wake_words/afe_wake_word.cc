@@ -75,7 +75,7 @@ bool AfeWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list) {
     afe_config->aec_init = codec_->input_reference();
     afe_config->aec_mode = AEC_MODE_SR_HIGH_PERF;
     afe_config->afe_perferred_core = 1;
-    afe_config->afe_perferred_priority = 1;
+    afe_config->afe_perferred_priority = 8;
     afe_config->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
     
     afe_iface_ = esp_afe_handle_from_config(afe_config);
@@ -85,7 +85,7 @@ bool AfeWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list) {
         auto this_ = (AfeWakeWord*)arg;
         this_->AudioDetectionTask();
         vTaskDelete(NULL);
-    }, "audio_detection", 4096, this, 3, nullptr);
+    }, "audio_detection", 4096, this, 8, nullptr);
 
     return true;
 }
@@ -194,7 +194,8 @@ void AfeWakeWord::EncodeWakeWordData() {
             this_->wake_word_cv_.notify_all();
         }
         vTaskDelete(NULL);
-    }, "encode_wake_word", stack_size, this, 2, wake_word_encode_task_stack_, wake_word_encode_task_buffer_);
+    }, "encode_wake_word", stack_size, this, 8,
+       wake_word_encode_task_stack_, wake_word_encode_task_buffer_);
 }
 
 bool AfeWakeWord::GetWakeWordOpus(std::vector<uint8_t>& opus) {

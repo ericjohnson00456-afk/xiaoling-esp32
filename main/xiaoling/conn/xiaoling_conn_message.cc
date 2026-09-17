@@ -167,8 +167,8 @@ void XiaolingConn::HandleIncomingText(const std::string& text) {
     LogTextFrame("RX", text);
 
     const auto* action = cJSON_GetObjectItemCaseSensitive(root, "action");
-    if (cJSON_IsString(action) && action->valuestring != nullptr &&
-        IsCurrentSessionMessage(root)) {
+    const bool current_session = IsCurrentSessionMessage(root);
+    if (cJSON_IsString(action) && action->valuestring != nullptr && current_session) {
         if (voice_ != nullptr) {
             voice_->HandleMessage(root);
         }
@@ -202,7 +202,7 @@ void XiaolingConn::HandleIncomingText(const std::string& text) {
         }
     }
 
-    if (on_incoming_json_) {
+    if (on_incoming_json_ && current_session) {
         on_incoming_json_(root);
     }
     cJSON_Delete(root);

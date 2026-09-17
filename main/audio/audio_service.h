@@ -6,6 +6,7 @@
 #include <condition_variable>
 #include <chrono>
 #include <mutex>
+#include <atomic>
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -18,7 +19,7 @@
 
 #include "audio_codec.h"
 #include "audio_processor.h"
-#include "xiaoling/voice/opus_wb_encoder.h"
+#include "opus_encoder/opus_wb_encoder.h"
 #include "processors/audio_debugger.h"
 #include "wake_word.h"
 #include "xiaoling/xiaoling_types.h"
@@ -41,6 +42,7 @@
 #define MAX_PLAYBACK_TASKS_IN_QUEUE 2
 #define MAX_DECODE_PACKETS_IN_QUEUE (2400 / OPUS_FRAME_DURATION_MS)
 #define MAX_SEND_PACKETS_IN_QUEUE (2400 / OPUS_FRAME_DURATION_MS)
+#define MAX_PROCESSED_WAKE_FRAMES_IN_QUEUE 4
 #define AUDIO_TESTING_MAX_DURATION_MS 10000
 #define MAX_TIMESTAMPS_IN_QUEUE 3
 
@@ -137,6 +139,7 @@ private:
     std::unique_ptr<WakeWord> wake_word_;
     std::string wake_word_name_;
     std::unique_ptr<AudioDebugger> audio_debugger_;
+    std::mutex audio_debugger_mutex_;
     std::unique_ptr<OpusWbEncoder> opus_encoder_;
     std::unique_ptr<OpusDecoderWrapper> opus_decoder_;
     OpusResampler input_resampler_;
@@ -158,6 +161,13 @@ private:
     TaskHandle_t audio_input_task_handle_ = nullptr;
     TaskHandle_t audio_output_task_handle_ = nullptr;
     TaskHandle_t opus_codec_task_handle_ = nullptr;
+#if CONFIG_USE_MICRO_WAKE_WORD
+    TaskHandle_t processed_wake_task_handle_ = nullptr;
+    std::mutex processed_wake_mutex_;
+    std::condition_variable processed_wake_cv_;
+    std::deque<std::vector<int16_t>> processed_wake_queue_;
+    std::atomic_bool wake_uses_processor_output_{false};
+#endif
     std::mutex audio_queue_mutex_;
     std::condition_variable audio_queue_cv_;
     std::deque<std::unique_ptr<AudioStreamPacket>> audio_decode_queue_;
@@ -185,6 +195,11 @@ private:
     void AudioInputTask();
     void AudioOutputTask();
     void OpusCodecTask();
+#if CONFIG_USE_MICRO_WAKE_WORD
+    void ProcessedWakeTask();
+    void SetWakeInputFromProcessor(bool enable);
+    void ClearProcessedWakeQueue();
+#endif
     void PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t>&& pcm);
 #ifdef CONFIG_LSPLATFORM
     void SetEncodeSampleRate(int sample_rate, int frame_duration);

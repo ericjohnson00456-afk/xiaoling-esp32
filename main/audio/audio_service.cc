@@ -2,6 +2,7 @@
 #include "xiaoling/conn/xiaoling_config.h"
 #include <esp_log.h>
 #include <algorithm>
+#include <climits>
 #include <cstring>
 
 #if CONFIG_USE_AUDIO_PROCESSOR
@@ -57,6 +58,21 @@ void AudioService::Initialize(AudioCodec* codec) {
 #endif
 
     audio_processor_->OnOutput([this](std::vector<int16_t>&& data) {
+#if CONFIG_USE_MICRO_WAKE_WORD
+        if (wake_uses_processor_output_.load() && IsWakeWordRunning()) {
+            std::lock_guard<std::mutex> lock(processed_wake_mutex_);
+            if (processed_wake_queue_.size() >= MAX_PROCESSED_WAKE_FRAMES_IN_QUEUE) {
+                processed_wake_queue_.pop_front();
+                static uint32_t dropped_frames = 0;
+                if ((++dropped_frames % 100) == 1) {
+                    ESP_LOGW(TAG, "Processed wake queue full, dropped frames: %lu",
+                             static_cast<unsigned long>(dropped_frames));
+                }
+            }
+            processed_wake_queue_.push_back(data);
+            processed_wake_cv_.notify_one();
+        }
+#endif
         PushTaskToEncodeQueue(kAudioTaskTypeEncodeToSendQueue, std::move(data));
     });
 
@@ -99,7 +115,7 @@ void AudioService::Start() {
         AudioService* audio_service = (AudioService*)arg;
         audio_service->AudioOutputTask();
         vTaskDelete(NULL);
-    }, "audio_output", 2048 * 2, this, 4, &audio_output_task_handle_);
+    }, "audio_output", 2048 * 2, this, 8, &audio_output_task_handle_);
 #else
     /* Start the audio input task */
     xTaskCreate([](void* arg) {
@@ -113,7 +129,7 @@ void AudioService::Start() {
         AudioService* audio_service = (AudioService*)arg;
         audio_service->AudioOutputTask();
         vTaskDelete(NULL);
-    }, "audio_output", 2048, this, 4, &audio_output_task_handle_);
+    }, "audio_output", 2048, this, 8, &audio_output_task_handle_);
 #endif
 
     /* Start the opus codec task */
@@ -121,7 +137,16 @@ void AudioService::Start() {
         AudioService* audio_service = (AudioService*)arg;
         audio_service->OpusCodecTask();
         vTaskDelete(NULL);
-    }, "opus_codec", 2048 * 13, this, 6, &opus_codec_task_handle_);
+    }, "opus_codec", 2048 * 13, this, 8, &opus_codec_task_handle_);
+
+#if CONFIG_USE_MICRO_WAKE_WORD
+    xTaskCreatePinnedToCore([](void* arg) {
+        AudioService* audio_service = (AudioService*)arg;
+        audio_service->ProcessedWakeTask();
+        vTaskDelete(NULL);
+    }, "processed_wake", 2048 * 3, this, 8,
+       &processed_wake_task_handle_, 0);
+#endif
 }
 
 void AudioService::Stop() {
@@ -137,6 +162,10 @@ void AudioService::Stop() {
     audio_playback_queue_.clear();
     audio_testing_queue_.clear();
     audio_queue_cv_.notify_all();
+#if CONFIG_USE_MICRO_WAKE_WORD
+    ClearProcessedWakeQueue();
+    processed_wake_cv_.notify_all();
+#endif
 }
 
 bool AudioService::ReadAudioData(std::vector<int16_t>& data, int sample_rate, int samples) {
@@ -179,17 +208,18 @@ bool AudioService::ReadAudioData(std::vector<int16_t>& data, int sample_rate, in
         }
     }
 
+    // Amplify the microphone before it is split to the wake-word and AFE pipelines.
+    constexpr int32_t kMicPcmGain = 5;
+    const size_t input_channels = codec_->input_channels();
+    for (size_t i = 0; i < data.size(); i += input_channels) {
+        const int32_t amplified = static_cast<int32_t>(data[i]) * kMicPcmGain;
+        data[i] = static_cast<int16_t>(std::clamp(amplified,
+            static_cast<int32_t>(INT16_MIN), static_cast<int32_t>(INT16_MAX)));
+    }
+
     /* Update the last input time */
     last_input_time_ = std::chrono::steady_clock::now();
     debug_statistics_.input_count++;
-
-#if CONFIG_USE_AUDIO_DEBUGGER
-    // 音频调试：发送原始音频数据
-    if (audio_debugger_ == nullptr) {
-        audio_debugger_ = std::make_unique<AudioDebugger>();
-    }
-    audio_debugger_->Feed(data);
-#endif
 
     return true;
 }
@@ -223,10 +253,17 @@ void AudioService::AudioInputTask() {
 
         const bool wake_running = (bits & AS_EVENT_WAKE_WORD_RUNNING) != 0;
         const bool processor_running = (bits & AS_EVENT_AUDIO_PROCESSOR_RUNNING) != 0;
+#if CONFIG_USE_MICRO_WAKE_WORD
+        const bool use_processed_wake = wake_uses_processor_output_.load() && processor_running;
+#else
+        const bool use_processed_wake = false;
+#endif
         if (!wake_running) wake_pending.clear();
+        if (use_processed_wake) wake_pending.clear();
         if (!processor_running) processor_pending.clear();
 
-        const size_t wake_samples = wake_running ? wake_word_->GetFeedSize() : 0;
+        const size_t wake_samples = wake_running && !use_processed_wake
+            ? wake_word_->GetFeedSize() : 0;
         const size_t processor_samples = processor_running ? audio_processor_->GetFeedSize() : 0;
         const size_t testing_samples = testing_running ? OPUS_FRAME_DURATION_MS * 16000 / 1000 : 0;
         size_t samples = 0;
@@ -279,6 +316,13 @@ void AudioService::AudioInputTask() {
                 while (wake_pending.size() >= frame_size && IsWakeWordRunning()) {
                     std::vector<int16_t> frame(wake_pending.begin(), wake_pending.begin() + frame_size);
                     wake_pending.erase(wake_pending.begin(), wake_pending.begin() + frame_size);
+#if CONFIG_USE_AUDIO_DEBUGGER
+                    std::lock_guard<std::mutex> debug_lock(audio_debugger_mutex_);
+                    if (!audio_debugger_) {
+                        audio_debugger_ = std::make_unique<AudioDebugger>();
+                    }
+                    audio_debugger_->Feed(frame);
+#endif
                     wake_word_->Feed(frame);
                 }
             }
@@ -293,6 +337,57 @@ void AudioService::AudioInputTask() {
 
     ESP_LOGW(TAG, "Audio input task stopped");
 }
+
+#if CONFIG_USE_MICRO_WAKE_WORD
+void AudioService::ProcessedWakeTask() {
+    while (true) {
+        std::unique_lock<std::mutex> lock(processed_wake_mutex_);
+        processed_wake_cv_.wait(lock, [this]() {
+            return service_stopped_ || !processed_wake_queue_.empty();
+        });
+        if (service_stopped_) {
+            break;
+        }
+
+        auto data = std::move(processed_wake_queue_.front());
+        processed_wake_queue_.pop_front();
+        lock.unlock();
+
+        if (wake_uses_processor_output_.load() && IsWakeWordRunning()) {
+#if CONFIG_USE_AUDIO_DEBUGGER
+            std::lock_guard<std::mutex> debug_lock(audio_debugger_mutex_);
+            if (!audio_debugger_) {
+                audio_debugger_ = std::make_unique<AudioDebugger>();
+            }
+            audio_debugger_->Feed(data);
+#endif
+            wake_word_->Feed(data);
+        }
+    }
+    ESP_LOGW(TAG, "Processed wake task stopped");
+}
+
+void AudioService::ClearProcessedWakeQueue() {
+    std::lock_guard<std::mutex> lock(processed_wake_mutex_);
+    processed_wake_queue_.clear();
+}
+
+void AudioService::SetWakeInputFromProcessor(bool enable) {
+    const bool previous = wake_uses_processor_output_.exchange(enable);
+    if (previous == enable) {
+        return;
+    }
+
+    ClearProcessedWakeQueue();
+    if (wake_word_initialized_ && IsWakeWordRunning()) {
+        if (!static_cast<MicroWakeWord*>(wake_word_.get())->ResetInputState()) {
+            ESP_LOGE(TAG, "Failed to reset wake word after changing input source");
+        }
+    }
+    ESP_LOGI(TAG, "Wake word input source: %s",
+             enable ? "AFE post-AEC output" : "amplified microphone PCM");
+}
+#endif
 
 void AudioService::AudioOutputTask() {
     while (true) {
@@ -644,6 +739,9 @@ void AudioService::EnableWakeWordDetection(bool enable) {
 
     ESP_LOGD(TAG, "%s wake word detection", enable ? "Enabling" : "Disabling");
     if (enable) {
+#if CONFIG_USE_MICRO_WAKE_WORD
+        ClearProcessedWakeQueue();
+#endif
         if (!wake_word_initialized_) {
             if (!wake_word_->Initialize(codec_, models_list_)) {
                 ESP_LOGE(TAG, "Failed to initialize wake word");
@@ -656,6 +754,9 @@ void AudioService::EnableWakeWordDetection(bool enable) {
     } else {
         /* 先清除事件位再 Stop，缩小输入任务读到残留 RUNNING 位的窗口 */
         xEventGroupClearBits(event_group_, AS_EVENT_WAKE_WORD_RUNNING);
+#if CONFIG_USE_MICRO_WAKE_WORD
+        ClearProcessedWakeQueue();
+#endif
         wake_word_->Stop();
     }
 }
@@ -666,6 +767,7 @@ void AudioService::PauseWakeWordDetection() {
         return;
     }
     xEventGroupClearBits(event_group_, AS_EVENT_WAKE_WORD_RUNNING);
+    ClearProcessedWakeQueue();
     static_cast<MicroWakeWord*>(wake_word_.get())->Pause();
 #else
     EnableWakeWordDetection(false);
@@ -701,7 +803,13 @@ void AudioService::EnableVoiceProcessing(bool enable) {
         audio_processor_->EnableDeviceAec(device_aec_requested_);
         audio_processor_->Start();
         xEventGroupSetBits(event_group_, AS_EVENT_AUDIO_PROCESSOR_RUNNING);
+#if CONFIG_USE_MICRO_WAKE_WORD
+        SetWakeInputFromProcessor(device_aec_requested_ && SupportsDeviceAec());
+#endif
     } else {
+#if CONFIG_USE_MICRO_WAKE_WORD
+        SetWakeInputFromProcessor(false);
+#endif
         /* 先清除事件位再 Stop，缩小输入任务读到残留 RUNNING 位的窗口 */
         xEventGroupClearBits(event_group_, AS_EVENT_AUDIO_PROCESSOR_RUNNING);
         audio_processor_->Stop();
@@ -747,6 +855,9 @@ void AudioService::EnableDeviceAec(bool enable) {
     device_aec_requested_ = enable;
     if (audio_processor_initialized_ && IsAudioProcessorRunning()) {
         audio_processor_->EnableDeviceAec(enable);
+#if CONFIG_USE_MICRO_WAKE_WORD
+        SetWakeInputFromProcessor(enable && SupportsDeviceAec());
+#endif
     }
 }
 

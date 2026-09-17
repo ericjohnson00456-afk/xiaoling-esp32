@@ -185,6 +185,28 @@ void MicroWakeWord::Pause() {
     ESP_LOGI(TAG, "MicroWakeWord paused");
 }
 
+bool MicroWakeWord::ResetInputState() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!running_) {
+        return true;
+    }
+    if (!frontend_initialized_ || !models_loaded_) {
+        ESP_LOGE(TAG, "Cannot reset input state before frontend and models are ready");
+        return false;
+    }
+
+    FrontendReset(&frontend_state_);
+    for (auto& model : wake_word_models_) {
+        if (!model || !model->ResetState()) {
+            ESP_LOGE(TAG, "Failed to reset wake word model state");
+            return false;
+        }
+    }
+    ResetStates();
+    ESP_LOGI(TAG, "Wake word input state reset");
+    return true;
+}
+
 void MicroWakeWord::Stop() {
     std::lock_guard<std::mutex> lock(mutex_);
     bool was_running = running_;

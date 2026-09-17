@@ -26,14 +26,18 @@ SystemReset::SystemReset(gpio_num_t reset_nvs_pin, gpio_num_t reset_factory_pin)
 void SystemReset::CheckButtons() {
     if (gpio_get_level(reset_factory_pin_) == 0) {
         ESP_LOGI(TAG, "Button is pressed, reset to factory");
-        ResetNvsFlash();
-        ResetToFactory();
+        FactoryReset();
     }
 
     if (gpio_get_level(reset_nvs_pin_) == 0) {
         ESP_LOGI(TAG, "Button is pressed, reset NVS flash");
         ResetNvsFlash();
     }
+}
+
+void SystemReset::FactoryReset() {
+    ResetNvsFlash();
+    ResetToFactory();
 }
 
 void SystemReset::ResetNvsFlash() {

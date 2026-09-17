@@ -40,6 +40,7 @@ public:
     // 切换网络类型
     void SwitchNetworkType() override;
     bool EnterNetworkConfigMode() override;
+    bool ClearNetworkConfiguration() override;
 
     // 获取当前网络类型
     NetworkType GetNetworkType() const { return network_type_; }

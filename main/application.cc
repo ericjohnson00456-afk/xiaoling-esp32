@@ -1038,13 +1038,6 @@ void Application::HandleWakeWordDetectedEvent() {
     }
 
     auto state = GetDeviceState();
-    if (state == kDeviceStateListening && iat_utterance_active_) {
-        // A partial ASR result means the current utterance is still in progress.
-        // Do not discard it on a local wake-word candidate.
-        ESP_LOGW(TAG, "Ignoring wake word during an active IAT utterance");
-        return;
-    }
-
     if (state == kDeviceStateIdle || state == kDeviceStateListening) {
 #if CONFIG_SEND_WAKE_WORD_DATA
         audio_service_.EncodeWakeWord();
@@ -1068,13 +1061,11 @@ void Application::HandleWakeWordDetectedEvent() {
 #endif
         BeginWakeup(listening_mode_);
     } else if (state == kDeviceStateSpeaking) {
-        if (session_controller_.policy().allow_barge_in) {
-            AbortSpeaking(kAbortReasonWakeWordDetected);
-            SetDeviceState(kDeviceStateIdle);
-            if (EnsureXiaolingReadyForWakeup()) {
-                xiaoling_conn_->SendWakeWordDetected(audio_service_.GetLastWakeWord());
-                BeginWakeup(listening_mode_);
-            }
+        AbortSpeaking(kAbortReasonWakeWordDetected);
+        SetDeviceState(kDeviceStateIdle);
+        if (EnsureXiaolingReadyForWakeup()) {
+            xiaoling_conn_->SendWakeWordDetected(audio_service_.GetLastWakeWord());
+            BeginWakeup(listening_mode_);
         }
     } else if (state == kDeviceStateActivating) {
         // Restart the activation check if the wake word is detected during activation
@@ -1093,84 +1084,6 @@ void Application::AbortSpeaking(AbortReason reason) {
     if (xiaoling_conn_) {
         xiaoling_conn_->SendAbortSpeaking(reason);
     }
-}
-
-void Application::OnButtonEvent(void* arg, esp_event_base_t event_base,
-                                int32_t event_id, void* event_data) {
-    (void)event_base;
-    auto* app = static_cast<Application*>(arg);
-    if (app != nullptr && event_data != nullptr) {
-        app->Schedule([app, event_id]() { app->HandleButtonEvent(event_id); });
-    }
-}
-
-void Application::HandleButtonEvent(int32_t event_id) {
-#if CONFIG_USE_DEVICE_AEC
-    if (event_id == ButtonEvents::kShortPress2) {
-        if (GetDeviceState() == kDeviceStateIdle) {
-            HandleBoardInput({BoardEvents::Input::AecToggle, 0, false});
-        }
-        return;
-    }
-#endif
-    switch (event_id) {
-        case ButtonEvents::kShortPress1:
-            HandleBoardInput({BoardEvents::Input::PrimaryClick, 0, false});
-            break;
-        case ButtonEvents::kShortPress2:
-            HandleBoardInput({BoardEvents::Input::PrimaryDoubleClick, 0, false});
-            break;
-        case ButtonEvents::kShortPress3: {
-            auto mode = GetDuplexMode();
-            DuplexMode next = mode == DuplexMode::kSimplex ? DuplexMode::kHalfDuplex :
-                              mode == DuplexMode::kHalfDuplex ? DuplexMode::kFullDuplex :
-                                                               DuplexMode::kSimplex;
-            if (next == DuplexMode::kFullDuplex && !audio_service_.SupportsAec()) {
-                next = DuplexMode::kSimplex;
-            }
-            SetDuplexMode(next);
-            break;
-        }
-        case ButtonEvents::kShortPress8OrMore:
-            StartFactoryReset();
-            break;
-    }
-}
-
-void Application::StartFactoryReset() {
-    if (factory_reset_started_.exchange(true)) {
-        return;
-    }
-    ESP_LOGW(TAG, "检测到连续按键 8 次，开始恢复出厂设置");
-    // 擦除 NVS 后各模块已打开的句柄失效，流程在独立任务里完成后直接复位
-    if (xTaskCreate([](void* arg) {
-            static_cast<Application*>(arg)->FactoryResetTask();
-        }, "factory_reset", 4096, this, 5, nullptr) != pdTRUE) {
-        factory_reset_started_ = false;
-        ESP_LOGE(TAG, "Failed to create factory reset task");
-    }
-}
-
-void Application::FactoryResetTask() {
-    PlayTone(103);  // 103_reset_factory.mp3
-    esp_err_t err = nvs_flash_erase();
-    if (err == ESP_OK) {
-        err = nvs_flash_init();
-    }
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "擦除 NVS 失败: %s", esp_err_to_name(err));
-    }
-    // PlayTone 是异步请求，先等播放真正开始再轮询等结束；起始等待有上限，
-    // 避免提示音缺失或播放器异常时卡死
-    for (int i = 0; i < 50 && !audio_player_.IsPlaying(); ++i) {
-        vTaskDelay(pdMS_TO_TICKS(20));
-    }
-    while (audio_player_.IsPlaying()) {
-        vTaskDelay(pdMS_TO_TICKS(50));
-    }
-    vTaskDelay(pdMS_TO_TICKS(100));
-    ESP_LOGW(TAG, "恢复出厂设置完成，重启设备");
-    esp_restart();
 }
 
 void Application::BeginWakeup(ListeningMode mode) {
@@ -1502,13 +1415,11 @@ void Application::WakeWordInvoke(const std::string& wake_word) {
 #endif
         BeginWakeup(listening_mode_);
     } else if (state == kDeviceStateSpeaking) {
-        if (session_controller_.policy().allow_barge_in) {
-            AbortSpeaking(kAbortReasonWakeWordDetected);
-            SetDeviceState(kDeviceStateIdle);
-            if (EnsureXiaolingReadyForWakeup()) {
-                xiaoling_conn_->SendWakeWordDetected(wake_word);
-                BeginWakeup(listening_mode_);
-            }
+        AbortSpeaking(kAbortReasonWakeWordDetected);
+        SetDeviceState(kDeviceStateIdle);
+        if (EnsureXiaolingReadyForWakeup()) {
+            xiaoling_conn_->SendWakeWordDetected(wake_word);
+            BeginWakeup(listening_mode_);
         }
     }
 }

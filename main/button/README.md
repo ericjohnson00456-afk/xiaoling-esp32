@@ -9,13 +9,17 @@
 `ButtonEvents::Event`，包含按键对象 `source`；短按事件还包含实际连击次数
 `click_count`，长按时该值为 0。
 
-目前 BOX3 的主按键启用事件发布，Application 统一订阅 `BUTTON_EVENT`，再转交主任务
-执行原有业务。4 次、5-7 次和长按事件当前没有业务动作，后续逻辑可直接订阅对应事件。
+目前 BOX3 的主按键启用事件发布，Application 在 `application_button.cc` 中处理
+`BUTTON_EVENT`，并转交主任务执行。单击沿用唤醒/配网逻辑，双击和四击预留，
+三击切换双工模式；恰好五击清除已保存的 Wi-Fi 凭据并在当前启动周期进入配网，
+六、七击和长按无动作。八击及以上播报提示音后复用 `SystemReset` 恢复出厂
+（清除 NVS 和 OTA 元数据并复位）。
+
 `boards/common/button.h` 保留为旧板级 include 路径的转发头。
 
 Application 检查当前设备状态并发起唤醒。
 旧板型使用的 `BoardEvents::Input::PrimaryClick/TouchDown/TouchUp` 仍走同一唤醒流程。
-配网、音频测试和 AEC 切换保留原有状态限制。
+旧板型的配网、音频测试和 AEC 输入仍保留原有状态限制。
 
 待机时单击的流程：
 

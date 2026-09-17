@@ -190,7 +190,8 @@ private:
     void HandleBoardSystemMessage(const BoardEvents::SystemMessageEvent& event);
     void HandleBoardEmotion(const BoardEvents::EmotionEvent& event);
     void HandleBoardLocalizedText(const BoardEvents::LocalizedTextEvent& event);
-    void HandleButtonEvent(int32_t event_id);
+    void HandleButtonEvent(int32_t event_id, uint8_t click_count);
+    void ClearNetworkConfiguration();
     // 恢复出厂设置：播提示音、擦除全部 NVS，等提示音播完后复位
     void StartFactoryReset();
     void FactoryResetTask();

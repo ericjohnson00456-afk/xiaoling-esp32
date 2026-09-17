@@ -30,6 +30,7 @@ public:
     void OnWakeWordDetected(std::function<void(const std::string& wake_word)> callback) override;
     void Start() override;
     void Pause();
+    bool ResetInputState();
     void Stop() override;
     size_t GetFeedSize() override;
     void EncodeWakeWordData() override;

@@ -53,6 +53,7 @@ public:
     virtual const char* GetNetworkStateIcon() override;
     virtual void SetPowerSaveLevel(PowerSaveLevel level) override;
     virtual bool EnterNetworkConfigMode() override;
+    bool ClearNetworkConfiguration() override;
     virtual AudioCodec* GetAudioCodec() override { return nullptr; }
     virtual std::string GetDeviceStatusJson() override;
 
