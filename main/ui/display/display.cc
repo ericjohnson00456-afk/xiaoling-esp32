@@ -48,6 +48,10 @@ void Display::SetNetworkIcon(const char* icon) {
     (void)icon;
 }
 
+void Display::SetDuplexMode(DuplexMode mode) {
+    (void)mode;
+}
+
 void Display::SetClockText(const char* text) {
     (void)text;
 }

@@ -12,6 +12,7 @@
 #include <memory>
 
 class LvglImage;
+enum class DuplexMode;
 
 class Display {
 public:
@@ -24,6 +25,7 @@ public:
     virtual void SetEmotion(const char* emotion);
     virtual void SetChatMessage(const char* role, const char* content);
     virtual void SetNetworkIcon(const char* icon);
+    virtual void SetDuplexMode(DuplexMode mode);
     virtual void SetClockText(const char* text);
     virtual void SetHomeVisible(bool visible);
     virtual void SetTheme(Theme* theme);

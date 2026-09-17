@@ -13,6 +13,10 @@
 #include <cstring>
 
 #include "board.h"
+#ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
+#include "resource/assets.h"
+#include "xiaoling/session/session_core.h"
+#endif
 
 #define TAG "LcdDisplay"
 
@@ -819,11 +823,23 @@ void LcdDisplay::SetupUI() {
     lv_obj_set_scrollbar_mode(top_bar_, LV_SCROLLBAR_MODE_OFF);
     lv_obj_align(top_bar_, LV_ALIGN_TOP_MID, 0, 0);
 
-    // Left icon
-    network_label_ = lv_label_create(top_bar_);
+    lv_obj_t* left_icons = lv_obj_create(top_bar_);
+    lv_obj_set_size(left_icons, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(left_icons, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(left_icons, 0, 0);
+    lv_obj_set_style_pad_all(left_icons, 0, 0);
+    lv_obj_set_style_pad_column(left_icons, lvgl_theme->spacing(2), 0);
+    lv_obj_set_flex_flow(left_icons, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(left_icons, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    network_label_ = lv_label_create(left_icons);
     lv_label_set_text(network_label_, "");
     lv_obj_set_style_text_font(network_label_, icon_font, 0);
     lv_obj_set_style_text_color(network_label_, lvgl_theme->text_color(), 0);
+
+    duplex_image_ = lv_image_create(left_icons);
+    lv_obj_set_size(duplex_image_, 18, 18);
+    lv_obj_add_flag(duplex_image_, LV_OBJ_FLAG_HIDDEN);
 
     // Home 页顶部中间固定显示时间，不与连接/监听状态文字共用控件。
     clock_label_ = lv_label_create(top_bar_);
@@ -1046,6 +1062,37 @@ void LcdDisplay::SetEmotion(const char* emotion) {
     SetPreviewImage(nullptr);
 #endif // CONFIG_USE_XIAOLING_MESSAGE_STYLE
 }
+
+#ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
+void LcdDisplay::SetDuplexMode(DuplexMode mode) {
+    DisplayLockGuard lock(this);
+    if (!lock.locked() || duplex_image_ == nullptr) {
+        return;
+    }
+    if (mode == DuplexMode::kSimplex) {
+        lv_obj_add_flag(duplex_image_, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+
+    const bool full_duplex = mode == DuplexMode::kFullDuplex;
+    const char* path = full_duplex
+        ? "/icon/duplux/ic_status_duplex_interruptible.png"
+        : "/icon/duplux/ic_status_duplex_non_interruptible.png";
+    auto& icon = full_duplex ? full_duplex_icon_ : half_duplex_icon_;
+    if (!icon) {
+        void* data = nullptr;
+        size_t size = 0;
+        if (!Assets::GetInstance().GetAssetData(path, data, size) || data == nullptr || size == 0) {
+            ESP_LOGW(TAG, "Duplex icon not found: %s", path);
+            lv_obj_add_flag(duplex_image_, LV_OBJ_FLAG_HIDDEN);
+            return;
+        }
+        icon = std::make_unique<LvglRawImage>(data, size);
+    }
+    lv_image_set_src(duplex_image_, icon->image_dsc());
+    lv_obj_remove_flag(duplex_image_, LV_OBJ_FLAG_HIDDEN);
+}
+#endif
 
 void LcdDisplay::SetTheme(Theme* theme) {
     DisplayLockGuard lock(this);

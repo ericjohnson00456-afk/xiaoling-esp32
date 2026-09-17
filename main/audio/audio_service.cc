@@ -672,17 +672,23 @@ void AudioService::PauseWakeWordDetection() {
 #endif
 }
 
-void AudioService::EnableVoiceProcessing(bool enable) {
-    if (enable == IsAudioProcessorRunning()) return;
+void AudioService::EnableAudioUpload(bool enable) {
     {
         std::lock_guard<std::mutex> lock(audio_queue_mutex_);
         uplink_enabled_ = enable;
         ++uplink_generation_;
-        audio_encode_queue_.clear();
-        audio_send_queue_.clear();
-        timestamp_queue_.clear();
+        if (!enable) {
+            audio_encode_queue_.clear();
+            audio_send_queue_.clear();
+            timestamp_queue_.clear();
+        }
         audio_queue_cv_.notify_all();
     }
+}
+
+void AudioService::EnableVoiceProcessing(bool enable) {
+    EnableAudioUpload(enable);
+    if (enable == IsAudioProcessorRunning()) return;
     ESP_LOGD(TAG, "%s voice processing", enable ? "Enabling" : "Disabling");
     if (enable) {
         if (!audio_processor_initialized_) {

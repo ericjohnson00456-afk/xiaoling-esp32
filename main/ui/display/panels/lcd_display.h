@@ -29,6 +29,11 @@ protected:
     lv_obj_t* preview_image_ = nullptr;
     lv_obj_t* emoji_label_ = nullptr;
     lv_obj_t* emoji_image_ = nullptr;
+#ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
+    lv_obj_t* duplex_image_ = nullptr;
+    std::unique_ptr<LvglRawImage> half_duplex_icon_;
+    std::unique_ptr<LvglRawImage> full_duplex_icon_;
+#endif
     std::unique_ptr<PngAnimationPlayer> animation_player_ = nullptr;
     lv_obj_t* emoji_box_ = nullptr;
     lv_obj_t* chat_message_label_ = nullptr;
@@ -62,6 +67,9 @@ public:
     virtual void SetEmotion(const char* emotion) override;
     virtual void SetChatMessage(const char* role, const char* content) override;
     virtual void SetHomeVisible(bool visible) override;
+#ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
+    virtual void SetDuplexMode(DuplexMode mode) override;
+#endif
     virtual void SetPreviewImage(std::unique_ptr<LvglImage> image) override;
 
     // Add theme switching function

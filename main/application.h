@@ -170,6 +170,7 @@ private:
     // 由 NetworkEvent::Connected/Disconnected 驱动；唤醒时区分“网络未连”和“WS 未连”。
     std::atomic_bool network_connected_{false};
     bool wake_word_restart_pending_ = false;
+    bool keep_voice_processing_on_idle_ = false;
 
 
     // Event handlers

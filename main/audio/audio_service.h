@@ -101,6 +101,7 @@ public:
 
     void EnableWakeWordDetection(bool enable);
     void PauseWakeWordDetection();
+    void EnableAudioUpload(bool enable);
     void EnableVoiceProcessing(bool enable);
     void EnableAudioTesting(bool enable);
     void EnableDeviceAec(bool enable);
