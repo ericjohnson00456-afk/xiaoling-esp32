@@ -37,6 +37,7 @@
 #define MAIN_EVENT_START_LISTENING      (1 << 10)
 #define MAIN_EVENT_STOP_LISTENING       (1 << 11)
 #define MAIN_EVENT_STATE_CHANGED        (1 << 12)
+#define MAIN_EVENT_WAKE_WORD_RESTART    (1 << 13)
 
 
 enum AecMode {
@@ -141,6 +142,7 @@ private:
     std::unique_ptr<XiaolingConn> xiaoling_conn_;
     EventGroupHandle_t event_group_ = nullptr;
     esp_timer_handle_t clock_timer_handle_ = nullptr;
+    esp_timer_handle_t wake_word_restart_timer_handle_ = nullptr;
     ListeningMode listening_mode_ = kListeningModeAutoStop;
     AecMode aec_mode_ = kAecOff;
     std::string last_error_message_;
@@ -149,6 +151,9 @@ private:
     VoiceSessionController session_controller_;
     uint32_t active_tts_session_id_ = 0;
     uint32_t iat_subscription_id_ = 0;
+    uint32_t iat_update_subscription_id_ = 0;
+    uint32_t iat_end_subscription_id_ = 0;
+    bool iat_utterance_active_ = false;
     std::unique_ptr<Ota> ota_;
 #ifdef CONFIG_LSPLATFORM
     Watchdog uplink_watchdog_{5000, "uplink"};
@@ -164,6 +169,7 @@ private:
     std::atomic_bool factory_reset_started_{false};
     // 由 NetworkEvent::Connected/Disconnected 驱动；唤醒时区分“网络未连”和“WS 未连”。
     std::atomic_bool network_connected_{false};
+    bool wake_word_restart_pending_ = false;
 
 
     // Event handlers
@@ -203,6 +209,8 @@ private:
     bool EnsureXiaolingReadyForWakeup();
     void ShowActivationCode(const std::string& code, const std::string& message, const std::string& qrcode = "");
     void SetListeningMode(ListeningMode mode);
+    void PauseWakeWordDetection();
+    bool EndListeningSessionForWakeup();
     void BeginWakeup(ListeningMode mode);
     void CancelWakeup();
 

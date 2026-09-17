@@ -83,3 +83,12 @@ void VoiceModel::SetEmotion(std::string emotion) {
         state.emotion = std::move(emotion);
     });
 }
+
+void VoiceModel::SetPrompt(std::string text) {
+    Update([&](VoiceModelState& state) {
+        state.text = std::move(text);
+        state.text_source = VoiceTextSource::kNone;
+        state.text_active = false;
+        ++state.text_revision;
+    });
+}

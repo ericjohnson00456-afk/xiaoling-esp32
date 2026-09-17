@@ -43,6 +43,8 @@ static const int kBadNetworkSampleWindowSec = 60;
 static const int kBadNetworkSampleCount = 3;
 #endif
 
+static constexpr int64_t kWakeWordPauseUs = 500 * 1000;
+
 Application::Application() {
     event_group_ = xEventGroupCreate();
 
@@ -70,15 +72,37 @@ Application::Application() {
         .skip_unhandled_events = true
     };
     esp_timer_create(&clock_timer_args, &clock_timer_handle_);
+
+    esp_timer_create_args_t wake_word_restart_timer_args = {
+        .callback = [](void* arg) {
+            auto* app = static_cast<Application*>(arg);
+            xEventGroupSetBits(app->event_group_, MAIN_EVENT_WAKE_WORD_RESTART);
+        },
+        .arg = this,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "wake_restart",
+        .skip_unhandled_events = true
+    };
+    esp_timer_create(&wake_word_restart_timer_args, &wake_word_restart_timer_handle_);
 }
 
 Application::~Application() {
     if (iat_subscription_id_ != 0) {
         XiaolingEventBus::GetInstance().Unsubscribe(iat_subscription_id_);
     }
+    if (iat_update_subscription_id_ != 0) {
+        XiaolingEventBus::GetInstance().Unsubscribe(iat_update_subscription_id_);
+    }
+    if (iat_end_subscription_id_ != 0) {
+        XiaolingEventBus::GetInstance().Unsubscribe(iat_end_subscription_id_);
+    }
     if (clock_timer_handle_ != nullptr) {
         esp_timer_stop(clock_timer_handle_);
         esp_timer_delete(clock_timer_handle_);
+    }
+    if (wake_word_restart_timer_handle_ != nullptr) {
+        esp_timer_stop(wake_word_restart_timer_handle_);
+        esp_timer_delete(wake_word_restart_timer_handle_);
     }
     vEventGroupDelete(event_group_);
 }
@@ -417,10 +441,18 @@ void Application::Run() {
         MAIN_EVENT_START_LISTENING |
         MAIN_EVENT_STOP_LISTENING |
         MAIN_EVENT_ACTIVATION_DONE |
-        MAIN_EVENT_STATE_CHANGED;
+        MAIN_EVENT_STATE_CHANGED |
+        MAIN_EVENT_WAKE_WORD_RESTART;
 
     while (true) {
         auto bits = xEventGroupWaitBits(event_group_, ALL_EVENTS, pdTRUE, pdFALSE, portMAX_DELAY);
+
+        // Resume before handling any wake event from the same batch. A new
+        // wake event can then stop and re-arm the timer without being undone.
+        if ((bits & MAIN_EVENT_WAKE_WORD_RESTART) && wake_word_restart_pending_) {
+            wake_word_restart_pending_ = false;
+            audio_service_.EnableWakeWordDetection(true);
+        }
 
         if (bits & MAIN_EVENT_ERROR) {
             SetDeviceState(kDeviceStateIdle);
@@ -931,7 +963,11 @@ void Application::HandleToggleChatEvent() {
 
         BeginWakeup(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
     } else if (state == kDeviceStateSpeaking) {
-        AbortSpeaking(kAbortReasonNone);
+        AbortSpeaking(kAbortReasonWakeWordDetected);
+        SetDeviceState(kDeviceStateIdle);
+        if (EnsureXiaolingReadyForWakeup()) {
+            BeginWakeup(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
+        }
     } else if (state == kDeviceStateListening) {
         xiaoling_conn_->SendStopListening();
     }
@@ -964,9 +1000,11 @@ void Application::HandleStartListeningEvent() {
 
         BeginWakeup(kListeningModeManualStop);
     } else if (state == kDeviceStateSpeaking) {
-        AbortSpeaking(kAbortReasonNone);
+        AbortSpeaking(kAbortReasonWakeWordDetected);
         SetDeviceState(kDeviceStateIdle);
-        BeginWakeup(kListeningModeManualStop);
+        if (EnsureXiaolingReadyForWakeup()) {
+            BeginWakeup(kListeningModeManualStop);
+        }
     }
 }
 
@@ -990,25 +1028,33 @@ void Application::HandleStopListeningEvent() {
 }
 
 void Application::HandleWakeWordDetectedEvent() {
+    PauseWakeWordDetection();
     if (!xiaoling_conn_) {
-        audio_service_.EnableWakeWordDetection(true);
         return;
     }
 
     auto state = GetDeviceState();
+    if (state == kDeviceStateListening && iat_utterance_active_) {
+        // A partial ASR result means the current utterance is still in progress.
+        // Do not discard it on a local wake-word candidate.
+        ESP_LOGW(TAG, "Ignoring wake word during an active IAT utterance");
+        return;
+    }
 
-    if (state == kDeviceStateIdle) {
+    if (state == kDeviceStateIdle || state == kDeviceStateListening) {
 #if CONFIG_SEND_WAKE_WORD_DATA
         audio_service_.EncodeWakeWord();
 #endif
 
         if (!EnsureXiaolingReadyForWakeup()) {
-            audio_service_.EnableWakeWordDetection(true);
             return;
         }
 
         auto wake_word = audio_service_.GetLastWakeWord();
         ESP_LOGI(TAG, "Wake word detected: %s", wake_word.c_str());
+        if (state == kDeviceStateListening && !EndListeningSessionForWakeup()) {
+            return;
+        }
         xiaoling_conn_->SendWakeWordDetected(wake_word);
 #if CONFIG_SEND_WAKE_WORD_DATA
         // lschat 在 started 前不接收音频，客户端会暂存这些唤醒词数据。
@@ -1020,20 +1066,26 @@ void Application::HandleWakeWordDetectedEvent() {
     } else if (state == kDeviceStateSpeaking) {
         if (session_controller_.policy().allow_barge_in) {
             AbortSpeaking(kAbortReasonWakeWordDetected);
+            SetDeviceState(kDeviceStateIdle);
+            if (EnsureXiaolingReadyForWakeup()) {
+                xiaoling_conn_->SendWakeWordDetected(audio_service_.GetLastWakeWord());
+                BeginWakeup(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
+            }
         }
     } else if (state == kDeviceStateActivating) {
         // Restart the activation check if the wake word is detected during activation
         SetDeviceState(kDeviceStateIdle);
     }
-    audio_service_.EnableWakeWordDetection(true);
 }
 
 void Application::AbortSpeaking(AbortReason reason) {
     ESP_LOGI(TAG, "Abort speaking");
     aborted_ = true;
-    audio_player_.Stop(reason == kAbortReasonWakeWordDetected
-                           ? PlaybackEndReason::kPreempted
-                           : PlaybackEndReason::kCancelled);
+    if (reason == kAbortReasonWakeWordDetected) {
+        audio_player_.StopNonMusic(PlaybackEndReason::kPreempted);
+    } else {
+        audio_player_.Stop(PlaybackEndReason::kCancelled);
+    }
     if (xiaoling_conn_) {
         xiaoling_conn_->SendAbortSpeaking(reason);
     }
@@ -1129,6 +1181,7 @@ void Application::BeginWakeup(ListeningMode mode) {
     if (!SetDeviceState(kDeviceStateConnecting)) {
         return;
     }
+    iat_utterance_active_ = false;
     audio_service_.EnableVoiceProcessing(false);
     audio_player_.PlayWakeup([this, mode](bool proceed) {
         if (GetDeviceState() != kDeviceStateConnecting) {
@@ -1154,16 +1207,65 @@ void Application::BeginWakeup(ListeningMode mode) {
             }
         });
     });
-    iat_subscription_id_ = XiaolingEventBus::GetInstance().Subscribe(
-        XIAOLING_IAT_START, [this](const XiaolingEvent&) {
-            Schedule([this]() {
-                if (session_controller_.policy().allow_barge_in && audio_player_.IsPlaying()) {
-                    // In full duplex, keep the cloud session and stop only the
-                    // local TTS output when the server recognizes barge-in.
-                    audio_player_.Stop(PlaybackEndReason::kPreempted);
-                }
+    if (iat_subscription_id_ == 0) {
+        iat_subscription_id_ = XiaolingEventBus::GetInstance().Subscribe(
+            XIAOLING_IAT_START, [this](const XiaolingEvent& event) {
+                Schedule([this, text = event.text]() {
+                    iat_utterance_active_ = !text.empty();
+                    if (session_controller_.policy().allow_barge_in &&
+                        !audio_player_.IsWakeupPending() &&
+                        GetDeviceState() == kDeviceStateSpeaking && audio_player_.IsPlaying()) {
+                        // In full duplex, keep the cloud session and stop only the
+                        // local TTS output when the server recognizes barge-in.
+                        audio_player_.StopNonMusic(PlaybackEndReason::kPreempted);
+                    }
+                });
             });
-        });
+        iat_update_subscription_id_ = XiaolingEventBus::GetInstance().Subscribe(
+            XIAOLING_IAT_UPDATE, [this](const XiaolingEvent& event) {
+                Schedule([this, text = event.text]() {
+                    if (!text.empty()) {
+                        iat_utterance_active_ = true;
+                    }
+                });
+            });
+        iat_end_subscription_id_ = XiaolingEventBus::GetInstance().Subscribe(
+            XIAOLING_IAT_END, [this](const XiaolingEvent&) {
+                Schedule([this]() { iat_utterance_active_ = false; });
+            });
+    }
+}
+
+bool Application::EndListeningSessionForWakeup() {
+    ESP_LOGI(TAG, "Wake word detected while recording; end the current session");
+    iat_utterance_active_ = false;
+    audio_service_.EnableVoiceProcessing(false);
+    session_controller_.EndSession();
+    if (!xiaoling_conn_ || !xiaoling_conn_->EndSession()) {
+        ESP_LOGE(TAG, "Failed to report the current session end before wakeup");
+        SetDeviceState(kDeviceStateIdle);
+        return false;
+    }
+    return SetDeviceState(kDeviceStateIdle);
+}
+
+void Application::PauseWakeWordDetection() {
+    audio_service_.PauseWakeWordDetection();
+    wake_word_restart_pending_ = true;
+
+    if (wake_word_restart_timer_handle_ == nullptr) {
+        wake_word_restart_pending_ = false;
+        audio_service_.EnableWakeWordDetection(true);
+        return;
+    }
+
+    esp_timer_stop(wake_word_restart_timer_handle_);
+    const auto err = esp_timer_start_once(wake_word_restart_timer_handle_, kWakeWordPauseUs);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start wake word pause timer: %s", esp_err_to_name(err));
+        wake_word_restart_pending_ = false;
+        audio_service_.EnableWakeWordDetection(true);
+    }
 }
 
 void Application::CancelWakeup() {
@@ -1232,7 +1334,9 @@ void Application::HandleStateChangedEvent() {
             UiEvents::PostDismissOverlays();
 #endif // CONFIG_LSPLATFORM
             audio_service_.EnableVoiceProcessing(false);
-            audio_service_.EnableWakeWordDetection(true);
+            if (!wake_word_restart_pending_) {
+                audio_service_.EnableWakeWordDetection(true);
+            }
 #ifdef CONFIG_LSPLATFORM
             uplink_watchdog_.Stop();
             downlink_watchdog_.Stop();
@@ -1249,6 +1353,7 @@ void Application::HandleStateChangedEvent() {
             session_controller_.StartListening(listening_mode_ == kListeningModeRealtime);
             UiEvents::PostStatus(UiEvents::Status::Listening);
             UiEvents::PostEmotion("wakeup");
+            UiEvents::PostVoicePrompt(Lang::Strings::PLEASE_SPEAK);
 #ifdef CONFIG_LSPLATFORM
             UiEvents::PostDismissOverlays();
 #endif // CONFIG_LSPLATFORM
@@ -1279,7 +1384,9 @@ void Application::HandleStateChangedEvent() {
             if (!audio_player_.IsPlaying()) {
                 audio_service_.ResetDecoder();
             }
-            audio_service_.EnableWakeWordDetection(true);
+            if (!wake_word_restart_pending_) {
+                audio_service_.EnableWakeWordDetection(true);
+            }
             break;
         case kDeviceStateWifiConfiguring:
             audio_service_.EnableVoiceProcessing(false);
@@ -1364,21 +1471,24 @@ bool Application::UpgradeFirmware(const std::string& url, const std::string& ver
 }
 
 void Application::WakeWordInvoke(const std::string& wake_word) {
+    PauseWakeWordDetection();
     if (!xiaoling_conn_) {
         return;
     }
 
     auto state = GetDeviceState();
 
-    if (state == kDeviceStateIdle) {
+    if (state == kDeviceStateIdle || state == kDeviceStateListening) {
         audio_service_.EncodeWakeWord();
 
         if (!EnsureXiaolingReadyForWakeup()) {
-            audio_service_.EnableWakeWordDetection(true);
             return;
         }
 
         ESP_LOGI(TAG, "Wake word detected: %s", wake_word.c_str());
+        if (state == kDeviceStateListening && !EndListeningSessionForWakeup()) {
+            return;
+        }
         xiaoling_conn_->SendWakeWordDetected(wake_word);
 #if CONFIG_USE_AFE_WAKE_WORD || CONFIG_USE_CUSTOM_WAKE_WORD
         // lschat 在 started 前不接收音频，客户端会暂存这些唤醒词数据。
@@ -1388,15 +1498,14 @@ void Application::WakeWordInvoke(const std::string& wake_word) {
 #endif
         BeginWakeup(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
     } else if (state == kDeviceStateSpeaking) {
-        Schedule([this]() {
-            AbortSpeaking(kAbortReasonNone);
-        });
-    } else if (state == kDeviceStateListening) {
-        Schedule([this]() {
-            if (xiaoling_conn_) {
-                xiaoling_conn_->Disconnect();
+        if (session_controller_.policy().allow_barge_in) {
+            AbortSpeaking(kAbortReasonWakeWordDetected);
+            SetDeviceState(kDeviceStateIdle);
+            if (EnsureXiaolingReadyForWakeup()) {
+                xiaoling_conn_->SendWakeWordDetected(wake_word);
+                BeginWakeup(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
             }
-        });
+        }
     }
 }
 

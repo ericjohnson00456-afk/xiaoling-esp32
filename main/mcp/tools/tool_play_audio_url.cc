@@ -29,7 +29,7 @@ MCP_REGISTER_TOOL(RegisterPlayAudioUrl, McpToolGroup::kCommon, 21) {
                    cJSON *url_item = cJSON_IsObject(item) ? cJSON_GetObjectItem(item, "url") : nullptr;
                    if (cJSON_IsString(url_item) && url_item->valuestring) url = url_item->valuestring;
                    cJSON_Delete(root);
-                   if (Application::GetInstance().GetAudioPlayer().PlayTtsUrl(url) == 0)
+                   if (Application::GetInstance().GetAudioPlayer().PlayMusicUrl(url) == 0)
                      throw std::runtime_error("提交音频播放失败");
                    return std::string("播放成功");
                  });

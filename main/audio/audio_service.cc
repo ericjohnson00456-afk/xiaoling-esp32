@@ -520,18 +520,20 @@ bool AudioService::PushPcmToPlaybackQueue(const uint8_t* data, size_t size, int 
     task->pcm.resize(size / sizeof(int16_t));
     std::memcpy(task->pcm.data(), data, size);
 
-    /* 外部 PCM 源（如 TTS URL 播放器）的采样率可能与 codec 输出采样率不一致，按需重采样。
-       该函数只会被播放器任务调用，重采样器状态无并发竞争。 */
-    if (codec_ != nullptr && sample_rate > 0 && sample_rate != codec_->output_sample_rate()) {
-        if (player_resampler_input_rate_ != sample_rate ||
-            player_resampler_.output_sample_rate() != codec_->output_sample_rate()) {
-            player_resampler_.Configure(sample_rate, codec_->output_sample_rate());
-            player_resampler_input_rate_ = sample_rate;
+    /* 两个播放器任务在通道切换时可能交接，重采样状态必须串行访问。 */
+    {
+        std::lock_guard<std::mutex> lock(player_resampler_mutex_);
+        if (codec_ != nullptr && sample_rate > 0 && sample_rate != codec_->output_sample_rate()) {
+            if (player_resampler_input_rate_ != sample_rate ||
+                player_resampler_.output_sample_rate() != codec_->output_sample_rate()) {
+                player_resampler_.Configure(sample_rate, codec_->output_sample_rate());
+                player_resampler_input_rate_ = sample_rate;
+            }
+            int target_size = player_resampler_.GetOutputSamples(task->pcm.size());
+            std::vector<int16_t> resampled(target_size);
+            player_resampler_.Process(task->pcm.data(), task->pcm.size(), resampled.data());
+            task->pcm = std::move(resampled);
         }
-        int target_size = player_resampler_.GetOutputSamples(task->pcm.size());
-        std::vector<int16_t> resampled(target_size);
-        player_resampler_.Process(task->pcm.data(), task->pcm.size(), resampled.data());
-        task->pcm = std::move(resampled);
     }
 
     std::unique_lock<std::mutex> lock(audio_queue_mutex_);
@@ -656,6 +658,18 @@ void AudioService::EnableWakeWordDetection(bool enable) {
         xEventGroupClearBits(event_group_, AS_EVENT_WAKE_WORD_RUNNING);
         wake_word_->Stop();
     }
+}
+
+void AudioService::PauseWakeWordDetection() {
+#if CONFIG_USE_MICRO_WAKE_WORD
+    if (!wake_word_) {
+        return;
+    }
+    xEventGroupClearBits(event_group_, AS_EVENT_WAKE_WORD_RUNNING);
+    static_cast<MicroWakeWord*>(wake_word_.get())->Pause();
+#else
+    EnableWakeWordDetection(false);
+#endif
 }
 
 void AudioService::EnableVoiceProcessing(bool enable) {
@@ -839,7 +853,7 @@ bool AudioService::IsIdle() {
 }
 
 void AudioService::ResetDecoder() {
-    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    std::scoped_lock lock(player_resampler_mutex_, audio_queue_mutex_);
     opus_decoder_->ResetState();
     /* 新播放会话以干净的重采样状态开始，避免上一段音频的残留相位 */
     player_resampler_input_rate_ = 0;
@@ -874,6 +888,10 @@ void AudioService::SetMicroWakeWordModel(const void* model_data, size_t model_si
     wake_word_ = std::make_unique<MicroWakeWord>(model_data, model_size);
     wake_word_name_ = wake_word;
     wake_word_->OnWakeWordDetected([this](const std::string& wake_word) {
+        // The callback runs under MicroWakeWord's model lock, so Stop() would
+        // deadlock here. Stop feeding immediately; the application task will
+        // stop the model and restart it after the wake-word cooldown.
+        xEventGroupClearBits(event_group_, AS_EVENT_WAKE_WORD_RUNNING);
         if (callbacks_.on_wake_word_detected) {
             callbacks_.on_wake_word_detected(wake_word);
         }

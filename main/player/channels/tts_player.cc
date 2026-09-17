@@ -54,6 +54,9 @@ uint32_t TtsPlayer::PlayUrlInternal(const std::string& url, bool notify) {
         ESP_LOGE(TAG, "拒绝无效的 TTS URL, bytes=%u", static_cast<unsigned>(url.size()));
         return 0;
     }
+    if (admission_callback_ && !admission_callback_()) {
+        return 0;
+    }
     if (notify && url_callback_) {
         url_callback_();
     }
@@ -68,6 +71,10 @@ uint32_t TtsPlayer::PlayUrlInternal(const std::string& url, bool notify) {
 
 void TtsPlayer::SetUrlCallback(UrlCallback callback) {
     url_callback_ = std::move(callback);
+}
+
+void TtsPlayer::SetAdmissionCallback(AdmissionCallback callback) {
+    admission_callback_ = std::move(callback);
 }
 
 void TtsPlayer::Cancel(PlayerEngine& engine) {

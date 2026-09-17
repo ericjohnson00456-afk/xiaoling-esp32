@@ -42,6 +42,7 @@ namespace Lang {
         constexpr const char* OTA_UPGRADE = "OTA 升级";
         constexpr const char* PIN_ERROR = "请插入 SIM 卡";
         constexpr const char* PLEASE_WAIT = "请稍候...";
+        constexpr const char* PLEASE_SPEAK = "请说话";
         constexpr const char* REGISTERING_NETWORK = "等待网络...";
         constexpr const char* REG_ERROR = "无法接入网络，请检查流量卡状态";
         constexpr const char* RTC_MODE_OFF = "AEC 关闭";

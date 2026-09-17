@@ -29,6 +29,7 @@ public:
     void Feed(const std::vector<int16_t>& data) override;
     void OnWakeWordDetected(std::function<void(const std::string& wake_word)> callback) override;
     void Start() override;
+    void Pause();
     void Stop() override;
     size_t GetFeedSize() override;
     void EncodeWakeWordData() override;

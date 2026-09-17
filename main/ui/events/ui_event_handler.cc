@@ -101,6 +101,13 @@ void OnChatMessageChanged(void*, esp_event_base_t, int32_t, void* event_data) {
     });
 }
 
+void OnVoicePromptChanged(void*, esp_event_base_t, int32_t, void* event_data) {
+    const auto event = *static_cast<const UiEvents::VoicePromptEvent*>(event_data);
+    UiManager::GetInstance().Dispatch([event]() {
+        VoiceModel::GetInstance().SetPrompt(event.text);
+    });
+}
+
 void OnEmotionChanged(void*, esp_event_base_t, int32_t, void* event_data) {
     const auto event = *static_cast<const UiEvents::EmotionEvent*>(event_data);
     UiManager::GetInstance().Dispatch([event]() {
@@ -237,6 +244,11 @@ esp_err_t Initialize() {
     ret = esp_event_handler_register(UI_EVENT, UiEvents::kChatMessageChanged, &OnChatMessageChanged, nullptr);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to register chat message event handler: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    ret = esp_event_handler_register(UI_EVENT, UiEvents::kVoicePromptChanged, &OnVoicePromptChanged, nullptr);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register voice prompt handler: %s", esp_err_to_name(ret));
         return ret;
     }
     ret = esp_event_handler_register(UI_EVENT, UiEvents::kEmotionChanged, &OnEmotionChanged, nullptr);

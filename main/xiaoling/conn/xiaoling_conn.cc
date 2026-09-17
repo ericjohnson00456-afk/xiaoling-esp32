@@ -117,6 +117,10 @@ void XiaolingConn::SendStopListening() {
     }
 }
 
+bool XiaolingConn::EndSession() {
+    return voice_ != nullptr && voice_->EndSession();
+}
+
 void XiaolingConn::SendAbortSpeaking(AbortReason reason) {
     if (voice_ != nullptr) {
         voice_->SendAbortSpeaking(reason);

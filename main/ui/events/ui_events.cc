@@ -58,6 +58,14 @@ esp_err_t PostChatMessage(std::string_view role, std::string_view content) {
     return esp_event_post(UI_EVENT, kChatMessageChanged, &event, sizeof(event), portMAX_DELAY);
 }
 
+esp_err_t PostVoicePrompt(std::string_view text) {
+    VoicePromptEvent event{.text = {}};
+    const size_t length = std::min(text.size(), sizeof(event.text) - 1);
+    std::memcpy(event.text, text.data(), length);
+    event.text[length] = '\0';
+    return esp_event_post(UI_EVENT, kVoicePromptChanged, &event, sizeof(event), portMAX_DELAY);
+}
+
 esp_err_t PostEmotion(std::string_view emotion) {
     EmotionEvent event{.emotion = {}};
     const size_t length = std::min(emotion.size(), sizeof(event.emotion) - 1);

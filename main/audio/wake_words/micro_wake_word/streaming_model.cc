@@ -186,6 +186,16 @@ void StreamingModel::ResetProbabilities() {
     last_n_index_ = 0;
 }
 
+bool StreamingModel::ResetState() {
+    std::lock_guard<std::mutex> lock(inference_mutex_);
+    if (!model_loaded_.load() || !interpreter_ || interpreter_->Reset() != kTfLiteOk) {
+        return false;
+    }
+    current_stride_step_ = 0;
+    ResetProbabilities();
+    return true;
+}
+
 bool StreamingModel::LoadModel(tflite::MicroMutableOpResolver<20> &op_resolver) {
     std::lock_guard<std::mutex> lock(inference_mutex_);
 

@@ -13,6 +13,7 @@ class AudioService;
 class PlayerEngine;
 class TonePlayer;
 class TtsPlayer;
+class MusicPlayer;
 
 class AudioPlayer {
 public:
@@ -27,6 +28,7 @@ public:
 
     bool Initialize(AudioService* audio_service);
     uint32_t PlayTtsUrl(const std::string& url);
+    uint32_t PlayMusicUrl(const std::string& url);
     uint32_t PlayTone(uint16_t tone_id);
     void PlayWakeup(std::function<void(bool)> completion);
     void CancelWakeup();
@@ -34,6 +36,7 @@ public:
     bool Pause();
     bool Resume();
     bool Stop(PlaybackEndReason reason = PlaybackEndReason::kCancelled);
+    bool StopNonMusic(PlaybackEndReason reason = PlaybackEndReason::kPreempted);
     bool IsPlaying() const;
     void DispatchPlaybackEvent(const PlaybackEvent& event);
     void SetEventCallback(EventCallback callback);
@@ -41,10 +44,15 @@ public:
 
 private:
     void HandleEngineEvent(const PlaybackEvent& event);
+    bool PauseMusic();
 
+    AudioService* audio_service_ = nullptr;
     std::unique_ptr<PlayerEngine> engine_;
+    std::unique_ptr<PlayerEngine> music_engine_;
     std::unique_ptr<TonePlayer> tone_channel_;
     std::unique_ptr<TtsPlayer> tts_channel_;
+    std::unique_ptr<MusicPlayer> music_channel_;
+    std::atomic_bool wakeup_in_progress_{false};
     std::atomic<uint32_t> next_session_id_{1};
     mutable std::mutex callback_mutex_;
     EventCallback event_callback_;

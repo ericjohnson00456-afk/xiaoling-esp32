@@ -41,6 +41,7 @@ public:
     void SendWakeWordDetected(const std::string& wake_word);
     void SendStartListening(ListeningMode mode);
     void SendStopListening();
+    bool EndSession();
     void SendAbortSpeaking(AbortReason reason);
     void SendMcpMessage(const std::string& message);
     void SetNarrowbandMode(bool enabled);

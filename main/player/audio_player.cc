@@ -2,7 +2,9 @@
 
 #include "channels/tone_player.h"
 #include "channels/tts_player.h"
+#include "channels/music_player.h"
 #include "engine/gmf_player_engine.h"
+#include "audio_service.h"
 
 #include <esp_log.h>
 
@@ -25,6 +27,7 @@ bool AudioPlayer::Initialize(AudioService* audio_service) {
         ESP_LOGE(TAG, "播放器引擎初始化失败");
         return false;
     }
+    audio_service_ = audio_service;
     engine_ = std::move(engine);
     tone_channel_ = std::make_unique<TonePlayer>(*engine_, [this]() {
         return next_session_id_.fetch_add(1);
@@ -33,10 +36,17 @@ bool AudioPlayer::Initialize(AudioService* audio_service) {
         return next_session_id_.fetch_add(1);
     });
     tts_channel_->SetUrlCallback([this]() {
-        std::lock_guard<std::mutex> lock(callback_mutex_);
-        if (tts_url_callback_) {
-            tts_url_callback_();
+        TtsUrlCallback callback;
+        {
+            std::lock_guard<std::mutex> lock(callback_mutex_);
+            callback = tts_url_callback_;
         }
+        if (callback) {
+            callback();
+        }
+    });
+    tts_channel_->SetAdmissionCallback([this]() {
+        return !wakeup_in_progress_ && PauseMusic();
     });
     return true;
 }
@@ -49,26 +59,63 @@ uint32_t AudioPlayer::PlayTtsUrl(const std::string& url) {
     return tts_channel_->PlayUrl(url);
 }
 
+uint32_t AudioPlayer::PlayMusicUrl(const std::string& url) {
+    if (engine_ == nullptr || audio_service_ == nullptr || wakeup_in_progress_ ||
+        !TtsPlayer::IsHttpUrl(url)) {
+        return 0;
+    }
+    if (music_engine_ == nullptr) {
+        auto engine = std::make_unique<GmfPlayerEngine>();
+        if (!engine->Initialize(audio_service_, [this](const PlaybackEvent& event) {
+                HandleEngineEvent(event);
+            })) {
+            return 0;
+        }
+        music_engine_ = std::move(engine);
+        music_channel_ = std::make_unique<MusicPlayer>(*music_engine_, [this]() {
+            return next_session_id_.fetch_add(1);
+        });
+    }
+    if (!StopNonMusic(PlaybackEndReason::kPreempted)) {
+        return 0;
+    }
+    return music_channel_->PlayUrl(url);
+}
+
 uint32_t AudioPlayer::PlayTone(uint16_t tone_id) {
-    if (engine_ == nullptr || tone_channel_ == nullptr) {
-        ESP_LOGE(TAG, "播放器尚未初始化");
+    if (engine_ == nullptr || tone_channel_ == nullptr || wakeup_in_progress_) {
+        ESP_LOGW(TAG, "播放器不可用或唤醒提示音正在播放");
+        return 0;
+    }
+    if (!PauseMusic()) {
         return 0;
     }
     return tone_channel_->PlayTone(tone_id);
 }
 
 void AudioPlayer::PlayWakeup(std::function<void(bool)> completion) {
-    if (tone_channel_ != nullptr) {
-        tone_channel_->PlayWakeup(std::move(completion));
-    } else if (completion) {
-        completion(true);
+    wakeup_in_progress_ = true;
+    if (!PauseMusic() || !StopNonMusic(PlaybackEndReason::kPreempted)) {
+        wakeup_in_progress_ = false;
+        if (completion) completion(false);
+        return;
     }
+    if (tone_channel_ == nullptr) {
+        wakeup_in_progress_ = false;
+        if (completion) completion(true);
+        return;
+    }
+    tone_channel_->PlayWakeup([this, completion = std::move(completion)](bool proceed) {
+        wakeup_in_progress_ = false;
+        if (completion) completion(proceed);
+    });
 }
 
 void AudioPlayer::CancelWakeup() {
     if (tone_channel_ != nullptr) {
         tone_channel_->CancelWakeup();
     }
+    wakeup_in_progress_ = false;
 }
 
 bool AudioPlayer::IsWakeupPending() const {
@@ -76,19 +123,35 @@ bool AudioPlayer::IsWakeupPending() const {
 }
 
 bool AudioPlayer::Pause() {
-    return engine_ != nullptr && engine_->Pause();
+    if (engine_ != nullptr && engine_->IsPlaying()) {
+        return engine_->Pause();
+    }
+    return music_channel_ != nullptr && music_channel_->IsAudible() && PauseMusic();
 }
 
 bool AudioPlayer::Resume() {
-    return engine_ != nullptr && engine_->Resume();
+    if (wakeup_in_progress_) {
+        return false;
+    }
+    if (engine_ != nullptr && engine_->IsPlaying()) {
+        return engine_->Resume();
+    }
+    return music_channel_ != nullptr && music_channel_->Resume();
 }
 
 bool AudioPlayer::Stop(PlaybackEndReason reason) {
+    const bool main_stopped = StopNonMusic(reason);
+    const bool music_stopped = music_engine_ == nullptr || music_engine_->Stop(reason);
+    return main_stopped && music_stopped;
+}
+
+bool AudioPlayer::StopNonMusic(PlaybackEndReason reason) {
     return engine_ == nullptr || engine_->Stop(reason);
 }
 
 bool AudioPlayer::IsPlaying() const {
-    return engine_ != nullptr && engine_->IsPlaying();
+    return (engine_ != nullptr && engine_->IsPlaying()) ||
+           (music_channel_ != nullptr && music_channel_->IsAudible());
 }
 
 void AudioPlayer::DispatchPlaybackEvent(const PlaybackEvent& event) {
@@ -98,6 +161,21 @@ void AudioPlayer::DispatchPlaybackEvent(const PlaybackEvent& event) {
     if (tts_channel_ != nullptr && event.channel == tts_channel_->Type()) {
         tts_channel_->OnEvent(event);
     }
+    if (music_channel_ != nullptr && event.channel == music_channel_->Type()) {
+        music_channel_->OnEvent(event);
+    }
+}
+
+bool AudioPlayer::PauseMusic() {
+    if (music_channel_ == nullptr || !music_channel_->IsAudible()) {
+        return true;
+    }
+    if (!music_channel_->Pause()) {
+        ESP_LOGE(TAG, "暂停音乐失败，停止音乐以避免覆盖提示音");
+        return music_engine_->Stop(PlaybackEndReason::kPreempted);
+    }
+    audio_service_->ClearPlaybackQueue();
+    return true;
 }
 
 void AudioPlayer::SetEventCallback(EventCallback callback) {

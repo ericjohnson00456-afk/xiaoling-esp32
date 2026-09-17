@@ -30,6 +30,9 @@ namespace micro_wake_word {
         /// @brief Sets all recent_streaming_probabilities to 0
         void ResetProbabilities();
 
+        /// @brief Resets streaming inference state while keeping the model loaded
+        bool ResetState();
+
         /// @brief Allocates tensor and variable arenas and sets up the model interpreter
         /// @param op_resolver MicroMutableOpResolver object that must exist until the model is unloaded
         /// @return True if successful, false otherwise

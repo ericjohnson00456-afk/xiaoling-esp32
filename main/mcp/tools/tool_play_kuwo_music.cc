@@ -34,8 +34,8 @@ MCP_REGISTER_TOOL(RegisterPlayKuwoMusic, McpToolGroup::kCommon, 20) {
                    }
                    cJSON_Delete(root);
                    // The current ESP32 protocol has no Kuwo item-id transport.
-                   // If the server supplies a resolved URL, use the normal player.
-                   if (!url.empty() && Application::GetInstance().GetAudioPlayer().PlayTtsUrl(url) == 0)
+                   // A resolved URL belongs to the resumable music channel.
+                   if (!url.empty() && Application::GetInstance().GetAudioPlayer().PlayMusicUrl(url) == 0)
                      throw std::runtime_error("提交酷我音乐播放失败");
                    return std::string("已提交播放请求");
                  });

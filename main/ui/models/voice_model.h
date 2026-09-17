@@ -26,6 +26,7 @@ public:
     static VoiceModel& GetInstance();
 
     void SetEmotion(std::string emotion);
+    void SetPrompt(std::string text);
 
 private:
     VoiceModel();

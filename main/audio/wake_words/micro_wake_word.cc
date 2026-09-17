@@ -26,8 +26,6 @@ MicroWakeWord::MicroWakeWord(const void* model_data, size_t model_size) : model_
 
 MicroWakeWord::~MicroWakeWord() {
     Stop();
-    DeallocateBuffers();
-    UnloadModels();
 }
 
 bool MicroWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list) {
@@ -121,7 +119,6 @@ void MicroWakeWord::Feed(const std::vector<int16_t>& data) {
         UpdateModelProbabilities();
         
         if (DetectWakeWords()) {
-            ESP_LOGI(TAG, "Wake Word '%s' Detected", detected_wake_word_.c_str());
             last_detected_wake_word_ = detected_wake_word_;
             detected_ = true;
             
@@ -153,7 +150,22 @@ void MicroWakeWord::Start() {
         return;
     }
 
-    if (!LoadModels() || !AllocateBuffers()) {
+    if (models_loaded_) {
+        if (!frontend_initialized_) {
+            UnloadModels();
+        } else {
+            FrontendReset(&frontend_state_);
+            for (auto& model : wake_word_models_) {
+                if (!model || !model->ResetState()) {
+                    ESP_LOGE(TAG, "Failed to reset wake word model; reloading");
+                    UnloadModels();
+                    break;
+                }
+            }
+        }
+    }
+
+    if ((!models_loaded_ && !LoadModels()) || !AllocateBuffers()) {
         ESP_LOGE(TAG, "Failed to load models or allocate buffers");
         return;
     }
@@ -163,16 +175,27 @@ void MicroWakeWord::Start() {
     ESP_LOGI(TAG, "MicroWakeWord started");
 }
 
-void MicroWakeWord::Stop() {
+void MicroWakeWord::Pause() {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!running_) {
         return;
     }
 
     running_ = false;
-    UnloadModels();
+    ESP_LOGI(TAG, "MicroWakeWord paused");
+}
+
+void MicroWakeWord::Stop() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    bool was_running = running_;
+    running_ = false;
+    if (models_loaded_ || frontend_initialized_) {
+        UnloadModels();
+    }
     DeallocateBuffers();
-    ESP_LOGI(TAG, "MicroWakeWord stopped");
+    if (was_running) {
+        ESP_LOGI(TAG, "MicroWakeWord stopped");
+    }
 }
 
 size_t MicroWakeWord::GetFeedSize() {
@@ -319,7 +342,7 @@ bool MicroWakeWord::DetectWakeWords() {
         if (model->DetermineDetected()) {
             detected_wake_word_ = model->GetWakeWord();
             ignore_windows_ = -MIN_SLICES_BEFORE_DETECTION; // Reset ignore counter
-            ESP_LOGI(TAG, "WAKE WORD DETECTED: '%s'", detected_wake_word_.c_str());
+            ESP_LOGI(TAG, "Wake word candidate: '%s'", detected_wake_word_.c_str());
             return true;
         }
     }

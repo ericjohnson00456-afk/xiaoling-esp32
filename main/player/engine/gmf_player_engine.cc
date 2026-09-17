@@ -121,8 +121,9 @@ bool GmfPlayerEngine::Play(const PlaybackRequest& request) {
         playing_ = true;
     }
 
-    ESP_LOGI(TAG, "开始流式播放: session=%lu, channel=tts, host=%s, url_bytes=%u",
-             static_cast<unsigned long>(request.session_id), UrlHostForLog(request.source).c_str(),
+    ESP_LOGI(TAG, "开始流式播放: session=%lu, channel=%d, host=%s, url_bytes=%u",
+             static_cast<unsigned long>(request.session_id), static_cast<int>(request.channel),
+             UrlHostForLog(request.source).c_str(),
              static_cast<unsigned>(request.source.size()));
     const auto result = esp_audio_simple_player_run(handle_, request.source.c_str(), nullptr);
     if (result == ESP_GMF_ERR_OK) {

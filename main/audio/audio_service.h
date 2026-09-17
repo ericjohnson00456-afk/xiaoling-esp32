@@ -100,6 +100,7 @@ public:
     bool IsAfeWakeWord();
 
     void EnableWakeWordDetection(bool enable);
+    void PauseWakeWordDetection();
     void EnableVoiceProcessing(bool enable);
     void EnableAudioTesting(bool enable);
     void EnableDeviceAec(bool enable);
@@ -146,6 +147,7 @@ private:
     /* TTS URL 播放器等外部 PCM 源的采样率与 codec 输出采样率可能不一致，由它按需重采样 */
     OpusResampler player_resampler_;
     int player_resampler_input_rate_ = 0; // 0 表示尚未配置
+    std::mutex player_resampler_mutex_;
     DebugStatistics debug_statistics_;
     srmodel_list_t* models_list_ = nullptr;
 

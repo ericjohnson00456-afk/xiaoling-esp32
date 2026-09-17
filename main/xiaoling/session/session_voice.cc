@@ -195,6 +195,20 @@ void XiaolingSessionVoice::SendStopListening() {
     }
 }
 
+bool XiaolingSessionVoice::EndSession() {
+    const bool was_active = session_active_.load();
+    const bool sent = !was_active ||
+        (text_sender_ && text_sender_("{\"action\":\"end\"}"));
+
+    audio_upload_enabled_ = false;
+    pending_wake_word_.clear();
+    pending_wake_audio_.clear();
+    uplink_audio_format_checked_ = false;
+    SetSessionActive(false);
+    ResetResultState();
+    return sent;
+}
+
 void XiaolingSessionVoice::SendAbortSpeaking(AbortReason reason) {
     (void)reason;
     if (session_active_ && text_sender_ && text_sender_("{\"action\":\"cancel\"}")) {
