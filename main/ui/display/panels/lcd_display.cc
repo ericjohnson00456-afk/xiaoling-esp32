@@ -1094,6 +1094,55 @@ void LcdDisplay::SetDuplexMode(DuplexMode mode) {
 }
 #endif
 
+void LcdDisplay::ShowEmotionOnce(const char* emotion) {
+#ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
+    if (emotion == nullptr || emoji_image_ == nullptr) {
+        return;
+    }
+
+#ifdef CONFIG_LSPLATFORM
+    // A one-shot emoji replaces an image currently shown on the Home page.
+    DismissImage();
+#endif
+
+    auto* lvgl_theme = static_cast<LvglTheme*>(current_theme_);
+    auto emoji_model = lvgl_theme != nullptr ? lvgl_theme->emoji_model() : nullptr;
+    const EmojiAnimation* animation = emoji_model != nullptr ? emoji_model->GetAnimation(emotion) : nullptr;
+    if (animation == nullptr) {
+        auto xl_emoji = xl_emoji_mappings.find(emotion);
+        if (xl_emoji != xl_emoji_mappings.end()) {
+            emotion = xl_emoji->second.c_str();
+            animation = emoji_model != nullptr ? emoji_model->GetAnimation(emotion) : nullptr;
+        }
+    }
+
+    if (animation != nullptr &&
+        (!animation->intro.empty() || !animation->loop.empty() || !animation->outro.empty())) {
+        EmojiAnimation one_shot = *animation;
+        one_shot.loop.loop = 0;
+        DisplayLockGuard lock(this);
+        if (!lock.locked()) {
+            return;
+        }
+        if (animation_player_ == nullptr) {
+            animation_player_ = std::make_unique<PngAnimationPlayer>(emoji_image_);
+        }
+        animation_player_->Play(&one_shot);
+        if (emoji_label_ != nullptr) {
+            lv_obj_add_flag(emoji_label_, LV_OBJ_FLAG_HIDDEN);
+        }
+        lv_obj_remove_flag(emoji_image_, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+
+    // Static/font-backed emojis still use the normal renderer, but this call
+    // does not update VoiceModel and therefore remains a one-shot command.
+    SetEmotion(emotion);
+#else
+    (void)emotion;
+#endif
+}
+
 void LcdDisplay::SetTheme(Theme* theme) {
     DisplayLockGuard lock(this);
 

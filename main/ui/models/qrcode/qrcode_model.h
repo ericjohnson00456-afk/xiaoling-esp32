@@ -11,14 +11,22 @@
 
 class LvglImage;
 
+enum class QrCodeContentSource {
+    kRoleConfig,
+    kCustom,
+};
+
 struct QrCodeModelState {
     std::string role_config_url;
     std::shared_ptr<LvglImage> role_config_image;
+    std::shared_ptr<LvglImage> custom_image;
+    std::string custom_message;
+    QrCodeContentSource content_source = QrCodeContentSource::kRoleConfig;
     bool loading = false;
     uint32_t generation = 0;
 };
 
-// 保存云端下发的角色配置二维码地址和预下载图像。模型不触碰显示对象。
+// 保存角色配置二维码缓存及当前二维码页内容。模型不触碰显示对象。
 class QrCodeModel final : public ObservableModel<QrCodeModelState> {
 public:
     static QrCodeModel& GetInstance();
@@ -26,6 +34,8 @@ public:
     void HandleSettingMessage(const cJSON* data);
     void SetRoleConfigUrl(std::string url);
     void ClearRoleConfigUrl();
+    void SelectRoleConfig();
+    void SetCustomQrCode(std::unique_ptr<LvglImage> image, std::string message);
 
 private:
     QrCodeModel() = default;

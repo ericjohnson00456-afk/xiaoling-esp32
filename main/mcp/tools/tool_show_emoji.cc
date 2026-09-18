@@ -9,7 +9,7 @@
 #include "ui/models/emoji_model.h"
 
 namespace {
-MCP_REGISTER_TOOL(RegisterSetEmotion, McpToolGroup::kCommon, 130) {
+MCP_REGISTER_TOOL(RegisterShowEmoji, McpToolGroup::kCommon, 130) {
   std::string names_description = "表情名称";
   if (auto *display = UiManager::GetInstance().display(); display != nullptr) {
     if (auto *theme = dynamic_cast<LvglTheme *>(display->GetTheme()); theme != nullptr &&
@@ -24,13 +24,13 @@ MCP_REGISTER_TOOL(RegisterSetEmotion, McpToolGroup::kCommon, 130) {
       }
     }
   }
-  server.AddTool("ls.built_in.set_emotion", "设置设备显示表情。",
+  server.AddTool("set_emotion", "显示一次指定表情。",
                  PropertyList({Property("emotion", kPropertyTypeString,
                                          {names_description})}),
                  [](const PropertyList &properties) -> ReturnValue {
                    const auto emotion = properties["emotion"].value<std::string>();
                    if (emotion.empty()) throw std::runtime_error("emotion 不能为空");
-                   UiEvents::PostEmotion(emotion);
+                   UiEvents::PostEmotionOnce(emotion);
                    return std::string("已完成操作");
                  });
 }

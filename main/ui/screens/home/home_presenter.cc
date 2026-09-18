@@ -1,20 +1,41 @@
 #include "home_presenter.h"
 
-#include "banner_model.h"
-#include "duplex_model.h"
+#include "ui/models/home/banner_model.h"
+#include "ui/models/home/duplex_model.h"
+#include "ui/models/home/image_model.h"
 #include "display.h"
 #include "home_view.h"
-#include "status_model.h"
+#include "ui/models/home/status_model.h"
 #include "ui/core/ui_manager.h"
 #include "ui/core/ui_page_ids.h"
-#include "voice_model.h"
-#include "wifi_model.h"
+#include "ui/models/home/voice_model.h"
+#include "ui/models/home/wifi_model.h"
+#include "ui/tools/image/lvgl_image.h"
 
 #include <utility>
 
 #include <esp_log.h>
 
 #define TAG "HomePresenter"
+
+#ifdef CONFIG_LSPLATFORM
+namespace {
+
+class SharedLvglImage final : public LvglImage {
+public:
+    explicit SharedLvglImage(std::shared_ptr<LvglImage> image) : image_(std::move(image)) {
+    }
+
+    const lv_img_dsc_t* image_dsc() const override {
+        return image_ != nullptr ? image_->image_dsc() : nullptr;
+    }
+
+private:
+    std::shared_ptr<LvglImage> image_;
+};
+
+}  // namespace
+#endif
 
 HomePresenter& HomePresenter::GetInstance() {
     static HomePresenter instance;
@@ -54,6 +75,9 @@ int HomePresenter::Show(const UiNavScreen* screen, void* data) {
         return -1;
     }
     presenter->view_->Show();
+#ifdef CONFIG_LSPLATFORM
+    presenter->RefreshImage(ImageModel::GetInstance().Snapshot());
+#endif
     return 0;
 }
 
@@ -100,9 +124,10 @@ void HomePresenter::SubscribeModels() {
                 home.last_voice_text_revision_ = state.text_revision;
 #ifdef CONFIG_LSPLATFORM
                 if (state.text_source == VoiceTextSource::kIat) {
-                    auto* display = UiManager::GetInstance().display();
-                    display->DismissImage();
-                    display->DismissActivation();
+                    ImageModel::GetInstance().Clear();
+                    if (auto* display = UiManager::GetInstance().display(); display != nullptr) {
+                        display->DismissActivation();
+                    }
                 }
 #endif
                 home.view_->SetText(state.text);
@@ -142,7 +167,32 @@ void HomePresenter::SubscribeModels() {
         });
     });
 
+#ifdef CONFIG_LSPLATFORM
+    image_subscription_ = ImageModel::GetInstance().Subscribe([](const ImageModelState& state) {
+        UiManager::GetInstance().Dispatch([state]() {
+            auto& home = HomePresenter::GetInstance();
+            if (home.view_ == nullptr || UiManager::GetInstance().TopScreenId() != UI_PAGE_HOME) {
+                return;
+            }
+            home.RefreshImage(state);
+        });
+    }, false);
+#endif
+
 }
+
+#ifdef CONFIG_LSPLATFORM
+void HomePresenter::RefreshImage(const ImageModelState& state) {
+    if (view_ == nullptr) {
+        return;
+    }
+    if (state.image != nullptr) {
+        view_->ShowImage(std::make_unique<SharedLvglImage>(state.image));
+    } else {
+        view_->HideImage();
+    }
+}
+#endif
 
 void HomePresenter::UnsubscribeModels() {
     VoiceModel::GetInstance().Unsubscribe(voice_subscription_);
@@ -150,11 +200,15 @@ void HomePresenter::UnsubscribeModels() {
     WifiModel::GetInstance().Unsubscribe(wifi_subscription_);
     StatusModel::GetInstance().Unsubscribe(status_subscription_);
     DuplexModel::GetInstance().Unsubscribe(duplex_subscription_);
+#ifdef CONFIG_LSPLATFORM
+    ImageModel::GetInstance().Unsubscribe(image_subscription_);
+#endif
     voice_subscription_ = 0;
     banner_subscription_ = 0;
     wifi_subscription_ = 0;
     status_subscription_ = 0;
     duplex_subscription_ = 0;
+    image_subscription_ = 0;
 }
 
 void HomePresenter::SetBanners(std::vector<std::string> texts, uint32_t interval_ms) {

@@ -1,7 +1,10 @@
 #include "home_view.h"
 
 #include "display.h"
+#include "ui/tools/image/lvgl_image.h"
 #include "xiaoling/session/session_core.h"
+
+#include <utility>
 
 HomeView::HomeView(Display* display) : display_(display) {
 }
@@ -15,6 +18,9 @@ void HomeView::Show() {
 void HomeView::Hide() {
     if (display_ != nullptr) {
         display_->SetHomeVisible(false);
+#ifdef CONFIG_LSPLATFORM
+        display_->DismissImage();
+#endif
     }
 }
 
@@ -47,6 +53,20 @@ void HomeView::SetTime(const std::string& time) {
         display_->SetClockText(time.c_str());
     }
 }
+
+#ifdef CONFIG_LSPLATFORM
+void HomeView::ShowImage(std::unique_ptr<LvglImage> image) {
+    if (display_ != nullptr && image != nullptr) {
+        display_->ShowImage(std::move(image));
+    }
+}
+
+void HomeView::HideImage() {
+    if (display_ != nullptr) {
+        display_->DismissImage();
+    }
+}
+#endif
 
 void HomeView::SetDuplexMode(DuplexMode mode) {
     if (display_ != nullptr) {

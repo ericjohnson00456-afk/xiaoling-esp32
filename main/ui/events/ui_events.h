@@ -78,6 +78,7 @@ struct ChatMessageEvent {
 
 struct EmotionEvent {
     char emotion[32];
+    bool once;
 };
 
 struct StatusBarEvent {
@@ -122,6 +123,7 @@ esp_err_t PostNotification(Notification notification, int32_t duration_ms = 3000
                             std::string_view detail = {});
 esp_err_t PostChatMessage(std::string_view role, std::string_view content);
 esp_err_t PostEmotion(std::string_view emotion);
+esp_err_t PostEmotionOnce(std::string_view emotion);
 esp_err_t PostStatusBarUpdate(bool update_all = false);
 esp_err_t PostNotificationText(std::string_view text, int32_t duration_ms = 3000);
 esp_err_t PostDismissOverlays();

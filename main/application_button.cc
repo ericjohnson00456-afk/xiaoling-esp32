@@ -5,7 +5,7 @@
 #include "ui/core/ui_manager.h"
 #include "ui/core/ui_page_ids.h"
 #include "ui/events/ui_events.h"
-#include "ui/models/qrcode_model.h"
+#include "ui/models/qrcode/qrcode_model.h"
 
 #include <esp_log.h>
 
@@ -45,8 +45,10 @@ void Application::HandleButtonEvent(int32_t event_id, uint8_t click_count) {
         case ButtonEvents::kShortPress2:
             break;
         case ButtonEvents::kShortPress3: {
+            auto& qrcode_model = QrCodeModel::GetInstance();
             const bool has_role_config_qrcode =
-                QrCodeModel::GetInstance().Snapshot().role_config_image != nullptr;
+                qrcode_model.Snapshot().role_config_image != nullptr;
+            qrcode_model.SelectRoleConfig();
             UiEvents::PostQrCodeRequested();
             PlayTone(has_role_config_qrcode ? kDeviceConfigToneId : kProvisioningToneId);
             break;

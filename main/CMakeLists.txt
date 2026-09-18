@@ -66,6 +66,8 @@ list(APPEND SOURCES ${MCP_TOOL_SOURCES})
 file(GLOB UI_SOURCES
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/core/*.cc"
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/models/*.cc"
+     "${CMAKE_CURRENT_SOURCE_DIR}/ui/models/home/*.cc"
+     "${CMAKE_CURRENT_SOURCE_DIR}/ui/models/qrcode/*.cc"
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/screens/home/*.cc"
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/screens/qrcode/*.cc"
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/events/*.cc")
@@ -79,7 +81,8 @@ list(APPEND SOURCES ${SHELL_CMD_SOURCES})
 set(INCLUDE_DIRS "." "button" "ui/display" "ui/display/backend" "ui/display/panels"
                  "ui/themes" "ui/tools/font" "ui/tools/image" "audio"
                  "player" "player/core" "player/engine" "player/channels" "player/resource" "xiaoling" "xiaoling/session" "xiaoling/conn" "mcp"
-                  "ui" "ui/core" "ui/models" "ui/screens/home" "ui/screens/qrcode" "system" "resource" "shell" "ota")
+                  "ui" "ui/core" "ui/models" "ui/models/home" "ui/models/qrcode"
+                  "ui/screens/home" "ui/screens/qrcode" "system" "resource" "shell" "ota")
 
 # Add board common files
 file(GLOB BOARD_COMMON_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/boards/common/*.cc)

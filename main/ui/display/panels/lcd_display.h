@@ -65,6 +65,7 @@ protected:
 public:
     ~LcdDisplay();
     virtual void SetEmotion(const char* emotion) override;
+    virtual void ShowEmotionOnce(const char* emotion) override;
     virtual void SetChatMessage(const char* role, const char* content) override;
     virtual void SetHomeVisible(bool visible) override;
 #ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE

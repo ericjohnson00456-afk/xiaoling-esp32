@@ -2,7 +2,7 @@
 
 #include "board.h"
 #include "display.h"
-#include "qrcode_model.h"
+#include "ui/models/qrcode/qrcode_model.h"
 #include "ui/core/ui_manager.h"
 #include "ui/core/ui_page_ids.h"
 #include "ui/events/ui_events.h"
@@ -96,7 +96,7 @@ int QrCodePresenter::Close(const UiNavScreen* screen, void* data) {
     presenter->DestroyTimeoutTimer();
     presenter->UnsubscribeModel();
     presenter->view_.reset();
-    presenter->last_rendered_url_.clear();
+    presenter->last_rendered_message_.clear();
     presenter->last_rendered_image_.reset();
     presenter->rendered_ = false;
     return 0;
@@ -165,26 +165,39 @@ void QrCodePresenter::TimeoutCallback(void* arg) {
 }
 
 void QrCodePresenter::Refresh(const QrCodeModelState& state) {
-    if (view_ == nullptr ||
-        (rendered_ && state.role_config_url == last_rendered_url_ &&
-         state.role_config_image == last_rendered_image_)) {
+    if (view_ == nullptr) {
         return;
     }
-    last_rendered_url_ = state.role_config_url;
-    last_rendered_image_ = state.role_config_image;
-    rendered_ = true;
 
 #ifdef CONFIG_LSPLATFORM
-    if (state.role_config_image != nullptr) {
-        view_->ShowQrCode(
-            std::make_unique<SharedLvglImage>(state.role_config_image), "角色配置");
+    std::shared_ptr<LvglImage> image;
+    std::string message;
+    if (state.content_source == QrCodeContentSource::kCustom && state.custom_image != nullptr) {
+        image = state.custom_image;
+        message = state.custom_message;
+    } else if (state.role_config_image != nullptr) {
+        image = state.role_config_image;
+        message = "角色配置";
+    }
+
+    if (image != nullptr) {
+        if (rendered_ && image == last_rendered_image_ && message == last_rendered_message_) {
+            return;
+        }
+        last_rendered_image_ = image;
+        last_rendered_message_ = message;
+        rendered_ = true;
+        view_->ShowQrCode(std::make_unique<SharedLvglImage>(std::move(image)), message);
         return;
     }
 
-    std::string message;
-    auto image = Board::GetInstance().GetProvisioningQRCode(message);
-    if (image != nullptr) {
-        view_->ShowQrCode(std::move(image), message);
+    std::string provisioning_message;
+    auto provisioning_image = Board::GetInstance().GetProvisioningQRCode(provisioning_message);
+    if (provisioning_image != nullptr) {
+        last_rendered_image_.reset();
+        last_rendered_message_ = provisioning_message;
+        rendered_ = true;
+        view_->ShowQrCode(std::move(provisioning_image), provisioning_message);
         return;
     }
 

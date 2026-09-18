@@ -63,11 +63,11 @@ void QrCodeModel::SetRoleConfigUrl(std::string url) {
         }
 
         generation = ++fetch_generation_;
-        Publish(QrCodeModelState{
-            .role_config_url = url,
-            .role_config_image = nullptr,
-            .loading = true,
-            .generation = generation,
+        Update([&](QrCodeModelState& state) {
+            state.role_config_url = url;
+            state.role_config_image.reset();
+            state.loading = true;
+            state.generation = generation;
         });
     }
 
@@ -100,7 +100,34 @@ void QrCodeModel::ClearRoleConfigUrl() {
     if (state.role_config_url.empty() && state.role_config_image == nullptr && !state.loading) {
         return;
     }
-    Publish(QrCodeModelState{.generation = ++fetch_generation_});
+    const auto generation = ++fetch_generation_;
+    Update([generation](QrCodeModelState& state) {
+        state.role_config_url.clear();
+        state.role_config_image.reset();
+        state.loading = false;
+        state.generation = generation;
+    });
+}
+
+void QrCodeModel::SelectRoleConfig() {
+    Update([](QrCodeModelState& state) {
+        state.content_source = QrCodeContentSource::kRoleConfig;
+        state.custom_image.reset();
+        state.custom_message.clear();
+    });
+}
+
+void QrCodeModel::SetCustomQrCode(std::unique_ptr<LvglImage> image, std::string message) {
+    if (image == nullptr) {
+        return;
+    }
+    auto shared_image = std::shared_ptr<LvglImage>(std::move(image));
+    Update([image = std::move(shared_image), message = std::move(message)](
+               QrCodeModelState& state) mutable {
+        state.custom_image = std::move(image);
+        state.custom_message = std::move(message);
+        state.content_source = QrCodeContentSource::kCustom;
+    });
 }
 
 void QrCodeModel::FetchTask(void* arg) {
@@ -135,10 +162,8 @@ void QrCodeModel::CompleteFetch(const std::string& url, uint32_t generation,
     } else {
         ESP_LOGW(TAG, "Failed to cache role config image");
     }
-    Publish(QrCodeModelState{
-        .role_config_url = url,
-        .role_config_image = std::move(cached_image),
-        .loading = false,
-        .generation = generation,
+    Update([&](QrCodeModelState& state) {
+        state.role_config_image = std::move(cached_image);
+        state.loading = false;
     });
 }

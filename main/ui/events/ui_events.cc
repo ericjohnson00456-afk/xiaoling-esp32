@@ -87,6 +87,14 @@ esp_err_t PostEmotion(std::string_view emotion) {
     return esp_event_post(UI_EVENT, kEmotionChanged, &event, sizeof(event), portMAX_DELAY);
 }
 
+esp_err_t PostEmotionOnce(std::string_view emotion) {
+    EmotionEvent event{.emotion = {}, .once = true};
+    const size_t length = std::min(emotion.size(), sizeof(event.emotion) - 1);
+    std::memcpy(event.emotion, emotion.data(), length);
+    event.emotion[length] = '\0';
+    return esp_event_post(UI_EVENT, kEmotionChanged, &event, sizeof(event), portMAX_DELAY);
+}
+
 esp_err_t PostStatusBarUpdate(bool update_all) {
     StatusBarEvent event{.update_all = update_all};
     return esp_event_post(UI_EVENT, kStatusBarChanged, &event, sizeof(event), portMAX_DELAY);

@@ -35,7 +35,7 @@ private:
     std::unique_ptr<QrCodeView> view_;
     uint32_t qrcode_subscription_ = 0;
     esp_timer_handle_t timeout_timer_ = nullptr;
-    std::string last_rendered_url_;
+    std::string last_rendered_message_;
     std::shared_ptr<LvglImage> last_rendered_image_;
     bool rendered_ = false;
 };

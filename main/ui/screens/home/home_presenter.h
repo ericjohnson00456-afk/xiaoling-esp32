@@ -13,7 +13,7 @@
 
 class HomeView;
 
-// Home 页 Presenter：当前组合 Voice、Banner、Wi-Fi 和 Status Model；TimeModel 暂不启用。
+// Home 页 Presenter：组合语音、Banner、Wi-Fi、状态和网络图片 Model。
 class HomePresenter {
 public:
     static HomePresenter& GetInstance();
@@ -32,6 +32,9 @@ private:
 
     void SubscribeModels();
     void UnsubscribeModels();
+#ifdef CONFIG_LSPLATFORM
+    void RefreshImage(const struct ImageModelState& state);
+#endif
     void SetBanners(std::vector<std::string> texts, uint32_t interval_ms);
     void StopBannerTimer();
     void OnBannerTick();
@@ -48,6 +51,7 @@ private:
     uint32_t wifi_subscription_ = 0;
     uint32_t status_subscription_ = 0;
     uint32_t duplex_subscription_ = 0;
+    uint32_t image_subscription_ = 0;
     std::string last_emotion_;
     uint32_t last_voice_text_revision_ = 0;
 };

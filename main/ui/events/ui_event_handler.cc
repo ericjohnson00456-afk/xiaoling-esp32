@@ -2,13 +2,14 @@
 #include "ui_events.h"
 
 #include "ui/i18n/lang_config.h"
-#include "status_model.h"
-#include "duplex_model.h"
+#include "ui/models/home/status_model.h"
+#include "ui/models/home/duplex_model.h"
 #include "ui/core/ui_manager.h"
 #include "ui/core/ui_page_ids.h"
 
 #include "display.h"
-#include "voice_model.h"
+#include "ui/models/home/voice_model.h"
+#include "ui/models/home/image_model.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -113,7 +114,13 @@ void OnVoicePromptChanged(void*, esp_event_base_t, int32_t, void* event_data) {
 void OnEmotionChanged(void*, esp_event_base_t, int32_t, void* event_data) {
     const auto event = *static_cast<const UiEvents::EmotionEvent*>(event_data);
     UiManager::GetInstance().Dispatch([event]() {
-        VoiceModel::GetInstance().SetEmotion(event.emotion);
+        if (event.once) {
+            if (auto* display = UiManager::GetInstance().display(); display != nullptr) {
+                display->ShowEmotionOnce(event.emotion);
+            }
+        } else {
+            VoiceModel::GetInstance().SetEmotion(event.emotion);
+        }
     });
 }
 
@@ -144,6 +151,7 @@ void OnOverlaysDismissed(void*, esp_event_base_t, int32_t, void*) {
             return;
         }
 #ifdef CONFIG_LSPLATFORM
+        ImageModel::GetInstance().Clear();
         display->DismissImage();
         display->DismissActivation();
 #endif

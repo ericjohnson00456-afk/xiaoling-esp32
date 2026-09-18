@@ -13,11 +13,11 @@
 #include "ui/core/ui_app.h"
 #include "ui/core/ui_manager.h"
 #include "ui/events/ui_events.h"
-#include "duplex_model.h"
-#include "qrcode_model.h"
-#include "voice_model.h"
+#include "ui/models/home/duplex_model.h"
+#include "ui/models/qrcode/qrcode_model.h"
+#include "ui/models/home/voice_model.h"
 #include "xiaoling/xiaoling_events.h"
-#include "wifi_model.h"
+#include "ui/models/home/wifi_model.h"
 #include "player/resource/tone_model.h"
 
 #ifdef CONFIG_LSPLATFORM
@@ -25,7 +25,7 @@
 #endif // CONFIG_LSPLATFORM
 
 #if CONFIG_LSPLATFORM_BANNERS
-#include "banner_model.h"
+#include "ui/models/home/banner_model.h"
 #endif // CONFIG_LSPLATFORM_BANNERS
 
 #include <cstring>
