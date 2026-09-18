@@ -644,10 +644,13 @@ void Application::InitializeXiaolingConn() {
             }
 
             if (strcmp(sub->valuestring, "setting") == 0) {
-                QrCodePresenter::GetInstance().HandleSettingMessage(data);
 #if CONFIG_LSPLATFORM_BANNERS
                 HomePresenter::GetInstance().HandleSettingMessage(data);
 #endif
+                // Banner UI updates are queued first. The QR-code presenter
+                // queues its download start afterwards so network/image work
+                // cannot delay the first banner frame.
+                QrCodePresenter::GetInstance().HandleSettingMessage(data);
             }
             return;
         }

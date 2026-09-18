@@ -300,14 +300,26 @@ std::string HomePresenter::SubstituteWakeWord(const std::string& text) const {
 void HomePresenter::SetBanners(std::vector<std::string> texts, uint32_t interval_ms) {
     StopBannerTimer();
     bool has_banners = false;
+    std::string first_text;
     {
         std::lock_guard<std::mutex> lock(banner_mutex_);
         banner_texts_ = std::move(texts);
         banner_index_ = 0;
         has_banners = !banner_texts_.empty();
+        if (has_banners && (!banner_idle_provider_ || banner_idle_provider_())) {
+            first_text = banner_texts_[banner_index_];
+            banner_index_ = (banner_index_ + 1) % banner_texts_.size();
+        }
     }
     if (!has_banners) {
         return;
+    }
+
+    // Show the first banner immediately. Waiting for the first periodic tick
+    // makes startup appear blocked by the role-config image download.
+    if (!first_text.empty() && view_ != nullptr) {
+        view_->SetText(first_text);
+        ESP_LOGI(TAG, "首条 Banner 已显示");
     }
 
     esp_timer_create_args_t args = {

@@ -113,7 +113,10 @@ void QrCodePresenter::HandleSettingMessage(const cJSON* data) {
     const auto* role_config = cJSON_IsObject(guide) ? cJSON_GetObjectItemCaseSensitive(guide, "role_config") : nullptr;
     const auto* image_url = cJSON_IsObject(role_config) ? cJSON_GetObjectItemCaseSensitive(role_config, "image_url") : nullptr;
     if (cJSON_IsString(image_url) && image_url->valuestring != nullptr && image_url->valuestring[0] != '\0') {
-        SetRoleConfigUrl(image_url->valuestring);
+        std::string url(image_url->valuestring);
+        UiManager::GetInstance().Dispatch([url = std::move(url)]() mutable {
+            QrCodePresenter::GetInstance().SetRoleConfigUrl(std::move(url));
+        });
     }
 }
 
