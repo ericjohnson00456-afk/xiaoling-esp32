@@ -28,291 +28,126 @@
         {
             "name": "待机",
             "loop": {
-                "path": "/emoji/待机/blink_%03d.png",
+                "path": "/待机/frame-%06d.png",
                 "range": [
                     0,
-                    4
+                    9
                 ],
-                "interval_ms": 100,
-                "interval_overrides": [
-                    [
-                        0,
-                        1000
-                    ]
-                ]
+                "interval_ms": 150
             }
         },
         {
             "name": "充电",
-            "intro": {
-                "path": "/emoji/充电/frame_%06d.png",
+            "loop": {
+                "path": "/充电/frame-%06d.png",
                 "range": [
                     0,
-                    4
-                ],
-                "interval_ms": 100
-            },
-            "loop": {
-                "path": "/emoji/充电/frame_%06d.png",
-                "range": [
-                    5,
-                    12
-                ],
-                "interval_ms": 100
-            },
-            "outro": {
-                "path": "/emoji/充电/frame_%06d.png",
-                "range": [
-                    13,
-                    21
+                    9
                 ],
                 "interval_ms": 100
             }
         },
         {
             "name": "聆听",
-            "intro": {
-                "path": "/emoji/聆听/wakeup_%03d.png",
+            "loop": {
+                "path": "/聆听/frame-%06d.png",
                 "range": [
                     0,
-                    5
-                ],
-                "interval_ms": 100
-            },
-            "loop": {
-                "path": "/emoji/聆听/wakeup_%03d.png",
-                "range": [
-                    6,
-                    20
-                ],
-                "interval_ms": 100,
-                "interval_overrides": [
-                    [
-                        6,
-                        500
-                    ]
-                ]
-            },
-            "outro": {
-                "path": "/emoji/聆听/wakeup_%03d.png",
-                "range": [
-                    21,
-                    27
+                    9
                 ],
                 "interval_ms": 100
             }
         },
         {
             "name": "说话",
-            "intro": {
-                "path": "/emoji/说话/speaking_%03d.png",
+            "loop": {
+                "path": "/说话/frame-%06d.png",
                 "range": [
                     0,
-                    5
-                ],
-                "interval_ms": 100
-            },
-            "loop": {
-                "path": "/emoji/说话/speaking_%03d.png",
-                "range": [
-                    6,
-                    20
-                ],
-                "interval_ms": 100,
-                "interval_overrides": [
-                    [
-                        6,
-                        500
-                    ]
-                ]
-            },
-            "outro": {
-                "path": "/emoji/说话/speaking_%03d.png",
-                "range": [
-                    21,
-                    27
+                    9
                 ],
                 "interval_ms": 100
             }
         },
         {
             "name": "休眠",
-            "intro": {
-                "path": "/emoji/休眠/sleepy_%03d.png",
+            "loop": {
+                "path": "/休眠/frame-%06d.png",
                 "range": [
                     0,
                     9
                 ],
-                "interval_ms": 100
-            },
-            "loop": {
-                "path": "/emoji/休眠/sleepy_%03d.png",
-                "range": [
-                    10,
-                    34
-                ],
-                "interval_ms": 100,
-                "interval_overrides": [
-                    [
-                        10,
-                        1000
-                    ]
-                ]
-            },
-            "outro": {
-                "path": "/emoji/休眠/sleepy_%03d.png",
-                "range": [
-                    35,
-                    40
-                ],
-                "interval_ms": 100
+                "interval_ms": 150
             }
         },
         {
             "name": "等待",
             "loop": {
-                "path": "/emoji/等待/wait_%03d.png",
+                "path": "/等待/frame-%06d.png",
                 "range": [
                     0,
                     7
                 ],
-                "interval_ms": 100
+                "interval_ms": 130
             }
         },
         {
             "name": "开心",
-            "intro": {
-                "path": "/emoji/开心/frame-%06d.png",
+            "loop": {
+                "path": "/开心/frame-%06d.png",
                 "range": [
                     0,
-                    4
-                ],
-                "interval_ms": 100
-            },
-            "loop": {
-                "path": "/emoji/开心/frame-%06d.png",
-                "range": [
-                    5,
-                    14
-                ],
-                "interval_ms": 100
-            },
-            "outro": {
-                "path": "/emoji/开心/frame-%06d.png",
-                "range": [
-                    15,
-                    20
+                    9
                 ],
                 "interval_ms": 100
             }
         },
         {
             "name": "伤心",
-            "intro": {
-                "path": "/emoji/伤心/sad_%03d.png",
+            "loop": {
+                "path": "/伤心/frame-%06d.png",
                 "range": [
                     0,
-                    4
+                    9
                 ],
-                "interval_ms": 100
-            },
-            "loop": {
-                "path": "/emoji/伤心/sad_%03d.png",
-                "range": [
-                    5,
-                    12
-                ],
-                "interval_ms": 100
-            },
-            "outro": {
-                "path": "/emoji/伤心/sad_%03d.png",
-                "range": [
-                    13,
-                    18
-                ],
-                "interval_ms": 100
+                "interval_ms": 130
             }
         },
         {
             "name": "生气",
-            "intro": {
-                "path": "/emoji/生气/angry_%03d.png",
+            "loop": {
+                "path": "/生气/frame-%06d.png",
                 "range": [
                     0,
-                    4
-                ],
-                "interval_ms": 100
-            },
-            "loop": {
-                "path": "/emoji/生气/angry_%03d.png",
-                "range": [
-                    5,
                     9
-                ],
-                "interval_ms": 100
-            },
-            "outro": {
-                "path": "/emoji/生气/angry_%03d.png",
-                "range": [
-                    10,
-                    15
                 ],
                 "interval_ms": 100
             }
         },
         {
             "name": "撒娇",
-            "intro": {
-                "path": "/emoji/撒娇/frame-%06d.png",
+            "loop": {
+                "path": "/撒娇/frame-%06d.png",
                 "range": [
                     0,
-                    4
-                ],
-                "interval_ms": 100
-            },
-            "loop": {
-                "path": "/emoji/撒娇/frame-%06d.png",
-                "range": [
-                    5,
-                    16
-                ],
-                "interval_ms": 100
-            },
-            "outro": {
-                "path": "/emoji/撒娇/frame-%06d.png",
-                "range": [
-                    17,
-                    23
+                    9
                 ],
                 "interval_ms": 100
             }
         },
         {
             "name": "大笑",
-            "intro": {
-                "path": "/emoji/大笑/love_%03d.png",
+            "loop": {
+                "path": "/大笑/frame-%06d.png",
                 "range": [
                     0,
-                    4
-                ],
-                "interval_ms": 100
-            },
-            "loop": {
-                "path": "/emoji/大笑/love_%03d.png",
-                "range": [
-                    5,
-                    16
-                ],
-                "interval_ms": 100
-            },
-            "outro": {
-                "path": "/emoji/大笑/love_%03d.png",
-                "range": [
-                    17,
-                    22
+                    6
                 ],
                 "interval_ms": 100
             }
         }
-    ]
+    ],
+    "offset": {
+        "y": 0
+    }
 }
