@@ -1,10 +1,10 @@
-#include "boards/common/board_events.h"
+#include "application.h"
 #include "button.h"
 #include "codecs/es8311_audio_codec.h"
 #include "config.h"
 #include "wifi_board.h"
 
-#include "ui/display/panels/lcd_display.h"
+#include "display/lcd_display.h"
 #include "esp_lcd_sh8601.h"
 #include "lvgl.h"
 #include "mcp_server.h"
@@ -58,8 +58,8 @@ class CustomLcdDisplay : public SpiLcdDisplay {
         esp_lcd_panel_io_tx_param(io_handle_, lcd_cmd, &param, 1);
     }
 
-    CustomLcdDisplay(esp_lcd_panel_io_handle_t io_handle, esp_lcd_panel_handle_t panel_handle, int width, int height, int offset_x, int offset_y, bool mirror_x, bool mirror_y, bool swap_xy) :
-    SpiLcdDisplay(io_handle, panel_handle, width, height, offset_x, offset_y, mirror_x, mirror_y, swap_xy),
+    CustomLcdDisplay(esp_lcd_panel_io_handle_t io_handle, esp_lcd_panel_handle_t panel_handle, int width, int height, int offset_x, int offset_y, bool mirror_x, bool mirror_y, bool swap_xy) : 
+    SpiLcdDisplay(io_handle, panel_handle, width, height, offset_x, offset_y, mirror_x, mirror_y, swap_xy), 
     io_handle_(io_handle) {
         DisplayLockGuard lock(this);
         lv_display_add_event_cb(display_, my_draw_event_cb, LV_EVENT_INVALIDATE_AREA, NULL);
@@ -103,16 +103,17 @@ class CustomBoard : public WifiBoard {
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
+            auto &app = Application::GetInstance();
             // During startup (before connected), pressing BOOT button enters Wi-Fi config mode without reboot
-            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
+            if (app.GetDeviceState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
-            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
+            app.ToggleChatState();
         });
 
         pwr_button_.OnLongPress([this]() {
-            BoardEvents::PostSystemMessage("system", "OFF");
+            GetDisplay()->SetChatMessage("system", "OFF");
             vTaskDelay(pdMS_TO_TICKS(1000));
             gpio_set_level(PWR_EN_GPIO, 0);
         });
@@ -162,7 +163,8 @@ class CustomBoard : public WifiBoard {
         display_ = new CustomLcdDisplay(io_handle, panel_handle, EXAMPLE_LCD_H_RES, EXAMPLE_LCD_V_RES, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
 
-    void RegisterMcpTools(McpServer& mcp_server) override {
+    void InitializeTools() {
+        auto &mcp_server = McpServer::GetInstance();
         mcp_server.AddTool("self.disp.setbacklight", "设置屏幕亮度", PropertyList({Property("level", kPropertyTypeInteger, 0, 255)}), [this](const PropertyList &properties) -> ReturnValue {
             int level = properties["level"].value<int>();
             ESP_LOGI("setbacklight", "%d", level);
@@ -197,6 +199,7 @@ class CustomBoard : public WifiBoard {
         InitializeSpi();
         InitializeLcdDisplay();
         InitializeButtons();
+        InitializeTools();
     }
 
     virtual AudioCodec *GetAudioCodec() override {
@@ -210,5 +213,3 @@ class CustomBoard : public WifiBoard {
 };
 
 DECLARE_BOARD(CustomBoard);
-
-

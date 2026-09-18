@@ -1,13 +1,13 @@
-#include "ui/display/display_factory.h"
-
-#include "boards/common/board_events.h"
 #include "dual_network_board.h"
 #include "codecs/box_audio_codec.h"
+#include "display/oled_display.h"
+#include "application.h"
 #include "button.h"
-#include "services/service_ws2812.h"
+#include "led/single_led.h"
 #include "config.h"
 #include "power_save_timer.h"
 #include "axp2101.h"
+#include "ui/i18n/lang_config.h"
 
 #include <esp_log.h>
 #include <driver/gpio.h>
@@ -23,23 +23,23 @@ public:
         // ** EFUSE defaults **
         WriteReg(0x22, 0b110); // PWRON > OFFLEVEL as POWEROFF Source enable
         WriteReg(0x27, 0x10);  // hold 4s to power off
-
+    
         WriteReg(0x93, 0x1C); // 配置 aldo2 输出为 3.3V
-
+    
         uint8_t value = ReadReg(0x90); // XPOWERS_AXP2101_LDO_ONOFF_CTRL0
         value = value | 0x02; // set bit 1 (ALDO2)
         WriteReg(0x90, value);  // and power channels now enabled
-
+    
         WriteReg(0x64, 0x03); // CV charger voltage setting to 4.2V
-
+        
         WriteReg(0x61, 0x05); // set Main battery precharge current to 125mA
         WriteReg(0x62, 0x0A); // set Main battery charger current to 400mA ( 0x08-200mA, 0x09-300mA, 0x0A-400mA )
         WriteReg(0x63, 0x15); // set Main battery term charge current to 125mA
-
+    
         WriteReg(0x14, 0x00); // set minimum system voltage to 4.1V (default 4.7V), for poor USB cables
         WriteReg(0x15, 0x00); // set input voltage limit to 3.88v, for poor USB cables
         WriteReg(0x16, 0x05); // set input current limit to 2000mA
-
+    
         WriteReg(0x24, 0x01); // set Vsys for PWROFF threshold to 3.2V (default - 2.6V and kill battery)
         WriteReg(0x50, 0x14); // set TS pin to EXTERNAL input (not temperature)
     }
@@ -131,7 +131,7 @@ private:
         ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_));
         if (esp_lcd_panel_init(panel_) != ESP_OK) {
             ESP_LOGE(TAG, "Failed to initialize display");
-            display_ = CreateNoDisplay();
+            display_ = new NoDisplay();
             return;
         }
 
@@ -139,7 +139,7 @@ private:
         ESP_LOGI(TAG, "Turning display on");
         ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_, true));
 
-        display_ = CreateOledDisplay(panel_io_, panel_, DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
+        display_ = new OledDisplay(panel_io_, panel_, DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
     }
 
     void InitializeCodecI2c() {
@@ -162,14 +162,17 @@ private:
     void InitializeButtons() {
         boot_button_.OnPressDown([this]() {
             power_save_timer_->WakeUp();
-            BoardEvents::PostInput(BoardEvents::Input::TouchDown);
+            auto& app = Application::GetInstance();
+            app.StartListening();
         });
         boot_button_.OnPressUp([this]() {
-            BoardEvents::PostInput(BoardEvents::Input::TouchUp);
+            auto& app = Application::GetInstance();
+            app.StopListening();
         });
         boot_button_.OnClick([this]() {
+            auto& app = Application::GetInstance();
             if (GetNetworkType() == NetworkType::WIFI) {
-                if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
+                if (app.GetDeviceState() == kDeviceStateStarting) {
                     // cast to WifiBoard
                     auto& wifi_board = static_cast<WifiBoard&>(GetCurrentBoard());
                     wifi_board.EnterWifiConfigMode();
@@ -177,7 +180,8 @@ private:
             }
         });
         boot_button_.OnDoubleClick([this]() {
-            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting || BoardEvents::GetRuntimeState() == kDeviceStateWifiConfiguring) {
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateStarting || app.GetDeviceState() == kDeviceStateWifiConfiguring) {
                 SwitchNetworkType();
             }
         });
@@ -190,13 +194,13 @@ private:
                 volume = 100;
             }
             codec->SetOutputVolume(volume);
-            BoardEvents::PostInput(BoardEvents::Input::VolumeChanged, volume);
+            GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
         });
 
         volume_up_button_.OnLongPress([this]() {
             power_save_timer_->WakeUp();
             GetAudioCodec()->SetOutputVolume(100);
-            BoardEvents::PostInput(BoardEvents::Input::VolumeMax);
+            GetDisplay()->ShowNotification(Lang::Strings::MAX_VOLUME);
         });
 
         volume_down_button_.OnClick([this]() {
@@ -207,13 +211,13 @@ private:
                 volume = 0;
             }
             codec->SetOutputVolume(volume);
-            BoardEvents::PostInput(BoardEvents::Input::VolumeChanged, volume);
+            GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
         });
 
         volume_down_button_.OnLongPress([this]() {
             power_save_timer_->WakeUp();
             GetAudioCodec()->SetOutputVolume(0);
-            BoardEvents::PostInput(BoardEvents::Input::VolumeMuted);
+            GetDisplay()->ShowNotification(Lang::Strings::MUTED);
         });
     }
 
@@ -234,7 +238,7 @@ public:
     }
 
     virtual Led* GetLed() override {
-        static Ws2812Service led(BUILTIN_LED_GPIO);
+        static SingleLed led(BUILTIN_LED_GPIO);
         return &led;
     }
 
@@ -264,4 +268,3 @@ public:
 };
 
 DECLARE_BOARD(KevinBoxBoard);
-

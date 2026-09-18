@@ -1,13 +1,13 @@
-#include "ui/display/display_factory.h"
-
-#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "audio/codecs/es8311_audio_codec.h"
 // Display
+#include "display/display.h"
+#include "display/lcd_display.h"
 #include "lvgl_theme.h"
 // Backlight
 // PwmBacklight is declared in backlight headers pulled by display/lcd_display includes via lvgl stack
 
+#include "application.h"
 #include "button.h"
 #include "config.h"
 #include "esp32_camera.h"
@@ -43,7 +43,7 @@ class ESP32P4FunctionEvBoard : public WifiBoard
 private:
     i2c_master_bus_handle_t codec_i2c_bus_ = nullptr;
     Button boot_button_;
-    Display *display_ = nullptr;
+    LcdDisplay *display_ = nullptr;
     esp_lcd_touch_handle_t tp_ = nullptr;
     Esp32Camera* camera_ = nullptr;
 
@@ -72,18 +72,19 @@ private:
         bsp_lcd_handles_t handles;
         ESP_ERROR_CHECK(bsp_display_new_with_handles(&config, &handles));
 
-        display_ = CreateMipiLcdDisplay(handles.io, handles.panel, 1024, 600, 0, 0, true, true, false);
+        display_ = new MipiLcdDisplay(handles.io, handles.panel, 1024, 600, 0, 0, true, true, false);
     }
 
     void InitializeButtons()
     {
         boot_button_.OnClick([this]()
                              {
-            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
-            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
+            app.ToggleChatState();
         });
     }
 
@@ -230,5 +231,3 @@ public:
 };
 
 DECLARE_BOARD(ESP32P4FunctionEvBoard);
-
-

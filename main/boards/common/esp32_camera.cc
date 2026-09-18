@@ -14,12 +14,12 @@
 #include "linux/videodev2.h"
 
 #include "board.h"
-#include "display.h"
+#include "display/display.h"
 #include "esp32_camera.h"
 #include "esp_jpeg_common.h"
 #include "image_to_jpeg.h"
 #include "jpeg_to_image.h"
-#include "ui/display/backend/lvgl_display.h"
+#include "display/lvgl_display.h"
 #include "system/system_info.h"
 
 #ifdef CONFIG_XIAOZHI_ENABLE_CAMERA_DEBUG_MODE

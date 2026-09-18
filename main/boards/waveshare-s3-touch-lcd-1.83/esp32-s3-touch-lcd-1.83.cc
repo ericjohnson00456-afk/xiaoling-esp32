@@ -1,10 +1,9 @@
-#include "ui/display/display_factory.h"
-
-#include "boards/common/board_events.h"
 #include "wifi_board.h"
+#include "display/lcd_display.h"
 #include "codecs/box_audio_codec.h"
+#include "application.h"
 #include "button.h"
-#include "services/service_ws2812.h"
+#include "led/single_led.h"
 #include "mcp_server.h"
 #include "config.h"
 #include "power_save_timer.h"
@@ -63,12 +62,12 @@ private:
     void InitializePowerSaveTimer() {
         power_save_timer_ = new PowerSaveTimer(-1, 60, 300);
         power_save_timer_->OnEnterSleepMode([this]() {
-            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOn);
+            GetDisplay()->SetPowerSaveMode(true);
             GetBacklight()->SetBrightness(20); });
         power_save_timer_->OnExitSleepMode([this]() {
-            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOff);
+            GetDisplay()->SetPowerSaveMode(false);
             GetBacklight()->RestoreBrightness(); });
-        power_save_timer_->OnShutdownRequest([this](){
+        power_save_timer_->OnShutdownRequest([this](){ 
             pmic_->PowerOff(); });
         power_save_timer_->SetEnabled(true);
     }
@@ -105,17 +104,19 @@ private:
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
-            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
-            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
+            app.ToggleChatState();
         });
 
 #if CONFIG_USE_DEVICE_AEC
         boot_button_.OnDoubleClick([this]() {
-            if (BoardEvents::GetRuntimeState() == kDeviceStateIdle) {
-                BoardEvents::PostInput(BoardEvents::Input::AecToggle);
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateIdle) {
+                app.SetAecMode(app.GetAecMode() == kAecOff ? kAecOnDeviceSide : kAecOff);
             }
         });
 #endif
@@ -149,7 +150,7 @@ private:
         esp_lcd_panel_invert_color(panel, true);
         // esp_lcd_panel_mirror(panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
         esp_lcd_panel_disp_on_off(panel, true);
-        display_ = CreateSpiLcdDisplay(panel_io, panel,
+        display_ = new SpiLcdDisplay(panel_io, panel,
                                     DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
 
@@ -185,7 +186,8 @@ private:
     }
 
     // 初始化工具
-    void RegisterMcpTools(McpServer& mcp_server) override {
+    void InitializeTools() {
+        auto &mcp_server = McpServer::GetInstance();
         mcp_server.AddTool("self.system.reconfigure_wifi",
             "End this conversation and enter WiFi configuration mode.\n"
             "**CAUTION** You must ask the user to confirm this action.",
@@ -204,22 +206,23 @@ public:
         InitializeDisplay();
         InitializeTouch();
         InitializeButtons();
+        InitializeTools();
         GetBacklight()->RestoreBrightness();
     }
 
     virtual AudioCodec* GetAudioCodec() override {
         static BoxAudioCodec audio_codec(
-            i2c_bus_,
-            AUDIO_INPUT_SAMPLE_RATE,
+            i2c_bus_, 
+            AUDIO_INPUT_SAMPLE_RATE, 
             AUDIO_OUTPUT_SAMPLE_RATE,
-            AUDIO_I2S_GPIO_MCLK,
-            AUDIO_I2S_GPIO_BCLK,
-            AUDIO_I2S_GPIO_WS,
-            AUDIO_I2S_GPIO_DOUT,
+            AUDIO_I2S_GPIO_MCLK, 
+            AUDIO_I2S_GPIO_BCLK, 
+            AUDIO_I2S_GPIO_WS, 
+            AUDIO_I2S_GPIO_DOUT, 
             AUDIO_I2S_GPIO_DIN,
-            AUDIO_CODEC_PA_PIN,
-            AUDIO_CODEC_ES8311_ADDR,
-            AUDIO_CODEC_ES7210_ADDR,
+            AUDIO_CODEC_PA_PIN, 
+            AUDIO_CODEC_ES8311_ADDR, 
+            AUDIO_CODEC_ES7210_ADDR, 
             AUDIO_INPUT_REFERENCE);
         return &audio_codec;
     }
@@ -256,5 +259,3 @@ public:
 };
 
 DECLARE_BOARD(WaveshareEsp32s3TouchLCD1inch83);
-
-

@@ -1,6 +1,6 @@
 #include "custom_lcd_display.h"
 
-#include "ui/display/panels/lcd_display.h"
+#include "display/lcd_display.h"
 
 #include <vector>
 #include <esp_log.h>
@@ -80,7 +80,7 @@ void CustomLcdDisplay::lvgl_port_flush_callback(lv_display_t *drv, const lv_area
     uint16_t *map = (uint16_t*)color_map;
 #endif
     xSemaphoreGive(trans_done_sem);
-
+    
     for(int i = 0; i<flush_coun; i++) {
         xSemaphoreTake(trans_done_sem,portMAX_DELAY);
         memcpy(trans_buf_1,map,LVGL_DMA_BUFF_LEN);

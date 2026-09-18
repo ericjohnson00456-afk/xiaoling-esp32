@@ -1,12 +1,12 @@
 #pragma once
 
-#include "emoji_model.h"
+#include "emoji_repository.h"
 
 #include <functional>
 
 #include <lvgl.h>
 
-// 基于 LVGL 定时器播放 EmojiModel 提供的 PNG 帧序列。
+// 基于 LVGL 定时器播放 EmojiRepository 提供的 PNG 帧序列。
 class PngAnimationPlayer final {
 public:
     explicit PngAnimationPlayer(lv_obj_t* image);
@@ -38,9 +38,9 @@ private:
 
     lv_obj_t* image_ = nullptr;
     lv_timer_t* timer_ = nullptr;
-    // Own a snapshot of the animation definition.  EmojiModel can be
+    // Own a snapshot of the animation definition.  EmojiRepository can be
     // replaced when cloud assets are refreshed; keeping a raw pointer here
-    // would leave the LVGL timer reading freed model memory.
+    // would leave the LVGL timer reading freed resource memory.
     std::unique_ptr<EmojiAnimation> animation_ = nullptr;
     PhaseType phase_ = PhaseType::kIntro;
     size_t frame_index_ = 0;

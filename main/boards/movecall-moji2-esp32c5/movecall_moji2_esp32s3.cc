@@ -1,11 +1,10 @@
-#include "ui/display/display_factory.h"
-
-#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "codecs/es8311_audio_codec.h"
+#include "display/lcd_display.h"
+#include "application.h"
 #include "button.h"
 #include "config.h"
-#include "services/service_ws2812.h"
+#include "led/single_led.h"
 #include "press_to_talk_mcp_tool.h"
 
 #include <esp_log.h>
@@ -239,10 +238,10 @@ private:
     void InitializePowerSaveTimer() {
         power_save_timer_ = new PowerSaveTimer(240, 300);
         power_save_timer_->OnEnterSleepMode([this]() {
-            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOn);
+            GetDisplay()->SetPowerSaveMode(true);
         });
         power_save_timer_->OnExitSleepMode([this]() {
-            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOff);
+            GetDisplay()->SetPowerSaveMode(false);
         });
         power_save_timer_->SetEnabled(true);
     }
@@ -282,12 +281,12 @@ private:
         esp_lcd_panel_io_handle_t panel_io = nullptr;
         esp_lcd_panel_handle_t panel = nullptr;
         ESP_LOGI(TAG, "Install panel IO");
-
+        
         esp_lcd_panel_io_spi_config_t io_config = ST77916_PANEL_IO_QSPI_CONFIG(DISPLAY_QSPI_CS_PIN, NULL, NULL);
         // io_config.pclk_hz = DISPLAY_SPI_SCLK_HZ;
         ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)DISPLAY_QSPI_HOST, &io_config, &panel_io));
 
-
+    
         ESP_LOGI(TAG, "Install St77916 panel driver");
         st77916_vendor_config_t vendor_config = {
             .init_cmds = lcd_init_cmds,
@@ -310,19 +309,20 @@ private:
         esp_lcd_panel_swap_xy(panel, DISPLAY_SWAP_XY);
         esp_lcd_panel_mirror(panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
 
-        display_ = CreateSpiLcdDisplay(panel_io, panel,
+        display_ = new SpiLcdDisplay(panel_io, panel,
                                     DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
+            auto& app = Application::GetInstance();
             // During startup (before connected), pressing BOOT enters config mode without reboot
-            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
+            if (app.GetDeviceState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
             if (!press_to_talk_tool_ || !press_to_talk_tool_->IsPressToTalkEnabled()) {
-                BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
+                app.ToggleChatState();
             }
         });
         boot_button_.OnPressDown([this]() {
@@ -330,41 +330,42 @@ private:
                 power_save_timer_->WakeUp();
             }
             if (press_to_talk_tool_ && press_to_talk_tool_->IsPressToTalkEnabled()) {
-                BoardEvents::PostInput(BoardEvents::Input::TouchDown);
+                Application::GetInstance().StartListening();
             }
         });
         boot_button_.OnPressUp([this]() {
             if (press_to_talk_tool_ && press_to_talk_tool_->IsPressToTalkEnabled()) {
-                BoardEvents::PostInput(BoardEvents::Input::TouchUp);
+                Application::GetInstance().StopListening();
             }
         });
     }
 
-    void RegisterMcpTools(McpServer& mcp_server) override {
+    void InitializeTools() {
         press_to_talk_tool_ = new PressToTalkMcpTool();
         press_to_talk_tool_->Initialize();
     }
 
 public:
-    MovecallMoji2ESP32C5() : boot_button_(BOOT_BUTTON_GPIO) {
+    MovecallMoji2ESP32C5() : boot_button_(BOOT_BUTTON_GPIO) {  
         InitializeCodecI2c();
         InitializeBatteryMonitor();
         InitializePowerSaveTimer();
         InitializeSpi();
         InitializeSt77916Display();
         InitializeButtons();
+        InitializeTools();
         GetBacklight()->RestoreBrightness();
     }
 
     virtual Led* GetLed() override {
-        static Ws2812Service led_strip(BUILTIN_LED_GPIO);
+        static SingleLed led_strip(BUILTIN_LED_GPIO);
         return &led_strip;
     }
 
     virtual Display* GetDisplay() override {
         return display_;
     }
-
+    
     virtual Backlight* GetBacklight() override {
         static PwmBacklight backlight(DISPLAY_BACKLIGHT_PIN, DISPLAY_BACKLIGHT_OUTPUT_INVERT);
         return &backlight;
@@ -387,5 +388,3 @@ public:
 };
 
 DECLARE_BOARD(MovecallMoji2ESP32C5);
-
-

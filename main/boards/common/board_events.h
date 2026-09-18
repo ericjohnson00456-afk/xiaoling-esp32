@@ -57,8 +57,28 @@ constexpr int32_t kWakeWordDetected = 2;
 constexpr int32_t kSystemMessage = 3;
 constexpr int32_t kEmotion = 4;
 constexpr int32_t kLocalizedText = 5;
+constexpr int32_t kButton = 6;
 
 esp_err_t PostInput(Input input, int32_t value = 0, bool percent = false);
+
+// Generic button events carry hardware identity and gesture data only. The
+// application layer decides what each button action means.
+enum class ButtonId : uint8_t {
+    Primary,
+};
+
+enum class ButtonGesture : uint8_t {
+    ShortPress,
+    LongPress,
+};
+
+struct ButtonEvent {
+    ButtonId button;
+    ButtonGesture gesture;
+    uint8_t click_count;
+};
+
+esp_err_t PostButton(ButtonId button, ButtonGesture gesture, uint8_t click_count = 0);
 
 struct WifiConfigHintEvent {
     char ssid[64];

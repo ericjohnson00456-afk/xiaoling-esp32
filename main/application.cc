@@ -1,6 +1,6 @@
 #include "application.h"
 #include "board.h"
-#include "display.h"
+#include "display/display.h"
 #include "system/system_info.h"
 #include "audio_codec.h"
 #include "xiaoling/conn/xiaoling_conn.h"
@@ -12,26 +12,22 @@
 #include "system/time_sync.h"
 #include "ui/core/ui_app.h"
 #include "ui/core/ui_manager.h"
+#include "ui/core/ui_page_ids.h"
 #include "ui/events/ui_events.h"
-#include "ui/models/home/duplex_model.h"
-#include "ui/models/qrcode/qrcode_model.h"
-#include "ui/models/home/voice_model.h"
+#include "ui/screens/qrcode/qrcode_presenter.h"
 #include "xiaoling/xiaoling_events.h"
-#include "ui/models/home/wifi_model.h"
 #include "player/resource/tone_model.h"
+#include "ui/screens/home/home_presenter.h"
 
 #ifdef CONFIG_LSPLATFORM
 #include "image_fetcher.h"
 #endif // CONFIG_LSPLATFORM
 
-#if CONFIG_LSPLATFORM_BANNERS
-#include "ui/models/home/banner_model.h"
-#endif // CONFIG_LSPLATFORM_BANNERS
-
 #include <cstring>
 #include <esp_log.h>
 #include <esp_system.h>
 #include <nvs_flash.h>
+#include <font_awesome.h>
 #include <cJSON.h>
 #include <driver/gpio.h>
 #include <arpa/inet.h>
@@ -107,8 +103,7 @@ void Application::Initialize() {
     // dependencies and also gives us one place to apply device-state rules.
     ESP_ERROR_CHECK(esp_event_handler_register(
         BOARD_EVENT, ESP_EVENT_ANY_ID, &Application::OnBoardInputEvent, this));
-    ESP_ERROR_CHECK(esp_event_handler_register(
-        BUTTON_EVENT, ESP_EVENT_ANY_ID, &Application::OnButtonEvent, this));
+    InitializeButtonEvents();
 
     SetDeviceState(kDeviceStateStarting);
 
@@ -119,8 +114,7 @@ void Application::Initialize() {
         Schedule(std::move(task));
     });
 #if CONFIG_LSPLATFORM_BANNERS
-    // BannerModel 负责解析和保存数据，HomePresenter 负责轮换与显示。
-    BannerModel::GetInstance().SetWakeWordProvider([this]() {
+    HomePresenter::GetInstance().SetWakeWordProvider([this]() {
         return audio_service_.GetWakeWordName();
     });
     ui_manager.SetBannerIdleProvider([this]() {
@@ -130,6 +124,7 @@ void Application::Initialize() {
     if (!UiApp::Initialize()) {
         ESP_LOGE(TAG, "Home 页面初始化失败");
     }
+    PublishWifiIcon();
     UiEvents::PostDuplexMode(static_cast<int32_t>(session_controller_.policy().mode));
 #ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
     // 语音播放初始化前建立 ROMFS tone 索引，播放器随后可按 tone_id 读取资源。
@@ -239,7 +234,7 @@ void Application::Initialize() {
             }
             case NetworkEvent::Disconnected:
                 network_connected_ = false;
-                QrCodeModel::GetInstance().ClearRoleConfigUrl();
+                QrCodePresenter::GetInstance().ClearRoleConfigUrl();
                 xEventGroupSetBits(event_group_, MAIN_EVENT_NETWORK_DISCONNECTED);
                 break;
             case NetworkEvent::WifiConfigModeEnter:
@@ -266,7 +261,7 @@ void Application::Initialize() {
                 UiEvents::PostStatus(UiEvents::Status::RegisteringNetwork);
                 break;
         }
-        WifiModel::GetInstance().Refresh();
+        PublishWifiIcon();
     });
 
     // Start network asynchronously
@@ -287,6 +282,9 @@ void Application::OnBoardInputEvent(void* arg, esp_event_base_t event_base,
     (void)event_id;
     auto* app = static_cast<Application*>(arg);
     if (app == nullptr || event_data == nullptr) {
+        return;
+    }
+    if (event_id == BoardEvents::kButton) {
         return;
     }
     if (event_id == BoardEvents::kInput) {
@@ -512,7 +510,7 @@ void Application::Run() {
 
         if (bits & MAIN_EVENT_CLOCK_TICK) {
             clock_ticks_++;
-            WifiModel::GetInstance().Refresh();
+            PublishWifiIcon();
             UiEvents::PostStatusBarUpdate();
 
             // Print debug info every 10 seconds
@@ -792,10 +790,9 @@ void Application::InitializeXiaolingConn() {
             }
 
             if (strcmp(sub->valuestring, "setting") == 0) {
-                QrCodeModel::GetInstance().HandleSettingMessage(data);
+                QrCodePresenter::GetInstance().HandleSettingMessage(data);
 #if CONFIG_LSPLATFORM_BANNERS
-                // 设置推送里的 theme.frontend.banner 由 BannerModel 解析并发布给 UI
-                BannerModel::GetInstance().HandleSettingMessage(data);
+                HomePresenter::GetInstance().HandleSettingMessage(data);
 #endif
             }
             return;
@@ -854,13 +851,13 @@ void Application::ShowActivationCode(const std::string& code, const std::string&
     if (!qrcode.empty()) {
         auto& board = Board::GetInstance();
         auto fetcher = board.GetImageFetcher();
-        auto display = board.GetDisplay();
         auto image = fetcher->Fetch(qrcode);
         if (!image) {
             ESP_LOGE(TAG, "Failed to fetch QR code image");
             return;
         }
-        display->ShowActivation(std::move(image), message + code);
+        QrCodePresenter::GetInstance().SetCustomQrCode(std::move(image), message + code);
+        UiManager::GetInstance().NavigateTo(UI_PAGE_QRCODE);
     } else {
         ESP_LOGW(TAG, "QR code URL is empty, skipping image download");
     }
@@ -1047,6 +1044,19 @@ void Application::HandleWakeWordDetectedEvent() {
     }
 #endif
     BeginWakeup(listening_mode_);
+}
+
+void Application::PublishWifiIcon() {
+    std::string icon;
+    if (BoardEvents::GetRuntimeState() == kDeviceStateWifiConfiguring) {
+        icon = FONT_AWESOME_WIFI_SLASH;
+    } else if (const char* network_icon = Board::GetInstance().GetNetworkStateIcon();
+               network_icon != nullptr) {
+        icon = network_icon;
+    }
+    UiManager::GetInstance().Dispatch([icon = std::move(icon)]() {
+        HomePresenter::GetInstance().SetWifiIcon(icon);
+    });
 }
 
 void Application::AbortSpeaking(AbortReason reason) {

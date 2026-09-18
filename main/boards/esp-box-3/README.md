@@ -44,6 +44,20 @@ ESP-BOX-3 支持多种不同的 UI 显示风格，通过 menuconfig 配置选择
 
 #### 可选风格
 
+##### 表情动画风格 (Emote animation style) - 推荐
+- **配置选项**: `USE_EMOTE_MESSAGE_STYLE`
+- **特点**: 使用自定义的 `EmoteDisplay` 表情显示系统
+- **功能**: 支持丰富的表情动画、眼睛动画、状态图标显示
+- **适用**: 智能助手场景，提供更生动的人机交互体验
+- **类**: `emote::EmoteDisplay`
+
+**⚠️ 重要**: 选择此风格需要额外配置自定义资源文件：
+1. `Xiaozhi Assistant` → `Flash Assets` → 选择 `Flash Custom Assets`
+2. `Xiaozhi Assistant` → `Custom Assets File` → 填入资源文件地址：
+   ```
+   https://dl.espressif.com/AE/wn9_nihaoxiaozhi_tts-font_puhui_common_20_4-esp-box-3.bin
+   ```
+
 ##### 默认消息风格 (Enable default message style)
 - **配置选项**: `USE_DEFAULT_MESSAGE_STYLE` (默认)
 - **特点**: 使用标准的消息显示界面

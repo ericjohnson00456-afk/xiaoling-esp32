@@ -9,6 +9,7 @@
 
 class Display;
 class LvglDisplay;
+class LegacyDisplayAdapter;
 
 /*
  * UI 层入口：display 层只负责面板/LVGL 硬件初始化与亮度控制，
@@ -56,5 +57,6 @@ private:
 
     Display* display_ = nullptr;
     LvglDisplay* lvgl_display_ = nullptr;
+    std::unique_ptr<LegacyDisplayAdapter> legacy_display_adapter_;
     std::function<void(std::function<void()>&&)> task_scheduler_;
 };

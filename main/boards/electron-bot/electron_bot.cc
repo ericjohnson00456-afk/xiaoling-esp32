@@ -1,4 +1,3 @@
-#include "boards/common/board_events.h"
 #include <driver/i2c_master.h>
 #include <driver/spi_common.h>
 #include <esp_lcd_gc9a01.h>
@@ -7,10 +6,11 @@
 #include <esp_lcd_panel_vendor.h>
 #include <esp_log.h>
 
+#include "application.h"
 #include "codecs/no_audio_codec.h"
 #include "button.h"
 #include "config.h"
-#include "ui/display/panels/lcd_display.h"
+#include "display/lcd_display.h"
 #include "driver/spi_master.h"
 #include "electron_emoji_display.h"
 #include "movements.h"
@@ -74,11 +74,12 @@ private:
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
-            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
-            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
+            app.ToggleChatState();
         });
     }
 
@@ -120,5 +121,3 @@ public:
 };
 
 DECLARE_BOARD(ElectronBot);
-
-

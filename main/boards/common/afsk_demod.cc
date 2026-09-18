@@ -1,10 +1,9 @@
-#include "boards/common/board_events.h"
 #include "afsk_demod.h"
 #include "application.h"
 #include <cstring>
 #include <algorithm>
 #include "esp_log.h"
-#include "display.h"
+#include "display/display.h"
 #include "ssid_manager.h"
 
 #ifndef M_PI
@@ -79,7 +78,7 @@ namespace audio_wifi_config
                 // If complete data was received, extract WiFi credentials
                 if (data_buffer.decoded_text.has_value()) {
                     ESP_LOGI(kLogTag, "Received text data: %s", data_buffer.decoded_text->c_str());
-                    BoardEvents::PostSystemMessage("system", *data_buffer.decoded_text);
+                    display->SetChatMessage("system", data_buffer.decoded_text->c_str());
 
                     // Split SSID and password by newline character
                     std::string wifi_ssid, wifi_password;

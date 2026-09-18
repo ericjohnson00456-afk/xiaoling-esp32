@@ -1,8 +1,7 @@
 #include "qrcode_presenter.h"
 
 #include "board.h"
-#include "display.h"
-#include "ui/models/qrcode/qrcode_model.h"
+#include "display/display.h"
 #include "ui/core/ui_manager.h"
 #include "ui/core/ui_page_ids.h"
 #include "ui/events/ui_events.h"
@@ -10,13 +9,22 @@
 #include "qrcode_view.h"
 
 #include <utility>
+#include <new>
 
 #include <esp_log.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #define TAG "QrCodePresenter"
 
 namespace {
 constexpr uint64_t kQrCodeTimeoutUs = 30ULL * 1000 * 1000;
+
+struct FetchRequest {
+    QrCodePresenter* presenter;
+    std::string url;
+    uint32_t generation;
+};
 
 class SharedLvglImage final : public LvglImage {
 public:
@@ -53,7 +61,6 @@ int QrCodePresenter::Open(const UiNavScreen* screen, void** data) {
     (void)screen;
     auto& presenter = GetInstance();
     presenter.view_ = std::make_unique<QrCodeView>(UiManager::GetInstance().display());
-    presenter.SubscribeModel();
     *data = &presenter;
     return 0;
 }
@@ -66,7 +73,7 @@ int QrCodePresenter::Show(const UiNavScreen* screen, void* data) {
     }
     presenter->view_->Show();
     presenter->StartTimeoutTimer();
-    presenter->Refresh(QrCodeModel::GetInstance().Snapshot());
+    presenter->Refresh();
     return 0;
 }
 
@@ -94,7 +101,6 @@ int QrCodePresenter::Close(const UiNavScreen* screen, void* data) {
         return 0;
     }
     presenter->DestroyTimeoutTimer();
-    presenter->UnsubscribeModel();
     presenter->view_.reset();
     presenter->last_rendered_message_.clear();
     presenter->last_rendered_image_.reset();
@@ -102,20 +108,118 @@ int QrCodePresenter::Close(const UiNavScreen* screen, void* data) {
     return 0;
 }
 
-void QrCodePresenter::SubscribeModel() {
-    qrcode_subscription_ = QrCodeModel::GetInstance().Subscribe([](const QrCodeModelState& state) {
-        UiManager::GetInstance().Dispatch([state]() {
-            auto& presenter = QrCodePresenter::GetInstance();
-            if (presenter.view_ != nullptr && UiManager::GetInstance().TopScreenId() == UI_PAGE_QRCODE) {
-                presenter.Refresh(state);
-            }
-        });
-    }, false);
+void QrCodePresenter::HandleSettingMessage(const cJSON* data) {
+    const auto* guide = cJSON_IsObject(data) ? cJSON_GetObjectItemCaseSensitive(data, "mp_guide") : nullptr;
+    const auto* role_config = cJSON_IsObject(guide) ? cJSON_GetObjectItemCaseSensitive(guide, "role_config") : nullptr;
+    const auto* image_url = cJSON_IsObject(role_config) ? cJSON_GetObjectItemCaseSensitive(role_config, "image_url") : nullptr;
+    if (cJSON_IsString(image_url) && image_url->valuestring != nullptr && image_url->valuestring[0] != '\0') {
+        SetRoleConfigUrl(image_url->valuestring);
+    }
 }
 
-void QrCodePresenter::UnsubscribeModel() {
-    QrCodeModel::GetInstance().Unsubscribe(qrcode_subscription_);
-    qrcode_subscription_ = 0;
+void QrCodePresenter::SetRoleConfigUrl(std::string url) {
+    if (url.empty()) {
+        return;
+    }
+
+    uint32_t generation;
+    std::string request_url;
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        if (role_config_url_ == url && role_config_image_ != nullptr) {
+            return;
+        }
+        generation = ++fetch_generation_;
+        role_config_url_ = std::move(url);
+        role_config_image_.reset();
+        request_url = role_config_url_;
+    }
+
+#if CONFIG_LSPLATFORM
+    auto* request = new (std::nothrow) FetchRequest{this, request_url, generation};
+    if (request == nullptr || xTaskCreate(&QrCodePresenter::FetchTask, "qrcode_fetch", 6144, request, 2, nullptr) != pdPASS) {
+        delete request;
+        CompleteFetch(request_url, generation, nullptr);
+    }
+#else
+    CompleteFetch(request_url, generation, nullptr);
+#endif
+}
+
+void QrCodePresenter::ClearRoleConfigUrl() {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    ++fetch_generation_;
+    role_config_url_.clear();
+    role_config_image_.reset();
+}
+
+void QrCodePresenter::SelectRoleConfig() {
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        custom_selected_ = false;
+        custom_image_.reset();
+        custom_message_.clear();
+    }
+    UiManager::GetInstance().Dispatch([]() {
+        auto& presenter = QrCodePresenter::GetInstance();
+        if (presenter.view_ != nullptr && UiManager::GetInstance().TopScreenId() == UI_PAGE_QRCODE) {
+            presenter.Refresh();
+        }
+    });
+}
+
+void QrCodePresenter::SetCustomQrCode(std::unique_ptr<LvglImage> image, std::string message) {
+    if (image == nullptr) {
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        custom_image_ = std::shared_ptr<LvglImage>(std::move(image));
+        custom_message_ = std::move(message);
+        custom_selected_ = true;
+    }
+    UiManager::GetInstance().Dispatch([]() {
+        auto& presenter = QrCodePresenter::GetInstance();
+        if (presenter.view_ != nullptr && UiManager::GetInstance().TopScreenId() == UI_PAGE_QRCODE) {
+            presenter.Refresh();
+        }
+    });
+}
+
+bool QrCodePresenter::HasRoleConfigQrCode() const {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    return role_config_image_ != nullptr;
+}
+
+void QrCodePresenter::FetchTask(void* arg) {
+#if CONFIG_LSPLATFORM
+    std::unique_ptr<FetchRequest> request(static_cast<FetchRequest*>(arg));
+    std::unique_ptr<LvglImage> image;
+    if (auto* fetcher = Board::GetInstance().GetImageFetcher(); fetcher != nullptr) {
+        image = fetcher->Fetch(request->url);
+    }
+    request->presenter->CompleteFetch(request->url, request->generation, std::move(image));
+#else
+    delete static_cast<FetchRequest*>(arg);
+#endif
+    vTaskDelete(nullptr);
+}
+
+void QrCodePresenter::CompleteFetch(const std::string& url, uint32_t generation,
+                                    std::unique_ptr<LvglImage> image) {
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        if (generation != fetch_generation_ || url != role_config_url_) {
+            return;
+        }
+        role_config_image_ = image != nullptr ? std::shared_ptr<LvglImage>(std::move(image)) : nullptr;
+    }
+    UiManager::GetInstance().Dispatch([]() {
+        auto& presenter = QrCodePresenter::GetInstance();
+        if (presenter.view_ != nullptr && UiManager::GetInstance().TopScreenId() == UI_PAGE_QRCODE) {
+            presenter.Refresh();
+        }
+    });
 }
 
 void QrCodePresenter::StartTimeoutTimer() {
@@ -164,7 +268,7 @@ void QrCodePresenter::TimeoutCallback(void* arg) {
     }
 }
 
-void QrCodePresenter::Refresh(const QrCodeModelState& state) {
+void QrCodePresenter::Refresh() {
     if (view_ == nullptr) {
         return;
     }
@@ -172,15 +276,21 @@ void QrCodePresenter::Refresh(const QrCodeModelState& state) {
 #ifdef CONFIG_LSPLATFORM
     std::shared_ptr<LvglImage> image;
     std::string message;
-    if (state.content_source == QrCodeContentSource::kCustom && state.custom_image != nullptr) {
-        image = state.custom_image;
-        message = state.custom_message;
-    } else if (state.role_config_image != nullptr) {
-        image = state.role_config_image;
-        message = "角色配置";
+    bool custom_selected = false;
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        custom_selected = custom_selected_;
+        if (custom_selected && custom_image_ != nullptr) {
+            image = custom_image_;
+            message = custom_message_;
+        } else if (role_config_image_ != nullptr) {
+            image = role_config_image_;
+        }
     }
-
     if (image != nullptr) {
+        if (message.empty() && !custom_selected) {
+            message = "角色配置";
+        }
         if (rendered_ && image == last_rendered_image_ && message == last_rendered_message_) {
             return;
         }
@@ -205,6 +315,5 @@ void QrCodePresenter::Refresh(const QrCodeModelState& state) {
     // board start its normal provisioning UI in that case.
     Board::GetInstance().EnterNetworkConfigMode();
 #else
-    (void)state;
 #endif
 }

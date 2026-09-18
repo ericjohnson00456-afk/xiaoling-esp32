@@ -1,7 +1,7 @@
 #include "ml307_board.h"
 
 #include "audio_codec.h"
-#include "display.h"
+#include "display/display.h"
 
 #include <esp_log.h>
 #include <esp_timer.h>

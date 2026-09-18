@@ -1,9 +1,9 @@
 #include "assets.h"
 #include "board.h"
-#include "display.h"
+#include "display/display.h"
 #include "application.h"
 #include "lvgl_theme.h"
-#include "ui/display/panels/lcd_display.h"
+#include "display/lcd_display.h"
 
 #include <esp_log.h>
 #include <esp_timer.h>
@@ -145,7 +145,7 @@ bool Assets::Apply() {
 
     cJSON* emoji_collection = cJSON_GetObjectItem(root, "emoji_collection");
     if (cJSON_IsArray(emoji_collection)) {
-        auto custom_emoji_model = std::make_shared<EmojiModel>();
+        auto custom_emoji_repository = std::make_shared<EmojiRepository>();
         int emoji_count = cJSON_GetArraySize(emoji_collection);
         for (int i = 0; i < emoji_count; i++) {
             cJSON* emoji = cJSON_GetArrayItem(emoji_collection, i);
@@ -158,15 +158,15 @@ bool Assets::Apply() {
                         ESP_LOGE(TAG, "Emoji %s image file %s is not found", name->valuestring, file->valuestring);
                         continue;
                     }
-                    custom_emoji_model->AddEmoji(name->valuestring, new LvglRawImage(ptr, size));
+                    custom_emoji_repository->AddEmoji(name->valuestring, new LvglRawImage(ptr, size));
                 }
             }
         }
         if (light_theme != nullptr) {
-            light_theme->set_emoji_model(custom_emoji_model);
+            light_theme->set_emoji_repository(custom_emoji_repository);
         }
         if (dark_theme != nullptr) {
-            dark_theme->set_emoji_model(custom_emoji_model);
+            dark_theme->set_emoji_repository(custom_emoji_repository);
         }
     }
 

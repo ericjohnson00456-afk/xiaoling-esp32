@@ -1,12 +1,11 @@
-#include "ui/display/display_factory.h"
-
-#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "codecs/es8311_audio_codec.h"
+#include "display/lcd_display.h"
 #include "system_reset.h"
+#include "application.h"
 #include "button.h"
 #include "config.h"
-#include "services/service_ws2812.h"
+#include "led/single_led.h"
 
 #include <esp_log.h>
 #include <esp_lcd_panel_vendor.h>
@@ -18,7 +17,7 @@
 class KEVIN_SP_V4Board : public WifiBoard {
 private:
     Button boot_button_;
-    Display* display_;
+    LcdDisplay* display_;
     i2c_master_bus_handle_t i2c_bus_;
     Esp32Camera* camera_;
 
@@ -52,16 +51,17 @@ private:
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
-            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
         });
         boot_button_.OnPressDown([this]() {
-            BoardEvents::PostInput(BoardEvents::Input::TouchDown);
+            Application::GetInstance().StartListening();
         });
         boot_button_.OnPressUp([this]() {
-            BoardEvents::PostInput(BoardEvents::Input::TouchUp);
+            Application::GetInstance().StopListening();
         });
     }
 
@@ -93,7 +93,7 @@ private:
         ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y));
         ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel, true));
 
-        display_ = CreateSpiLcdDisplay(panel_io, panel,
+        display_ = new SpiLcdDisplay(panel_io, panel,
                             DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
 
@@ -143,13 +143,13 @@ public:
         InitializeCodecI2c();
         InitializeSpi();
         InitializeButtons();
-        InitializeSt7789Display();
+        InitializeSt7789Display();  
         InitializeCamera();
         GetBacklight()->RestoreBrightness();
     }
 
     virtual Led* GetLed() override {
-        static Ws2812Service led(BUILTIN_LED_GPIO);
+        static SingleLed led(BUILTIN_LED_GPIO);
         return &led;
     }
 
@@ -163,17 +163,15 @@ public:
     virtual Display *GetDisplay() override {
         return display_;
     }
-
+    
     virtual Backlight* GetBacklight() override {
         static PwmBacklight backlight(DISPLAY_BACKLIGHT_PIN, DISPLAY_BACKLIGHT_OUTPUT_INVERT);
         return &backlight;
     }
-
+    
     virtual Camera* GetCamera() override {
         return camera_;
     }
 };
 
 DECLARE_BOARD(KEVIN_SP_V4Board);
-
-

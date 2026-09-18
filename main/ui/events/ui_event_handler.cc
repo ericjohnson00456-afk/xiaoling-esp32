@@ -2,15 +2,13 @@
 #include "ui_events.h"
 
 #include "ui/i18n/lang_config.h"
-#include "ui/models/home/status_model.h"
-#include "ui/models/home/duplex_model.h"
 #include "ui/core/ui_manager.h"
 #include "ui/core/ui_page_ids.h"
 #include "system/device_status.h"
+#include "ui/screens/home/home_presenter.h"
 
-#include "display.h"
-#include "ui/models/home/voice_model.h"
-#include "ui/models/home/image_model.h"
+#include "display/display.h"
+#include "ui/screens/home/home_presenter.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -70,27 +68,27 @@ std::string LocalizeNotification(const UiEvents::NotificationEvent& event) {
 void OnStatusChanged(void*, esp_event_base_t, int32_t, void* event_data) {
     const auto event = *static_cast<const UiEvents::StatusEvent*>(event_data);
     UiManager::GetInstance().Dispatch([event]() {
-        StatusModel::GetInstance().SetText(LocalizeStatus(event));
+        HomePresenter::GetInstance().SetStatus(LocalizeStatus(event));
     });
 }
 
 void OnStatusTextChanged(void*, esp_event_base_t, int32_t, void* event_data) {
     const auto event = *static_cast<const UiEvents::StatusTextEvent*>(event_data);
     UiManager::GetInstance().Dispatch([event]() {
-        StatusModel::GetInstance().SetText(event.text);
+        HomePresenter::GetInstance().SetStatus(event.text);
     });
 }
 
 void OnNotificationChanged(void*, esp_event_base_t, int32_t, void* event_data) {
     const auto event = *static_cast<const UiEvents::NotificationEvent*>(event_data);
     UiManager::GetInstance().Dispatch([event]() {
-        auto* display = UiManager::GetInstance().display();
-        if (display == nullptr) {
-            return;
-        }
         const auto text = LocalizeNotification(event);
         if (!text.empty()) {
-            display->ShowNotification(text, event.duration_ms);
+            if (UiManager::GetInstance().lvgl_display() != nullptr) {
+                HomePresenter::GetInstance().ShowNotification(text, event.duration_ms);
+            } else if (auto* display = UiManager::GetInstance().display(); display != nullptr) {
+                display->ShowNotification(text, event.duration_ms);
+            }
         }
     });
 }
@@ -98,8 +96,9 @@ void OnNotificationChanged(void*, esp_event_base_t, int32_t, void* event_data) {
 void OnChatMessageChanged(void*, esp_event_base_t, int32_t, void* event_data) {
     const auto event = *static_cast<const UiEvents::ChatMessageEvent*>(event_data);
     UiManager::GetInstance().Dispatch([event]() {
-        auto* display = UiManager::GetInstance().display();
-        if (display != nullptr) {
+        if (UiManager::GetInstance().lvgl_display() != nullptr) {
+            HomePresenter::GetInstance().SetChatMessage(event.role, event.content);
+        } else if (auto* display = UiManager::GetInstance().display(); display != nullptr) {
             display->SetChatMessage(event.role, event.content);
         }
     });
@@ -108,7 +107,7 @@ void OnChatMessageChanged(void*, esp_event_base_t, int32_t, void* event_data) {
 void OnVoicePromptChanged(void*, esp_event_base_t, int32_t, void* event_data) {
     const auto event = *static_cast<const UiEvents::VoicePromptEvent*>(event_data);
     UiManager::GetInstance().Dispatch([event]() {
-        VoiceModel::GetInstance().SetPrompt(event.text);
+        HomePresenter::GetInstance().SetText(event.text);
     });
 }
 
@@ -129,11 +128,13 @@ void OnEmotionChanged(void*, esp_event_base_t, int32_t, void* event_data) {
 
     UiManager::GetInstance().Dispatch([event]() {
         if (event.once) {
-            if (auto* display = UiManager::GetInstance().display(); display != nullptr) {
+            if (UiManager::GetInstance().lvgl_display() != nullptr) {
+                HomePresenter::GetInstance().ShowEmotionOnce(event.emotion);
+            } else if (auto* display = UiManager::GetInstance().display(); display != nullptr) {
                 display->ShowEmotionOnce(event.emotion);
             }
         } else {
-            VoiceModel::GetInstance().SetEmotion(event.emotion);
+            HomePresenter::GetInstance().SetEmotion(event.emotion);
         }
     });
 }
@@ -151,8 +152,9 @@ void OnStatusBarChanged(void*, esp_event_base_t, int32_t, void* event_data) {
 void OnNotificationTextChanged(void*, esp_event_base_t, int32_t, void* event_data) {
     const auto event = *static_cast<const UiEvents::NotificationTextEvent*>(event_data);
     UiManager::GetInstance().Dispatch([event]() {
-        auto* display = UiManager::GetInstance().display();
-        if (display != nullptr) {
+        if (UiManager::GetInstance().lvgl_display() != nullptr) {
+            HomePresenter::GetInstance().ShowNotification(event.text, event.duration_ms);
+        } else if (auto* display = UiManager::GetInstance().display(); display != nullptr) {
             display->ShowNotification(event.text, event.duration_ms);
         }
     });
@@ -160,14 +162,17 @@ void OnNotificationTextChanged(void*, esp_event_base_t, int32_t, void* event_dat
 
 void OnOverlaysDismissed(void*, esp_event_base_t, int32_t, void*) {
     UiManager::GetInstance().Dispatch([]() {
-        auto* display = UiManager::GetInstance().display();
-        if (display == nullptr) {
-            return;
-        }
 #ifdef CONFIG_LSPLATFORM
-        ImageModel::GetInstance().Clear();
-        display->DismissImage();
-        display->DismissActivation();
+        if (UiManager::GetInstance().lvgl_display() != nullptr) {
+            if (UiManager::GetInstance().TopScreenId() == UI_PAGE_QRCODE) {
+                UiManager::GetInstance().NavigateHome();
+            } else {
+                HomePresenter::GetInstance().ClearImage();
+            }
+        } else if (auto* display = UiManager::GetInstance().display(); display != nullptr) {
+            display->DismissImage();
+            display->DismissActivation();
+        }
 #endif
     });
 }
@@ -175,10 +180,6 @@ void OnOverlaysDismissed(void*, esp_event_base_t, int32_t, void*) {
 void OnVolumeChanged(void*, esp_event_base_t, int32_t, void* event_data) {
     const auto event = *static_cast<const UiEvents::VolumeEvent*>(event_data);
     UiManager::GetInstance().Dispatch([event]() {
-        auto* display = UiManager::GetInstance().display();
-        if (display == nullptr) {
-            return;
-        }
         std::string text;
         if (event.action == 1) {
             text = Lang::Strings::MAX_VOLUME;
@@ -190,7 +191,11 @@ void OnVolumeChanged(void*, esp_event_base_t, int32_t, void* event_data) {
                 text += "%";
             }
         }
-        display->ShowNotification(text);
+        if (UiManager::GetInstance().lvgl_display() != nullptr) {
+            HomePresenter::GetInstance().ShowNotification(text);
+        } else if (auto* display = UiManager::GetInstance().display(); display != nullptr) {
+            display->ShowNotification(text);
+        }
     });
 }
 
@@ -206,7 +211,7 @@ void OnLocalizedTextChanged(void*, esp_event_base_t, int32_t, void* event_data) 
                 text = Lang::Strings::PLEASE_WAIT;
                 break;
         }
-        StatusModel::GetInstance().SetText(text);
+        HomePresenter::GetInstance().SetStatus(text);
     });
 }
 
@@ -216,19 +221,18 @@ void OnWifiConfigHintChanged(void*, esp_event_base_t, int32_t, void* event_data)
         std::string hint = std::string(Lang::Strings::CONNECT_TO_HOTSPOT) + event.ssid;
         hint += Lang::Strings::ACCESS_VIA_BROWSER;
         hint += event.url;
-        StatusModel::GetInstance().SetText(Lang::Strings::WIFI_CONFIG_MODE);
-        VoiceModel::GetInstance().SetEmotion("gear");
-        auto* display = UiManager::GetInstance().display();
-        if (display != nullptr) {
-            display->SetChatMessage("system", hint.c_str());
-        }
+        HomePresenter::GetInstance().SetStatus(Lang::Strings::WIFI_CONFIG_MODE);
+        HomePresenter::GetInstance().SetEmotion("gear");
+        HomePresenter::GetInstance().SetChatMessage("system", hint);
     });
 }
 
 void OnPowerSaveModeChanged(void*, esp_event_base_t, int32_t, void* event_data) {
     const auto event = *static_cast<const UiEvents::PowerSaveModeEvent*>(event_data);
     UiManager::GetInstance().Dispatch([event]() {
-        if (auto* display = UiManager::GetInstance().display(); display != nullptr) {
+        if (UiManager::GetInstance().lvgl_display() != nullptr) {
+            HomePresenter::GetInstance().SetPowerSaveMode(event.enabled);
+        } else if (auto* display = UiManager::GetInstance().display(); display != nullptr) {
             display->SetPowerSaveMode(event.enabled);
         }
     });
@@ -242,7 +246,7 @@ void OnDuplexModeChanged(void*, esp_event_base_t, int32_t, void* event_data) {
         return;
     }
     UiManager::GetInstance().Dispatch([mode = static_cast<DuplexMode>(event.mode)]() {
-        DuplexModel::GetInstance().SetMode(mode);
+        HomePresenter::GetInstance().SetDuplexMode(mode);
     });
 }
 

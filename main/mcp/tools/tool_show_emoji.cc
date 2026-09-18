@@ -4,17 +4,17 @@
 #include "mcp_server.h"
 #include "ui/events/ui_events.h"
 #include "ui/core/ui_manager.h"
-#include "display.h"
+#include "display/display.h"
 #include "ui/themes/lvgl_theme.h"
-#include "ui/models/emoji_model.h"
+#include "ui/resources/emoji_repository.h"
 
 namespace {
 MCP_REGISTER_TOOL(RegisterShowEmoji, McpToolGroup::kCommon, 130) {
   std::string names_description = "表情名称";
   if (auto *display = UiManager::GetInstance().display(); display != nullptr) {
     if (auto *theme = dynamic_cast<LvglTheme *>(display->GetTheme()); theme != nullptr &&
-        theme->emoji_model() != nullptr) {
-      const auto names = theme->emoji_model()->GetNames();
+        theme->emoji_repository() != nullptr) {
+      const auto names = theme->emoji_repository()->GetNames();
       if (!names.empty()) {
         names_description = "表情类型，可以是 ";
         for (size_t i = 0; i < names.size(); ++i) {

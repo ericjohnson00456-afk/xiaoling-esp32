@@ -5,7 +5,7 @@
 #include "ui/core/ui_manager.h"
 #include "ui/core/ui_page_ids.h"
 #include "ui/events/ui_events.h"
-#include "ui/models/qrcode/qrcode_model.h"
+#include "ui/screens/qrcode/qrcode_presenter.h"
 
 #include <esp_log.h>
 #include <ssid_manager.h>
@@ -17,22 +17,34 @@ constexpr uint16_t kProvisioningToneId = 70;
 constexpr uint16_t kDeviceConfigToneId = 104;
 }
 
-void Application::OnButtonEvent(void* arg, esp_event_base_t event_base,
-                                int32_t event_id, void* event_data) {
+void Application::InitializeButtonEvents() {
+    ESP_ERROR_CHECK(esp_event_handler_register(
+        BOARD_EVENT, BoardEvents::kButton, &Application::OnBoardButtonEvent, this));
+}
+
+void Application::OnBoardButtonEvent(void* arg, esp_event_base_t event_base,
+                                     int32_t event_id, void* event_data) {
     (void)event_base;
+    (void)event_id;
     auto* app = static_cast<Application*>(arg);
     if (app == nullptr || event_data == nullptr) {
         return;
     }
-    const auto event = *static_cast<const ButtonEvents::Event*>(event_data);
-    app->Schedule([app, event_id, count = event.click_count]() {
-        app->HandleButtonEvent(event_id, count);
-    });
+    const auto event = *static_cast<const BoardEvents::ButtonEvent*>(event_data);
+    app->Schedule([app, event]() { app->HandleButtonEvent(event); });
 }
 
-void Application::HandleButtonEvent(int32_t event_id, uint8_t click_count) {
-    switch (event_id) {
-        case ButtonEvents::kShortPress1:
+void Application::HandleButtonEvent(const BoardEvents::ButtonEvent& event) {
+    if (event.button != BoardEvents::ButtonId::Primary) {
+        return;
+    }
+
+    if (event.gesture == BoardEvents::ButtonGesture::LongPress) {
+        return;
+    }
+
+    switch (event.click_count) {
+        case 1:
             if (UiManager::GetInstance().lvgl_display() != nullptr &&
                 UiManager::GetInstance().TopScreenId() != UI_PAGE_HOME) {
                 UiEvents::PostHomeRequested();
@@ -44,18 +56,17 @@ void Application::HandleButtonEvent(int32_t event_id, uint8_t click_count) {
             }
             ToggleChatState();
             break;
-        case ButtonEvents::kShortPress2:
+        case 2:
             break;
-        case ButtonEvents::kShortPress3: {
-            auto& qrcode_model = QrCodeModel::GetInstance();
-            const bool has_role_config_qrcode =
-                qrcode_model.Snapshot().role_config_image != nullptr;
-            qrcode_model.SelectRoleConfig();
+        case 3: {
+            auto& qrcode_presenter = QrCodePresenter::GetInstance();
+            const bool has_role_config_qrcode = qrcode_presenter.HasRoleConfigQrCode();
+            qrcode_presenter.SelectRoleConfig();
             UiEvents::PostQrCodeRequested();
             PlayTone(has_role_config_qrcode ? kDeviceConfigToneId : kProvisioningToneId);
             break;
         }
-        case ButtonEvents::kShortPress4:{
+        case 4: {
             auto mode = GetDuplexMode();
             DuplexMode next = mode == DuplexMode::kSimplex ? DuplexMode::kHalfDuplex :
                               mode == DuplexMode::kHalfDuplex ? DuplexMode::kFullDuplex :
@@ -66,15 +77,13 @@ void Application::HandleButtonEvent(int32_t event_id, uint8_t click_count) {
             SetDuplexMode(next);
             break;
         }
-        case ButtonEvents::kShortPress5To7:
-            if (click_count == 5) {
-                ClearNetworkConfiguration();
-            }
-            break;
-        case ButtonEvents::kShortPress8OrMore:
-            StartFactoryReset();
+        case 5:
+            ClearNetworkConfiguration();
             break;
         default:
+            if (event.click_count >= 8) {
+            StartFactoryReset();
+            }
             break;
     }
 }

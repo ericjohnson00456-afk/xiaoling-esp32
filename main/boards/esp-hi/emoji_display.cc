@@ -1,9 +1,9 @@
 #include <cstring>
-#include "ui/display/panels/lcd_display.h"
+#include "display/lcd_display.h"
 #include <esp_log.h>
 #include "emoji_display.h"
 #include "ui/i18n/lang_config.h"
-#include "resource/assets.h"
+#include "assets.h"
 
 #include <esp_lcd_panel_io.h>
 #include <freertos/FreeRTOS.h>
@@ -80,7 +80,7 @@ void EmojiPlayer::StartPlayer(const std::string& asset_name, bool repeat, int fp
         void *src_data = nullptr;
         size_t src_len = 0;
 
-        auto& assets = Assets::GetInstance().EmojiStore();
+        auto& assets = Assets::GetInstance();
         std::string filename = emoji_asset_name_map.at(asset_name);
         if (!assets.GetAssetData(filename, src_data, src_len)) {
             ESP_LOGE(TAG, "Failed to get asset data for %s", asset_name.c_str());
@@ -176,5 +176,3 @@ void EmojiWidget::Unlock()
 }
 
 } // namespace anim
-
-

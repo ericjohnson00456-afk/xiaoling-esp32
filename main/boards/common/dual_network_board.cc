@@ -1,5 +1,7 @@
 #include "dual_network_board.h"
-#include "board_events.h"
+#include "application.h"
+#include "display/display.h"
+#include "ui/i18n/lang_config.h"
 #include "settings.h"
 #include <esp_log.h>
 
@@ -41,14 +43,16 @@ void DualNetworkBoard::InitializeCurrentBoard() {
 }
 
 void DualNetworkBoard::SwitchNetworkType() {
+    auto display = GetDisplay();
     if (network_type_ == NetworkType::WIFI) {
         SaveNetworkTypeToSettings(NetworkType::ML307);
-        BoardEvents::PostInput(BoardEvents::Input::NetworkSwitchTo4G);
+        display->ShowNotification(Lang::Strings::SWITCH_TO_4G_NETWORK);
     } else {
         SaveNetworkTypeToSettings(NetworkType::WIFI);
-        BoardEvents::PostInput(BoardEvents::Input::NetworkSwitchToWifi);
+        display->ShowNotification(Lang::Strings::SWITCH_TO_WIFI_NETWORK);
     }
-    BoardEvents::PostInput(BoardEvents::Input::RebootRequested);
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    Application::GetInstance().Reboot();
 }
 
 bool DualNetworkBoard::EnterNetworkConfigMode() {
@@ -67,6 +71,12 @@ std::string DualNetworkBoard::GetBoardType() {
 }
 
 void DualNetworkBoard::StartNetwork() {
+    auto display = Board::GetInstance().GetDisplay();
+    if (network_type_ == NetworkType::WIFI) {
+        display->SetStatus(Lang::Strings::CONNECTING);
+    } else {
+        display->SetStatus(Lang::Strings::DETECTING_MODULE);
+    }
     current_board_->StartNetwork();
 }
 

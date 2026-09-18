@@ -1,8 +1,7 @@
-#include "ui/display/display_factory.h"
-
-#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "tcamerapluss3_audio_codec.h"
+#include "display/lcd_display.h"
+#include "application.h"
 #include "button.h"
 #include "config.h"
 #include "power_save_timer.h"
@@ -70,7 +69,7 @@ private:
     i2c_master_bus_handle_t i2c_bus_;
     Cst816x *cst816d_;
     Pmic* pmic_;
-    Display *display_;
+    LcdDisplay *display_;
     Button boot_button_;
     Button key1_button_;
     PowerSaveTimer* power_save_timer_;
@@ -79,11 +78,11 @@ private:
     void InitializePowerSaveTimer() {
         power_save_timer_ = new PowerSaveTimer(-1, 60, -1);
         power_save_timer_->OnEnterSleepMode([this]() {
-            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOn);
+            GetDisplay()->SetPowerSaveMode(true);
             GetBacklight()->SetBrightness(10);
         });
         power_save_timer_->OnExitSleepMode([this]() {
-            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOff);
+            GetDisplay()->SetPowerSaveMode(false);
             GetBacklight()->RestoreBrightness();
         });
         power_save_timer_->OnShutdownRequest([this]() {
@@ -141,7 +140,7 @@ private:
                 // On press
                 if (!was_touched) {
                     was_touched = true;
-                    BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
+                    Application::GetInstance().ToggleChatState();
                 }
             }
             // On release
@@ -203,19 +202,20 @@ private:
         ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y));
         ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel, true));
 
-        display_ = CreateSpiLcdDisplay(panel_io, panel,
+        display_ = new SpiLcdDisplay(panel_io, panel,
                                      DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
             power_save_timer_->WakeUp();
+            auto& app = Application::GetInstance();
             // During startup (before connected), pressing BOOT button enters Wi-Fi config mode without reboot
-            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
+            if (app.GetDeviceState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
-            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
+            app.ToggleChatState();
         });
         key1_button_.OnClick([this]() {
             if (camera_) {
@@ -275,7 +275,7 @@ private:
         camera_->SetHMirror(1);
     }
 
-    void RegisterMcpTools(McpServer& mcp_server) override {
+    void InitializeTools() {
         static IrFilterController irFilter(AP1511B_GPIO);
     }
 
@@ -290,6 +290,7 @@ public:
         InitializeSt7789Display();
         InitializeButtons();
         InitializeCamera();
+        InitializeTools();
         GetBacklight()->RestoreBrightness();
     }
 
@@ -331,7 +332,7 @@ public:
         }
         WifiBoard::SetPowerSaveLevel(level);
     }
-
+    
     virtual Backlight* GetBacklight() override {
         static PwmBacklight backlight(DISPLAY_BACKLIGHT_PIN, DISPLAY_BACKLIGHT_OUTPUT_INVERT);
         return &backlight;
@@ -347,5 +348,3 @@ public:
 };
 
 DECLARE_BOARD(LilygoTCameraPlusS3Board);
-
-

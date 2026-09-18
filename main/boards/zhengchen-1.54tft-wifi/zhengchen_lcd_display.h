@@ -1,7 +1,7 @@
 #ifndef ZHENGCHEN_LCD_DISPLAY_H
 #define ZHENGCHEN_LCD_DISPLAY_H
 
-#include "ui/display/panels/lcd_display.h"
+#include "display/lcd_display.h"
 #include "lvgl_theme.h"
 #include <esp_lvgl_port.h>
 
@@ -24,13 +24,13 @@ public:
         lv_obj_align(high_temp_popup_, LV_ALIGN_BOTTOM_MID, 0, 0);
         lv_obj_set_style_bg_color(high_temp_popup_, lv_palette_main(LV_PALETTE_RED), 0);
         lv_obj_set_style_radius(high_temp_popup_, 10, 0);
-
+        
         // 创建警告标签
         high_temp_label_ = lv_label_create(high_temp_popup_);
         lv_label_set_text(high_temp_label_, "警告：温度过高");
         lv_obj_set_style_text_color(high_temp_label_, lv_color_white(), 0);
         lv_obj_center(high_temp_label_);
-
+        
         // 默认隐藏
         lv_obj_add_flag(high_temp_popup_, LV_OBJ_FLAG_HIDDEN);
     }
@@ -64,4 +64,3 @@ public:
 
 
 #endif // ZHENGCHEN_LCD_DISPLAY_H
-

@@ -1,8 +1,7 @@
-#include "ui/display/display_factory.h"
-
-#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "codecs/box_audio_codec.h"
+#include "application.h"
+#include "display/lcd_display.h"
 // #include "display/no_display.h"
 #include "button.h"
 #include "config.h"
@@ -27,7 +26,7 @@ class WaveshareEsp32p47b : public WifiBoard {
 private:
     i2c_master_bus_handle_t i2c_bus_;
     Button boot_button_;
-    Display *display_;
+    LcdDisplay *display_;
     Esp32Camera* camera_ = nullptr;
 
     esp_err_t i2c_device_probe(uint8_t addr) {
@@ -120,7 +119,7 @@ private:
         esp_lcd_panel_reset(disp_panel);
         esp_lcd_panel_init(disp_panel);
 
-        display_ = CreateMipiLcdDisplay(io, disp_panel, DISPLAY_WIDTH, DISPLAY_HEIGHT,
+        display_ = new MipiLcdDisplay(io, disp_panel, DISPLAY_WIDTH, DISPLAY_HEIGHT,
                                        DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
 
         lv_display_t *disp = lv_display_get_default();
@@ -158,8 +157,8 @@ private:
             tp_io_config.dev_addr = ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS_BACKUP;
         } else {
             ESP_LOGE(TAG, "Touch panel not found on I2C bus");
-            ESP_LOGE(TAG, "Tried addresses: 0x%02X and 0x%02X",
-                     ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS,
+            ESP_LOGE(TAG, "Tried addresses: 0x%02X and 0x%02X", 
+                     ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS, 
                      ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS_BACKUP);
             return;
         }
@@ -194,12 +193,13 @@ private:
     }
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
+            auto& app = Application::GetInstance();
             // During startup (before connected), pressing BOOT button enters Wi-Fi config mode without reboot
-            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
+            if (app.GetDeviceState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
-            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
+            app.ToggleChatState();
         });
     }
 
@@ -216,17 +216,17 @@ public:
 
     virtual AudioCodec* GetAudioCodec() override {
         static BoxAudioCodec audio_codec(
-            i2c_bus_,
-            AUDIO_INPUT_SAMPLE_RATE,
+            i2c_bus_, 
+            AUDIO_INPUT_SAMPLE_RATE, 
             AUDIO_OUTPUT_SAMPLE_RATE,
-            AUDIO_I2S_GPIO_MCLK,
-            AUDIO_I2S_GPIO_BCLK,
-            AUDIO_I2S_GPIO_WS,
-            AUDIO_I2S_GPIO_DOUT,
+            AUDIO_I2S_GPIO_MCLK, 
+            AUDIO_I2S_GPIO_BCLK, 
+            AUDIO_I2S_GPIO_WS, 
+            AUDIO_I2S_GPIO_DOUT, 
             AUDIO_I2S_GPIO_DIN,
-            AUDIO_CODEC_PA_PIN,
-            AUDIO_CODEC_ES8311_ADDR,
-            AUDIO_CODEC_ES7210_ADDR,
+            AUDIO_CODEC_PA_PIN, 
+            AUDIO_CODEC_ES8311_ADDR, 
+            AUDIO_CODEC_ES7210_ADDR, 
             AUDIO_INPUT_REFERENCE);
         return &audio_codec;
     }
@@ -247,5 +247,3 @@ public:
 };
 
 DECLARE_BOARD(WaveshareEsp32p47b);
-
-

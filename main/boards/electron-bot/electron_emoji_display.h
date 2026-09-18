@@ -1,10 +1,10 @@
 #pragma once
 
-#include "ui/display/panels/lcd_display.h"
+#include "display/lcd_display.h"
 
 /**
  * @brief Electron机器人GIF表情显示类
- * 继承 SpiLcdDisplay，通过 EmojiModel 添加 GIF 表情支持。
+ * 继承SpiLcdDisplay，通过EmojiCollection添加GIF表情支持
  */
 class ElectronEmojiDisplay : public SpiLcdDisplay {
    public:
@@ -20,5 +20,3 @@ class ElectronEmojiDisplay : public SpiLcdDisplay {
     void InitializeElectronEmojis();
     void SetupChatLabel();
 };
-
-

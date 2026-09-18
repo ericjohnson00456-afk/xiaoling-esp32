@@ -1,10 +1,10 @@
-#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "codecs/no_audio_codec.h"
 #include "system_reset.h"
+#include "application.h"
 #include "button.h"
 #include "config.h"
-#include "services/service_led.h"
+#include "led/gpio_led.h"
 #include <esp_log.h>
 #include <driver/i2c_master.h>
 #include <driver/gpio.h>
@@ -34,11 +34,12 @@ private:
                 click_times = 0;
                 check_time = 0;
             }
-            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
-            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
+            app.ToggleChatState();
         });
         boot_button_.OnDoubleClick([this]() {
             click_times++;
@@ -60,11 +61,11 @@ private:
 
         touch_button_.OnPressDown([this]() {
             click_times = 0;
-            BoardEvents::PostInput(BoardEvents::Input::TouchDown);
+            Application::GetInstance().StartListening();
         });
         touch_button_.OnPressUp([this]() {
             click_times = 0;
-            BoardEvents::PostInput(BoardEvents::Input::TouchUp);
+            Application::GetInstance().StopListening();
         });
 
         volume_up_button_.OnClick([this]() {
@@ -122,7 +123,7 @@ public:
     }
 
     virtual Led* GetLed() override {
-        static LedService led(BUILTIN_LED_GPIO, 1);
+        static GpioLed led(BUILTIN_LED_GPIO, 1);
         return &led;
     }
 

@@ -83,7 +83,7 @@ void Tdisplays3promvsrloraAudioCodec::CreateVoiceHardware(gpio_num_t mic_bclk, g
 
     i2s_std_config_t spkr_config = {
         .clk_cfg ={
-            .sample_rate_hz = (uint32_t)output_sample_rate_,
+            .sample_rate_hz = static_cast<uint32_t>(11025),
             .clk_src = I2S_CLK_SRC_DEFAULT,
             .mclk_multiple = I2S_MCLK_MULTIPLE_256,
             #ifdef   I2S_HW_VERSION_2    

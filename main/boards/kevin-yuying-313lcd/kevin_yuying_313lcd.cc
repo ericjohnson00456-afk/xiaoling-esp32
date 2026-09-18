@@ -1,8 +1,7 @@
-#include "ui/display/display_factory.h"
-
-#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "codecs/es8311_audio_codec.h"
+#include "display/lcd_display.h"
+#include "application.h"
 #include "button.h"
 #include "pin_config.h"
 
@@ -21,7 +20,7 @@ class Yuying_313lcd : public WifiBoard {
 private:
     i2c_master_bus_handle_t codec_i2c_bus_;
     Button boot_button_;
-    Display* display_;
+    LcdDisplay* display_;
 
     void InitializeRGB_GC9503V_Display() {
         ESP_LOGI(TAG, "Init GC9503V");
@@ -40,7 +39,7 @@ private:
         };
         esp_lcd_panel_io_3wire_spi_config_t io_config = GC9503_PANEL_IO_3WIRE_SPI_CONFIG(line_config, 0);
         (esp_lcd_new_panel_io_3wire_spi(&io_config, &panel_io));
-
+    
         ESP_LOGI(TAG, "Install RGB LCD panel driver");
         esp_lcd_panel_handle_t panel_handle = NULL;
         esp_lcd_rgb_panel_config_t rgb_config = {
@@ -78,9 +77,9 @@ private:
                 .fb_in_psram = true, // allocate frame buffer in PSRAM
             }
         };
-
+    
         ESP_LOGI(TAG, "Initialize RGB LCD panel");
-
+    
         gc9503_vendor_config_t vendor_config = {
             .rgb_config = &rgb_config,
             .flags = {
@@ -98,7 +97,7 @@ private:
         (esp_lcd_panel_reset(panel_handle));
         (esp_lcd_panel_init(panel_handle));
 
-        display_ = CreateRgbLcdDisplay(panel_io, panel_handle,
+        display_ = new RgbLcdDisplay(panel_io, panel_handle,
                                   DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X,
                                   DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
@@ -122,16 +121,17 @@ private:
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
-            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
         });
         boot_button_.OnPressDown([this]() {
-            BoardEvents::PostInput(BoardEvents::Input::TouchDown);
+            Application::GetInstance().StartListening();
         });
         boot_button_.OnPressUp([this]() {
-            BoardEvents::PostInput(BoardEvents::Input::TouchUp);
+            Application::GetInstance().StopListening();
         });
     }
 
@@ -153,7 +153,7 @@ public:
     virtual Display* GetDisplay() override {
         return display_;
     }
-
+    
     virtual Backlight* GetBacklight() override {
         static PwmBacklight backlight(DISPLAY_BACKLIGHT_PIN, DISPLAY_BACKLIGHT_OUTPUT_INVERT);
         return &backlight;
@@ -161,5 +161,3 @@ public:
 };
 
 DECLARE_BOARD(Yuying_313lcd);
-
-

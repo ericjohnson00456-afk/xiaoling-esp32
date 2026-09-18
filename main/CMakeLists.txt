@@ -6,8 +6,6 @@ set(SOURCES "audio/audio_codec.cc"
             "player/channels/tone_player.cc"
             "player/channels/tts_player.cc"
             "player/channels/music_player.cc"
-            "button/button.cc"
-            "button/button_events.cc"
             "player/resource/tone_model.cc"
             "player/engine/gmf_player_engine.cc"
             "audio/codecs/no_audio_codec.cc"
@@ -18,14 +16,13 @@ set(SOURCES "audio/audio_codec.cc"
             "audio/codecs/es8389_audio_codec.cc"
             "audio/codecs/dummy_audio_codec.cc"
             "audio/processors/audio_debugger.cc"
-            "services/service_ws2812.cc"
-            "services/service_circular_strip.cc"
-            "services/service_led.cc"
-            "ui/display/display.cc"
-            "ui/display/panels/lcd_display.cc"
-            "ui/display/panels/oled_display.cc"
-            "ui/display/backend/lvgl_display.cc"
-            "ui/display/display_factory.cc"
+            "led/single_led.cc"
+            "led/circular_strip.cc"
+            "led/gpio_led.cc"
+            "display/display.cc"
+            "display/lcd_display.cc"
+            "display/oled_display.cc"
+            "display/lvgl_display.cc"
             "ui/themes/lvgl_theme.cc"
             "ui/themes/lvgl_theme_setup.cc"
             "ui/tools/font/lvgl_font.cc"
@@ -62,12 +59,11 @@ file(GLOB MCP_TOOL_SOURCES
      "${CMAKE_CURRENT_SOURCE_DIR}/mcp/tools/tool_*.cc")
 list(APPEND SOURCES ${MCP_TOOL_SOURCES})
 
-# UI 层按职责分为 core、models、events 和 screens；显示后端单独在上方登记。
+# UI 层按职责分为 core、资源仓库、events 和 screens；显示后端单独在上方登记。
 file(GLOB UI_SOURCES
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/core/*.cc"
-     "${CMAKE_CURRENT_SOURCE_DIR}/ui/models/*.cc"
-     "${CMAKE_CURRENT_SOURCE_DIR}/ui/models/home/*.cc"
-     "${CMAKE_CURRENT_SOURCE_DIR}/ui/models/qrcode/*.cc"
+     "${CMAKE_CURRENT_SOURCE_DIR}/ui/compat/*.cc"
+     "${CMAKE_CURRENT_SOURCE_DIR}/ui/resources/emoji_repository.cc"
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/screens/home/*.cc"
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/screens/qrcode/*.cc"
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/events/*.cc")
@@ -78,11 +74,11 @@ file(GLOB SHELL_CMD_SOURCES
      "${CMAKE_CURRENT_SOURCE_DIR}/shell/cmd/*.cc")
 list(APPEND SOURCES ${SHELL_CMD_SOURCES})
 
-set(INCLUDE_DIRS "." "button" "ui/display" "ui/display/backend" "ui/display/panels"
+set(INCLUDE_DIRS "."
                  "ui/themes" "ui/tools/font" "ui/tools/image" "audio"
                  "player" "player/core" "player/engine" "player/channels" "player/resource" "xiaoling" "xiaoling/session" "xiaoling/conn" "mcp"
-                  "ui" "ui/core" "ui/models" "ui/models/home" "ui/models/qrcode"
-                  "ui/screens/home" "ui/screens/qrcode" "system" "resource" "shell" "ota")
+                  "ui" "ui/core" "ui/compat" "ui/resources" "ui/screens" "ui/screens/home" "ui/screens/qrcode"
+                  "system" "resource" "shell" "ota")
 
 # Add board common files
 file(GLOB BOARD_COMMON_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/boards/common/*.cc)
@@ -1016,7 +1012,3 @@ elseif ("${size}" AND "${offset}")
 else()
     message(STATUS "Assets partition not found, using v1 partition table")
 endif()
-
-
-
-

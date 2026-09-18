@@ -11,12 +11,11 @@
 #include <driver/gpio.h>
 #include <memory>
 
-#include "services/service_led.h"
+#include "led/led.h"
 #include "backlight.h"
 #include "camera.h"
 #include "image_fetcher.h"
 #include "resource/assets.h"
-#include "display_hardware.h"
 
 /**
  * Network events for unified callback
@@ -78,16 +77,6 @@ public:
     virtual AudioCodec* GetAudioCodec() = 0;
     virtual bool GetTemperature(float& esp32temp);
     virtual Display* GetDisplay();
-    // Boards that only initialize a panel expose hardware handles here. UI
-    // creates and owns the concrete Display implementation.
-    virtual DisplayHardwareDescriptor GetDisplayHardware() const { return {}; }
-    void SetDisplay(Display* display, int width = 0, int height = 0,
-                    bool monochrome = false) {
-        display_ = display;
-        display_width_ = width;
-        display_height_ = height;
-        display_monochrome_ = monochrome;
-    }
     virtual Camera* GetCamera();
 #if CONFIG_LSPLATFORM
     virtual ImageFetcher* GetImageFetcher();
@@ -118,10 +107,6 @@ public:
     virtual void SwitchNetworkType() {}
 
 private:
-    Display* display_ = nullptr;
-    int display_width_ = 0;
-    int display_height_ = 0;
-    bool display_monochrome_ = false;
 #if CONFIG_LSPLATFORM
     ImageFetcher* image_fetcher_ = nullptr;
 #endif // CONFIG_LSPLATFORM

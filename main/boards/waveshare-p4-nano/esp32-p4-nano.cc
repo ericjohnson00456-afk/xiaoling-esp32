@@ -1,8 +1,7 @@
-#include "ui/display/display_factory.h"
-
-#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "codecs/es8311_audio_codec.h"
+#include "application.h"
+#include "display/lcd_display.h"
 // #include "display/no_display.h"
 #include "button.h"
 #include "config.h"
@@ -69,7 +68,7 @@ class WaveshareEsp32p4nano : public WifiBoard {
 private:
     i2c_master_bus_handle_t codec_i2c_bus_;
     Button boot_button_;
-    Display *display__;
+    LcdDisplay *display__;
     Esp32Camera* camera_ = nullptr;
     CustomBacklight *backlight_;
 
@@ -165,7 +164,7 @@ private:
         esp_lcd_panel_reset(disp_panel);
         esp_lcd_panel_init(disp_panel);
 
-        display__ = CreateMipiLcdDisplay(io, disp_panel, DISPLAY_WIDTH, DISPLAY_HEIGHT,
+        display__ = new MipiLcdDisplay(io, disp_panel, DISPLAY_WIDTH, DISPLAY_HEIGHT,
                                        DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
         backlight_ = new CustomBacklight(codec_i2c_bus_);
         backlight_->RestoreBrightness();
@@ -220,12 +219,13 @@ private:
     }
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
+            auto& app = Application::GetInstance();
             // During startup (before connected), pressing BOOT button enters Wi-Fi config mode without reboot
-            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
+            if (app.GetDeviceState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
-            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
+            app.ToggleChatState();
         });
     }
 
@@ -261,5 +261,3 @@ public:
 };
 
 DECLARE_BOARD(WaveshareEsp32p4nano);
-
-

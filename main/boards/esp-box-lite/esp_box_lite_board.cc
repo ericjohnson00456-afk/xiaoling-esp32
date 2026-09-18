@@ -1,11 +1,11 @@
-#include "ui/display/display_factory.h"
-
-#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "box_audio_codec_lite.h"
+#include "display/lcd_display.h"
 #include "esp_lcd_ili9341.h"
+#include "application.h"
 #include "button.h"
 #include "config.h"
+#include "ui/i18n/lang_config.h"
 
 #include <esp_log.h>
 #include <button_adc.h>
@@ -52,7 +52,7 @@ private:
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
     adc_oneshot_unit_handle_t bsp_adc_handle = NULL;
 #endif
-    Display* display_;
+    LcdDisplay* display_;
 
     void InitializeI2c() {
         // Initialize I2C peripheral
@@ -92,22 +92,23 @@ private:
             volume = 0;
         }
         codec->SetOutputVolume(volume);
-        BoardEvents::PostInput(BoardEvents::Input::VolumeChanged, volume);
+        GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
     }
-
+    
     void TogleState() {
-        if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
+        auto& app = Application::GetInstance();
+        if (app.GetDeviceState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
-        BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
+        app.ToggleChatState();        
     }
 
     void InitializeButtons() {
         /* Initialize ADC  esp-box lite的前三个按钮采用是的adc按钮，而非gpio */
         button_adc_config_t adc_cfg = {};
         adc_cfg.adc_channel = ADC_CHANNEL_0; // ADC1 channel 0 is GPIO1
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)        
         const adc_oneshot_unit_init_cfg_t init_config1 = {
             .unit_id = ADC_UNIT_1,
         };
@@ -134,14 +135,14 @@ private:
         volume_up_button->OnClick([this]() {ChangeVol(10);});
         volume_up_button->OnLongPress([this]() {
             GetAudioCodec()->SetOutputVolume(100);
-            BoardEvents::PostInput(BoardEvents::Input::VolumeMax);
+            GetDisplay()->ShowNotification(Lang::Strings::MAX_VOLUME);
         });
 
         auto volume_down_button = adc_button_[BSP_ADC_BUTTON_PREV];
         volume_down_button->OnClick([this]() {ChangeVol(-10);});
         volume_down_button->OnLongPress([this]() {
             GetAudioCodec()->SetOutputVolume(0);
-            BoardEvents::PostInput(BoardEvents::Input::VolumeMuted);
+            GetDisplay()->ShowNotification(Lang::Strings::MUTED);
         });
 
         auto break_button = adc_button_[BSP_ADC_BUTTON_ENTER];
@@ -179,14 +180,14 @@ private:
         panel_config.bits_per_pixel = 16;
         panel_config.vendor_config = (void *)&vendor_config;
         ESP_ERROR_CHECK(esp_lcd_new_panel_ili9341(panel_io, &panel_config, &panel));
-
+        
         esp_lcd_panel_reset(panel);
         esp_lcd_panel_init(panel);
         esp_lcd_panel_invert_color(panel, DISPLAY_BACKLIGHT_OUTPUT_INVERT);
         esp_lcd_panel_swap_xy(panel, DISPLAY_SWAP_XY);
         esp_lcd_panel_mirror(panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
         esp_lcd_panel_disp_on_off(panel, true);
-        display_ = CreateSpiLcdDisplay(panel_io, panel,
+        display_ = new SpiLcdDisplay(panel_io, panel,
                                     DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
 
@@ -210,15 +211,15 @@ public:
 
     virtual AudioCodec* GetAudioCodec() override {
         static BoxAudioCodecLite audio_codec(
-            i2c_bus_,
-            AUDIO_INPUT_SAMPLE_RATE,
+            i2c_bus_, 
+            AUDIO_INPUT_SAMPLE_RATE, 
             AUDIO_OUTPUT_SAMPLE_RATE,
-            AUDIO_I2S_GPIO_MCLK,
-            AUDIO_I2S_GPIO_BCLK,
-            AUDIO_I2S_GPIO_WS,
-            AUDIO_I2S_GPIO_DOUT,
+            AUDIO_I2S_GPIO_MCLK, 
+            AUDIO_I2S_GPIO_BCLK, 
+            AUDIO_I2S_GPIO_WS, 
+            AUDIO_I2S_GPIO_DOUT, 
             AUDIO_I2S_GPIO_DIN,
-            AUDIO_CODEC_PA_PIN,
+            AUDIO_CODEC_PA_PIN, 
             AUDIO_INPUT_REFERENCE);
         return &audio_codec;
     }
@@ -234,5 +235,3 @@ public:
 };
 
 DECLARE_BOARD(EspBoxBoardLite);
-
-

@@ -3,7 +3,7 @@
 #include "theme.h"
 #include "lvgl_image.h"
 #include "lvgl_font.h"
-#include "emoji_model.h"
+#include "emoji_repository.h"
 
 #include <lvgl.h>
 #include <memory>
@@ -29,7 +29,7 @@ public:
     inline lv_color_t border_color() const { return border_color_; }
     inline lv_color_t low_battery_color() const { return low_battery_color_; }
     inline std::shared_ptr<LvglImage> background_image() const { return background_image_; }
-    inline std::shared_ptr<EmojiModel> emoji_model() const { return emoji_model_; }
+    inline std::shared_ptr<EmojiRepository> emoji_repository() const { return emoji_repository_; }
     inline std::shared_ptr<LvglFont> text_font() const { return text_font_; }
     inline std::shared_ptr<LvglFont> icon_font() const { return icon_font_; }
     inline std::shared_ptr<LvglFont> large_icon_font() const { return large_icon_font_; }
@@ -45,7 +45,7 @@ public:
     inline void set_border_color(lv_color_t border) { border_color_ = border; }
     inline void set_low_battery_color(lv_color_t low_battery) { low_battery_color_ = low_battery; }
     inline void set_background_image(std::shared_ptr<LvglImage> background_image) { background_image_ = background_image; }
-    inline void set_emoji_model(std::shared_ptr<EmojiModel> emoji_model) { emoji_model_ = std::move(emoji_model); }
+    inline void set_emoji_repository(std::shared_ptr<EmojiRepository> emoji_repository) { emoji_repository_ = std::move(emoji_repository); }
     inline void set_text_font(std::shared_ptr<LvglFont> text_font) { text_font_ = text_font; }
     inline void set_icon_font(std::shared_ptr<LvglFont> icon_font) { icon_font_ = icon_font; }
     inline void set_large_icon_font(std::shared_ptr<LvglFont> large_icon_font) { large_icon_font_ = large_icon_font; }
@@ -72,8 +72,8 @@ private:
     std::shared_ptr<LvglFont> icon_font_ = nullptr;
     std::shared_ptr<LvglFont> large_icon_font_ = nullptr;
 
-    // 表情资源模型
-    std::shared_ptr<EmojiModel> emoji_model_ = nullptr;
+    // 表情资源仓库
+    std::shared_ptr<EmojiRepository> emoji_repository_ = nullptr;
 };
 
 

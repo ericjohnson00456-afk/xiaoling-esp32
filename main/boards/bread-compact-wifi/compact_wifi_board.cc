@@ -1,12 +1,14 @@
-#include "ui/display/display_factory.h"
-
-#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "codecs/no_audio_codec.h"
+#include "display/oled_display.h"
 #include "system_reset.h"
+#include "application.h"
 #include "button.h"
 #include "config.h"
-#include "services/service_ws2812.h"
+#include "mcp_server.h"
+#include "lamp_controller.h"
+#include "led/single_led.h"
+#include "ui/i18n/lang_config.h"
 
 #include <esp_log.h>
 #include <driver/i2c_master.h>
@@ -86,7 +88,7 @@ private:
         ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_));
         if (esp_lcd_panel_init(panel_) != ESP_OK) {
             ESP_LOGE(TAG, "Failed to initialize display");
-            display_ = CreateNoDisplay();
+            display_ = new NoDisplay();
             return;
         }
         ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel_, false));
@@ -95,22 +97,23 @@ private:
         ESP_LOGI(TAG, "Turning display on");
         ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_, true));
 
-        display_ = CreateOledDisplay(panel_io_, panel_, DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
+        display_ = new OledDisplay(panel_io_, panel_, DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
     }
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
-            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
-            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
+            app.ToggleChatState();
         });
         touch_button_.OnPressDown([this]() {
-            BoardEvents::PostInput(BoardEvents::Input::TouchDown);
+            Application::GetInstance().StartListening();
         });
         touch_button_.OnPressUp([this]() {
-            BoardEvents::PostInput(BoardEvents::Input::TouchUp);
+            Application::GetInstance().StopListening();
         });
 
         volume_up_button_.OnClick([this]() {
@@ -120,12 +123,12 @@ private:
                 volume = 100;
             }
             codec->SetOutputVolume(volume);
-            BoardEvents::PostInput(BoardEvents::Input::VolumeChanged, volume);
+            GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
         });
 
         volume_up_button_.OnLongPress([this]() {
             GetAudioCodec()->SetOutputVolume(100);
-            BoardEvents::PostInput(BoardEvents::Input::VolumeMax);
+            GetDisplay()->ShowNotification(Lang::Strings::MAX_VOLUME);
         });
 
         volume_down_button_.OnClick([this]() {
@@ -135,14 +138,20 @@ private:
                 volume = 0;
             }
             codec->SetOutputVolume(volume);
-            BoardEvents::PostInput(BoardEvents::Input::VolumeChanged, volume);
+            GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
         });
 
         volume_down_button_.OnLongPress([this]() {
             GetAudioCodec()->SetOutputVolume(0);
-            BoardEvents::PostInput(BoardEvents::Input::VolumeMuted);
+            GetDisplay()->ShowNotification(Lang::Strings::MUTED);
         });
     }
+
+    // 物联网初始化，逐步迁移到 MCP 协议
+    void InitializeTools() {
+        static LampController lamp(LAMP_GPIO);
+    }
+
 public:
     CompactWifiBoard() :
         boot_button_(BOOT_BUTTON_GPIO),
@@ -152,10 +161,11 @@ public:
         InitializeDisplayI2c();
         InitializeSsd1306Display();
         InitializeButtons();
+        InitializeTools();
     }
 
     virtual Led* GetLed() override {
-        static Ws2812Service led(BUILTIN_LED_GPIO);
+        static SingleLed led(BUILTIN_LED_GPIO);
         return &led;
     }
 
@@ -173,8 +183,6 @@ public:
     virtual Display* GetDisplay() override {
         return display_;
     }
-
 };
 
 DECLARE_BOARD(CompactWifiBoard);
-

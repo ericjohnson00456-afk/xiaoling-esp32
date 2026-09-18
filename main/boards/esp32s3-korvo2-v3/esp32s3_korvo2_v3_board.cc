@@ -1,11 +1,11 @@
-#include "ui/display/display_factory.h"
-
-#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "codecs/box_audio_codec.h"
+#include "display/lcd_display.h"
+#include "application.h"
 #include "button.h"
 #include "config.h"
 #include "i2c_device.h"
+#include "ui/i18n/lang_config.h"
 
 #include <esp_log.h>
 #include <esp_lcd_panel_vendor.h>
@@ -58,7 +58,7 @@ private:
     adc_oneshot_unit_handle_t bsp_adc_handle = NULL;
 #endif
     i2c_master_bus_handle_t i2c_bus_;
-    Display* display_;
+    LcdDisplay* display_;
     esp_io_expander_handle_t io_expander_ = NULL;
     Esp32Camera* camera_;
     PowerSaveTimer* power_save_timer_;
@@ -68,14 +68,14 @@ private:
         // 传入按钮的ADC句柄指针，让PowerManager复用
         power_manager_ = new PowerManager(GPIO_NUM_NC, &bsp_adc_handle);
     }
-
+    
     void InitializePowerSaveTimer() {
         power_save_timer_ = new PowerSaveTimer(-1, 60);
         power_save_timer_->OnEnterSleepMode([this]() {
-            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOn);
+            GetDisplay()->SetPowerSaveMode(true);
         });
         power_save_timer_->OnExitSleepMode([this]() {
-            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOff);
+            GetDisplay()->SetPowerSaveMode(false);
         });
         power_save_timer_->SetEnabled(true);
     }
@@ -123,14 +123,14 @@ private:
         if(ret != ESP_OK) {
             ret = esp_io_expander_new_i2c_tca9554(i2c_bus_, ESP_IO_EXPANDER_I2C_TCA9554A_ADDRESS_000, &io_expander_);
             if(ret != ESP_OK) {
-                ESP_LOGE(TAG, "TCA9554 create returned error");
+                ESP_LOGE(TAG, "TCA9554 create returned error");  
                 return;
             }
         }
         // 配置IO0-IO3为输出模式
-        ESP_ERROR_CHECK(esp_io_expander_set_dir(io_expander_,
-            IO_EXPANDER_PIN_NUM_0 | IO_EXPANDER_PIN_NUM_1 |
-            IO_EXPANDER_PIN_NUM_2 | IO_EXPANDER_PIN_NUM_3,
+        ESP_ERROR_CHECK(esp_io_expander_set_dir(io_expander_, 
+            IO_EXPANDER_PIN_NUM_0 | IO_EXPANDER_PIN_NUM_1 | 
+            IO_EXPANDER_PIN_NUM_2 | IO_EXPANDER_PIN_NUM_3, 
             IO_EXPANDER_OUTPUT));
 
         // 复位LCD和TouchPad
@@ -171,7 +171,7 @@ private:
             volume = 0;
         }
         codec->SetOutputVolume(volume);
-        BoardEvents::PostInput(BoardEvents::Input::VolumeChanged, volume);
+        GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
     }
 
     void MuteVol() {
@@ -183,7 +183,7 @@ private:
             volume = 50;
         }
         codec->SetOutputVolume(volume);
-        BoardEvents::PostInput(BoardEvents::Input::VolumeChanged, volume);
+        GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
     }
 
     void InitializeButtons() {
@@ -230,14 +230,14 @@ private:
         volume_up_button->OnClick([this]() {ChangeVol(10);});
         volume_up_button->OnLongPress([this]() {
             GetAudioCodec()->SetOutputVolume(100);
-            BoardEvents::PostInput(BoardEvents::Input::VolumeMax);
+            GetDisplay()->ShowNotification(Lang::Strings::MAX_VOLUME);
         });
 
         auto volume_down_button = adc_button_[BSP_ADC_BUTTON_VOL_DOWN];
         volume_down_button->OnClick([this]() {ChangeVol(-10);});
         volume_down_button->OnLongPress([this]() {
             GetAudioCodec()->SetOutputVolume(0);
-            BoardEvents::PostInput(BoardEvents::Input::VolumeMuted);
+            GetDisplay()->ShowNotification(Lang::Strings::MUTED);
         });
 
         auto volume_mute_button = adc_button_[BSP_ADC_BUTTON_VOL_MUTE];
@@ -255,24 +255,27 @@ private:
 
         auto rec_button = adc_button_[BSP_ADC_BUTTON_REC];
         rec_button->OnClick([this]() {
-            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
             }
-            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
+            app.ToggleChatState();
         });
         boot_button_.OnClick([this]() {});
         boot_button_.OnClick([this]() {
-            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
-            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
+            app.ToggleChatState();
         });
 
 #if CONFIG_USE_DEVICE_AEC
         boot_button_.OnDoubleClick([this]() {
-            if (BoardEvents::GetRuntimeState() == kDeviceStateIdle) {
-                BoardEvents::PostInput(BoardEvents::Input::AecToggle);
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateIdle) {
+                app.SetAecMode(app.GetAecMode() == kAecOff ? kAecOnDeviceSide : kAecOff);
             }
         });
 #endif
@@ -308,7 +311,7 @@ private:
         panel_config.bits_per_pixel = 16;
         panel_config.vendor_config = (void *)&vendor_config;
         ESP_ERROR_CHECK(esp_lcd_new_panel_ili9341(panel_io, &panel_config, &panel));
-
+        
         ESP_ERROR_CHECK(esp_lcd_panel_reset(panel));
         EnableLcdCs();
         ESP_ERROR_CHECK(esp_lcd_panel_init(panel));
@@ -316,7 +319,7 @@ private:
         ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y));
         ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel, false));
         ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel, true));
-        display_ = CreateSpiLcdDisplay(panel_io, panel,
+        display_ = new SpiLcdDisplay(panel_io, panel,
                                     DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
 
@@ -349,7 +352,7 @@ private:
         ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y));
         ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel, true));
 
-        display_ = CreateSpiLcdDisplay(panel_io, panel,
+        display_ = new SpiLcdDisplay(panel_io, panel,
                                      DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
 
@@ -405,25 +408,25 @@ public:
         InitializeButtons();  // 先初始化按钮（创建ADC1句柄）
         InitializePowerManager();  // 后初始化PowerManager（复用ADC1句柄）
         #ifdef LCD_TYPE_ILI9341_SERIAL
-        InitializeIli9341Display();
+        InitializeIli9341Display(); 
         #else
-        InitializeSt7789Display();
+        InitializeSt7789Display(); 
         #endif
     }
 
     virtual AudioCodec* GetAudioCodec() override {
         static BoxAudioCodec audio_codec(
-            i2c_bus_,
-            AUDIO_INPUT_SAMPLE_RATE,
+            i2c_bus_, 
+            AUDIO_INPUT_SAMPLE_RATE, 
             AUDIO_OUTPUT_SAMPLE_RATE,
-            AUDIO_I2S_GPIO_MCLK,
-            AUDIO_I2S_GPIO_BCLK,
-            AUDIO_I2S_GPIO_WS,
-            AUDIO_I2S_GPIO_DOUT,
+            AUDIO_I2S_GPIO_MCLK, 
+            AUDIO_I2S_GPIO_BCLK, 
+            AUDIO_I2S_GPIO_WS, 
+            AUDIO_I2S_GPIO_DOUT, 
             AUDIO_I2S_GPIO_DIN,
-            AUDIO_CODEC_PA_PIN,
-            AUDIO_CODEC_ES8311_ADDR,
-            AUDIO_CODEC_ES7210_ADDR,
+            AUDIO_CODEC_PA_PIN, 
+            AUDIO_CODEC_ES8311_ADDR, 
+            AUDIO_CODEC_ES7210_ADDR, 
             AUDIO_INPUT_REFERENCE);
         return &audio_codec;
     }
@@ -455,5 +458,3 @@ public:
 };
 
 DECLARE_BOARD(Esp32S3Korvo2V3Board);
-
-

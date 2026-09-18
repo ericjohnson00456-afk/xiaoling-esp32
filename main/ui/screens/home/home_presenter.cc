@@ -1,18 +1,14 @@
 #include "home_presenter.h"
 
-#include "ui/models/home/banner_model.h"
-#include "ui/models/home/duplex_model.h"
-#include "ui/models/home/image_model.h"
-#include "display.h"
+#include "display/display.h"
 #include "home_view.h"
-#include "ui/models/home/status_model.h"
 #include "ui/core/ui_manager.h"
 #include "ui/core/ui_page_ids.h"
-#include "ui/models/home/voice_model.h"
-#include "ui/models/home/wifi_model.h"
 #include "ui/tools/image/lvgl_image.h"
+#include "xiaoling/xiaoling_events.h"
 
 #include <utility>
+#include <cstring>
 
 #include <esp_log.h>
 
@@ -59,11 +55,16 @@ void HomePresenter::SetBannerIdleProvider(std::function<bool()> provider) {
     banner_idle_provider_ = std::move(provider);
 }
 
+void HomePresenter::SetWakeWordProvider(std::function<std::string()> provider) {
+    std::lock_guard<std::mutex> lock(wake_word_mutex_);
+    wake_word_provider_ = std::move(provider);
+}
+
 int HomePresenter::Open(const UiNavScreen* screen, void** data) {
     (void)screen;
     auto& presenter = GetInstance();
     presenter.view_ = std::make_unique<HomeView>(UiManager::GetInstance().display());
-    presenter.SubscribeModels();
+    presenter.SubscribeVoiceEvents();
     *data = &presenter;
     return 0;
 }
@@ -75,8 +76,17 @@ int HomePresenter::Show(const UiNavScreen* screen, void* data) {
         return -1;
     }
     presenter->view_->Show();
+    presenter->SetEmotion(presenter->last_emotion_);
+    presenter->SetChatMessage(presenter->last_chat_role_, presenter->last_chat_text_);
+    presenter->SetText(presenter->last_text_);
+    presenter->SetWifiIcon(presenter->wifi_icon_);
+    presenter->SetStatus(presenter->status_text_);
+    presenter->SetTime(presenter->time_text_);
+    presenter->SetDuplexMode(presenter->duplex_mode_);
 #ifdef CONFIG_LSPLATFORM
-    presenter->RefreshImage(ImageModel::GetInstance().Snapshot());
+    if (presenter->image_ != nullptr) {
+        presenter->view_->ShowImage(std::make_unique<SharedLvglImage>(presenter->image_));
+    }
 #endif
     return 0;
 }
@@ -100,115 +110,191 @@ int HomePresenter::Close(const UiNavScreen* screen, void* data) {
     if (presenter == nullptr) {
         return 0;
     }
-    presenter->UnsubscribeModels();
+    presenter->UnsubscribeVoiceEvents();
     presenter->StopBannerTimer();
     presenter->view_.reset();
     presenter->last_emotion_.clear();
+    presenter->last_chat_role_.clear();
+    presenter->last_chat_text_.clear();
     presenter->last_voice_text_revision_ = 0;
     return 0;
 }
 
-void HomePresenter::SubscribeModels() {
-    voice_subscription_ = VoiceModel::GetInstance().Subscribe([](const VoiceModelState& state) {
-        UiManager::GetInstance().Dispatch([state]() {
-            auto& home = HomePresenter::GetInstance();
-            if (home.view_ == nullptr) {
-                return;
-            }
-            if (home.last_emotion_ != state.emotion) {
-                home.last_emotion_ = state.emotion;
-                home.view_->SetEmotion(state.emotion);
-            }
-            if (!state.text.empty() &&
-                home.last_voice_text_revision_ != state.text_revision) {
-                home.last_voice_text_revision_ = state.text_revision;
-#ifdef CONFIG_LSPLATFORM
-                if (state.text_source == VoiceTextSource::kIat) {
-                    ImageModel::GetInstance().Clear();
-                    if (auto* display = UiManager::GetInstance().display(); display != nullptr) {
-                        display->DismissActivation();
-                    }
+void HomePresenter::SetEmotion(std::string emotion) {
+    last_emotion_ = std::move(emotion);
+    if (view_ != nullptr && !last_emotion_.empty()) {
+        view_->SetEmotion(last_emotion_);
+    }
+}
+
+void HomePresenter::ShowEmotionOnce(std::string emotion) {
+    if (view_ != nullptr) {
+        view_->ShowEmotionOnce(emotion);
+    }
+}
+
+void HomePresenter::SetPowerSaveMode(bool enabled) {
+    SetEmotion(enabled ? "sleepy" : "neutral");
+    SetChatMessage("system", "");
+}
+
+void HomePresenter::SubscribeVoiceEvents() {
+    auto& events = XiaolingEventBus::GetInstance();
+    auto subscribe_text = [this, &events](XiaolingEventType type) {
+        voice_event_subscriptions_.push_back(events.Subscribe(type, [](const XiaolingEvent& event) {
+            UiManager::GetInstance().Dispatch([text = event.text]() {
+                if (!text.empty()) {
+                    HomePresenter::GetInstance().SetText(text);
                 }
-#endif
-                home.view_->SetText(state.text);
-            }
-        });
-    });
+            });
+        }));
+    };
+    subscribe_text(XIAOLING_IAT_START);
+    subscribe_text(XIAOLING_IAT_UPDATE);
+    subscribe_text(XIAOLING_IAT_END);
+    subscribe_text(XIAOLING_TTS_TXT_START);
+    subscribe_text(XIAOLING_TTS_TXT_UPDATE);
+    subscribe_text(XIAOLING_TTS_TXT_END);
+}
 
-    banner_subscription_ = BannerModel::GetInstance().Subscribe([](const BannerModelState& state) {
-        auto& home = HomePresenter::GetInstance();
-        home.SetBanners(state.texts, state.interval_ms);
-    });
+void HomePresenter::UnsubscribeVoiceEvents() {
+    auto& events = XiaolingEventBus::GetInstance();
+    for (const auto id : voice_event_subscriptions_) {
+        events.Unsubscribe(id);
+    }
+    voice_event_subscriptions_.clear();
+}
 
-    wifi_subscription_ = WifiModel::GetInstance().Subscribe([](const WifiModelState& state) {
-        UiManager::GetInstance().Dispatch([state]() {
-            auto& home = HomePresenter::GetInstance();
-            if (home.view_ != nullptr) {
-                home.view_->SetWifiIcon(state.icon);
-            }
-        });
-    });
+void HomePresenter::SetText(std::string text) {
+    last_text_ = std::move(text);
+    if (view_ != nullptr && !last_text_.empty()) {
+        view_->SetText(last_text_);
+    }
+}
 
-    status_subscription_ = StatusModel::GetInstance().Subscribe([](const StatusModelState& state) {
-        UiManager::GetInstance().Dispatch([state]() {
-            auto& home = HomePresenter::GetInstance();
-            if (home.view_ != nullptr) {
-                home.view_->SetStatus(state.text);
-            }
-        });
-    });
+void HomePresenter::SetChatMessage(std::string role, std::string text) {
+    last_chat_role_ = role;
+    last_chat_text_ = text;
+    if (view_ != nullptr) {
+        view_->SetChatMessage(std::move(role), std::move(text));
+    }
+}
 
-    duplex_subscription_ = DuplexModel::GetInstance().Subscribe([](const DuplexModelState& state) {
-        UiManager::GetInstance().Dispatch([state]() {
-            auto& home = HomePresenter::GetInstance();
-            if (home.view_ != nullptr) {
-                home.view_->SetDuplexMode(state.mode);
-            }
-        });
-    });
+void HomePresenter::ShowNotification(std::string text, int duration_ms) {
+    if (view_ != nullptr && !text.empty()) {
+        view_->ShowNotification(text, duration_ms);
+    }
+}
 
-#ifdef CONFIG_LSPLATFORM
-    image_subscription_ = ImageModel::GetInstance().Subscribe([](const ImageModelState& state) {
-        UiManager::GetInstance().Dispatch([state]() {
-            auto& home = HomePresenter::GetInstance();
-            if (home.view_ == nullptr || UiManager::GetInstance().TopScreenId() != UI_PAGE_HOME) {
-                return;
-            }
-            home.RefreshImage(state);
-        });
-    }, false);
-#endif
+void HomePresenter::SetWifiIcon(std::string icon) {
+    wifi_icon_ = std::move(icon);
+    if (view_ != nullptr) {
+        view_->SetWifiIcon(wifi_icon_);
+    }
+}
 
+void HomePresenter::SetStatus(std::string status) {
+    status_text_ = std::move(status);
+    if (view_ != nullptr) {
+        view_->SetStatus(status_text_);
+    }
+}
+
+void HomePresenter::SetTime(std::string time) {
+    time_text_ = std::move(time);
+    if (view_ != nullptr && !time_text_.empty()) {
+        view_->SetTime(time_text_);
+    }
+}
+
+void HomePresenter::SetDuplexMode(DuplexMode mode) {
+    duplex_mode_ = mode;
+    if (view_ != nullptr) {
+        view_->SetDuplexMode(mode);
+    }
 }
 
 #ifdef CONFIG_LSPLATFORM
-void HomePresenter::RefreshImage(const ImageModelState& state) {
-    if (view_ == nullptr) {
+void HomePresenter::SetImage(std::unique_ptr<LvglImage> image) {
+    if (image == nullptr) {
         return;
     }
-    if (state.image != nullptr) {
-        view_->ShowImage(std::make_unique<SharedLvglImage>(state.image));
-    } else {
-        view_->HideImage();
-    }
+    auto shared = std::shared_ptr<LvglImage>(std::move(image));
+    UiManager::GetInstance().Dispatch([shared = std::move(shared)]() mutable {
+        auto& home = HomePresenter::GetInstance();
+        home.image_ = std::move(shared);
+        if (home.view_ != nullptr && home.image_ != nullptr &&
+            UiManager::GetInstance().TopScreenId() == UI_PAGE_HOME) {
+            home.view_->ShowImage(std::make_unique<SharedLvglImage>(home.image_));
+        }
+    });
+}
+
+void HomePresenter::ClearImage() {
+    UiManager::GetInstance().Dispatch([]() {
+        auto& home = HomePresenter::GetInstance();
+        home.image_.reset();
+        if (home.view_ != nullptr) {
+            home.view_->HideImage();
+        }
+    });
 }
 #endif
 
-void HomePresenter::UnsubscribeModels() {
-    VoiceModel::GetInstance().Unsubscribe(voice_subscription_);
-    BannerModel::GetInstance().Unsubscribe(banner_subscription_);
-    WifiModel::GetInstance().Unsubscribe(wifi_subscription_);
-    StatusModel::GetInstance().Unsubscribe(status_subscription_);
-    DuplexModel::GetInstance().Unsubscribe(duplex_subscription_);
-#ifdef CONFIG_LSPLATFORM
-    ImageModel::GetInstance().Unsubscribe(image_subscription_);
-#endif
-    voice_subscription_ = 0;
-    banner_subscription_ = 0;
-    wifi_subscription_ = 0;
-    status_subscription_ = 0;
-    duplex_subscription_ = 0;
-    image_subscription_ = 0;
+void HomePresenter::HandleSettingMessage(const cJSON* data) {
+    const auto* theme = cJSON_IsObject(data) ? cJSON_GetObjectItemCaseSensitive(data, "theme") : nullptr;
+    const auto* frontend = cJSON_IsObject(theme) ? cJSON_GetObjectItemCaseSensitive(theme, "frontend") : nullptr;
+    const auto* banner = cJSON_IsObject(frontend) ? cJSON_GetObjectItemCaseSensitive(frontend, "banner") : nullptr;
+    if (!cJSON_IsObject(banner)) {
+        return;
+    }
+
+    uint32_t interval_ms = 3000;
+    const auto* interval = cJSON_GetObjectItemCaseSensitive(banner, "interval_ms");
+    if (cJSON_IsNumber(interval) && interval->valueint >= 1000) {
+        interval_ms = static_cast<uint32_t>(interval->valueint);
+    }
+
+    std::vector<std::string> texts;
+    const auto* resources = cJSON_GetObjectItemCaseSensitive(banner, "resources");
+    if (cJSON_IsArray(resources)) {
+        const cJSON* item = nullptr;
+        cJSON_ArrayForEach(item, resources) {
+            const auto* text = cJSON_IsObject(item) ? cJSON_GetObjectItemCaseSensitive(item, "text") : nullptr;
+            if (cJSON_IsString(text) && text->valuestring != nullptr && text->valuestring[0] != '\0') {
+                texts.push_back(SubstituteWakeWord(text->valuestring));
+            }
+        }
+    }
+    UiManager::GetInstance().Dispatch([texts = std::move(texts), interval_ms]() mutable {
+        HomePresenter::GetInstance().SetBanners(std::move(texts), interval_ms);
+    });
+}
+
+std::string HomePresenter::SubstituteWakeWord(const std::string& text) const {
+    static constexpr const char* kPlaceholder = "#唤醒词#";
+    if (text.find(kPlaceholder) == std::string::npos) {
+        return text;
+    }
+    std::function<std::string()> provider;
+    {
+        std::lock_guard<std::mutex> lock(wake_word_mutex_);
+        provider = wake_word_provider_;
+    }
+    if (!provider) {
+        return text;
+    }
+    const std::string wake_word = provider();
+    if (wake_word.empty()) {
+        return text;
+    }
+    std::string result = text;
+    size_t pos = 0;
+    while ((pos = result.find(kPlaceholder, pos)) != std::string::npos) {
+        result.replace(pos, std::strlen(kPlaceholder), wake_word);
+        pos += wake_word.size();
+    }
+    return result;
 }
 
 void HomePresenter::SetBanners(std::vector<std::string> texts, uint32_t interval_ms) {

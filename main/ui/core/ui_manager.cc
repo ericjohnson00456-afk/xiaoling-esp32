@@ -1,8 +1,9 @@
 #include "ui_manager.h"
 
-#include "display.h"
+#include "display/display.h"
+#include "ui/compat/legacy_display_adapter.h"
 #include "ui/screens/home/home_presenter.h"
-#include "ui/display/backend/lvgl_display.h"
+#include "display/lvgl_display.h"
 
 #include <esp_log.h>
 
@@ -12,16 +13,28 @@
 
 UiManager::UiManager() = default;
 
-UiManager::~UiManager() = default;
+UiManager::~UiManager() {
+    if (display_ != nullptr) {
+        display_->SetUiAdapter(nullptr);
+    }
+}
 
 void UiManager::Initialize(Display* display) {
     if (display == nullptr) {
         ESP_LOGE(TAG, "Initialize: display is NULL");
         return;
     }
+    if (display_ != nullptr) {
+        display_->SetUiAdapter(nullptr);
+    }
+    legacy_display_adapter_.reset();
     display_ = display;
     // OLED / NoDisplay 场景下转型失败，仅页面导航不可用，banner 等通用能力不受影响
     lvgl_display_ = dynamic_cast<LvglDisplay*>(display);
+    if (lvgl_display_ != nullptr) {
+        legacy_display_adapter_ = std::make_unique<LegacyDisplayAdapter>();
+        display_->SetUiAdapter(legacy_display_adapter_.get());
+    }
     ESP_LOGI(TAG, "UI manager ready, panel %dx%d, lvgl=%s",
              display_->width(), display_->height(), lvgl_display_ != nullptr ? "yes" : "no");
 }

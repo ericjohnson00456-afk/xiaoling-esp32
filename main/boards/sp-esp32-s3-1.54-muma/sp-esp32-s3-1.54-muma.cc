@@ -1,11 +1,10 @@
-#include "ui/display/display_factory.h"
-
-#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "codecs/es8311_audio_codec.h"
+#include "display/lcd_display.h"
+#include "application.h"
 #include "button.h"
 #include "config.h"
-#include "services/service_ws2812.h"
+#include "led/single_led.h"
 #include <esp_log.h>
 #include <driver/i2c_master.h>
 #include "system_reset.h"
@@ -91,11 +90,11 @@ private:
 
         power_save_timer_ = new PowerSaveTimer(-1, 60, 300);
         power_save_timer_->OnEnterSleepMode([this]() {
-            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOn);
+            GetDisplay()->SetPowerSaveMode(true);
             GetBacklight()->SetBrightness(1);
         });
         power_save_timer_->OnExitSleepMode([this]() {
-            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOff);
+            GetDisplay()->SetPowerSaveMode(false);
             GetBacklight()->RestoreBrightness();
         });
         power_save_timer_->OnShutdownRequest([this]() {
@@ -164,11 +163,12 @@ private:
 
             // 只有短触才触发
             if (touch_duration < TOUCH_THRESHOLD_MS) {
-                if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
+                auto& app = Application::GetInstance();
+                if (app.GetDeviceState() == kDeviceStateStarting) {
                     board.EnterWifiConfigMode();
                     return;
                 }
-                BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
+                app.ToggleChatState();
             }
         }
     }
@@ -242,17 +242,18 @@ private:
         uint8_t data_0xBB[] = { 0x38 };
         esp_lcd_panel_io_tx_param(panel_io, 0xBB, data_0xBB, sizeof(data_0xBB));
 
-        display_ = CreateSpiLcdDisplay(panel_io, panel,
+        display_ = new SpiLcdDisplay(panel_io, panel,
                                      DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
-            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
-            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
+            app.ToggleChatState();
         });
     }
 
@@ -276,7 +277,7 @@ public:
     }
 
     virtual Led* GetLed() override {
-        static Ws2812Service led_strip(BUILTIN_LED_GPIO);
+        static SingleLed led_strip(BUILTIN_LED_GPIO);
         return &led_strip;
     }
 
@@ -321,5 +322,3 @@ public:
 };
 
 DECLARE_BOARD(Spotpear_esp32_s3_lcd_1_54);
-
-

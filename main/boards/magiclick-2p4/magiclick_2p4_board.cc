@@ -1,10 +1,11 @@
-#include "boards/common/board_events.h"
 #include "wifi_board.h"
-#include "ui/display/panels/lcd_display.h"
+#include "display/lcd_display.h"
 #include "codecs/es8311_audio_codec.h"
+#include "application.h"
 #include "button.h"
-#include "services/service_circular_strip.h"
+#include "led/circular_strip.h"
 #include "config.h"
+#include "ui/i18n/lang_config.h"
 
 #include <esp_lcd_panel_vendor.h>
 #include <esp_log.h>
@@ -75,14 +76,14 @@ private:
     void InitializePowerSaveTimer() {
         power_save_timer_ = new PowerSaveTimer(240, 60, -1);
         power_save_timer_->OnEnterSleepMode([this]() {
-            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOn);
+            GetDisplay()->SetPowerSaveMode(true);
             GetBacklight()->SetBrightness(1);
         });
         power_save_timer_->OnExitSleepMode([this]() {
-            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOff);
+            GetDisplay()->SetPowerSaveMode(false);
             GetBacklight()->RestoreBrightness();
         });
-
+         
         power_save_timer_->SetEnabled(true);
     }
 
@@ -105,22 +106,24 @@ private:
 
     void InitializeButtons() {
         main_button_.OnClick([this]() {
-            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
         });
         main_button_.OnPressDown([this]() {
             power_save_timer_->WakeUp();
-            BoardEvents::PostInput(BoardEvents::Input::TouchDown);
+            Application::GetInstance().StartListening();
         });
         main_button_.OnPressUp([this]() {
-            BoardEvents::PostInput(BoardEvents::Input::TouchUp);
+            Application::GetInstance().StopListening();
         });
 
         left_button_.OnClick([this]() {
             power_save_timer_->WakeUp();
-            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
@@ -130,13 +133,13 @@ private:
                 volume = 0;
             }
             codec->SetOutputVolume(volume);
-            BoardEvents::PostInput(BoardEvents::Input::VolumeChanged, volume);
+            GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
         });
 
         left_button_.OnLongPress([this]() {
             power_save_timer_->WakeUp();
             GetAudioCodec()->SetOutputVolume(0);
-            BoardEvents::PostInput(BoardEvents::Input::VolumeMuted);
+            GetDisplay()->ShowNotification(Lang::Strings::MUTED);
         });
 
         right_button_.OnClick([this]() {
@@ -147,13 +150,13 @@ private:
                 volume = 100;
             }
             codec->SetOutputVolume(volume);
-            BoardEvents::PostInput(BoardEvents::Input::VolumeChanged, volume);
+            GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
         });
 
         right_button_.OnLongPress([this]() {
             power_save_timer_->WakeUp();
             GetAudioCodec()->SetOutputVolume(100);
-            BoardEvents::PostInput(BoardEvents::Input::VolumeMax);
+            GetDisplay()->ShowNotification(Lang::Strings::MAX_VOLUME);
         });
     }
 
@@ -212,11 +215,11 @@ private:
 public:
     magiclick_2p4() :
         main_button_(MAIN_BUTTON_GPIO),
-        left_button_(LEFT_BUTTON_GPIO),
+        left_button_(LEFT_BUTTON_GPIO), 
         right_button_(RIGHT_BUTTON_GPIO) {
         InitializeLedPower();
         InitializePowerManager();
-        InitializePowerSaveTimer();
+        InitializePowerSaveTimer();        
         InitializeCodecI2c();
         InitializeButtons();
         InitializeSpi();
@@ -239,7 +242,7 @@ public:
     virtual Display* GetDisplay() override {
         return display_;
     }
-
+    
     virtual Backlight* GetBacklight() override {
         static PwmBacklight backlight(DISPLAY_BACKLIGHT_PIN, DISPLAY_BACKLIGHT_OUTPUT_INVERT);
         return &backlight;
@@ -266,5 +269,3 @@ public:
 };
 
 DECLARE_BOARD(magiclick_2p4);
-
-

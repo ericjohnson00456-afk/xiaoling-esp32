@@ -1,11 +1,10 @@
-#include "ui/display/display_factory.h"
-
-#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "codecs/es8311_audio_codec.h"
+#include "display/lcd_display.h"
+#include "application.h"
 #include "button.h"
 #include "config.h"
-#include "services/service_ws2812.h"
+#include "led/single_led.h"
 
 #include <esp_log.h>
 #include <esp_efuse_table.h>
@@ -46,7 +45,7 @@ private:
     // SPI初始化
     void InitializeSpi() {
         ESP_LOGI(TAG, "Initialize SPI bus");
-        spi_bus_config_t buscfg = GC9A01_PANEL_BUS_SPI_CONFIG(DISPLAY_SPI_SCLK_PIN, DISPLAY_SPI_MOSI_PIN,
+        spi_bus_config_t buscfg = GC9A01_PANEL_BUS_SPI_CONFIG(DISPLAY_SPI_SCLK_PIN, DISPLAY_SPI_MOSI_PIN, 
                                     DISPLAY_WIDTH * DISPLAY_HEIGHT * sizeof(uint16_t));
         ESP_ERROR_CHECK(spi_bus_initialize(SPI3_HOST, &buscfg, SPI_DMA_CH_AUTO));
     }
@@ -60,7 +59,7 @@ private:
         esp_lcd_panel_io_spi_config_t io_config = GC9A01_PANEL_IO_SPI_CONFIG(DISPLAY_SPI_CS_PIN, DISPLAY_SPI_DC_PIN, NULL, NULL);
         io_config.pclk_hz = DISPLAY_SPI_SCLK_HZ;
         ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi(SPI3_HOST, &io_config, &io_handle));
-
+    
         ESP_LOGI(TAG, "Install GC9A01 panel driver");
         esp_lcd_panel_handle_t panel_handle = NULL;
         esp_lcd_panel_dev_config_t panel_config = {};
@@ -73,24 +72,25 @@ private:
         ESP_ERROR_CHECK(esp_lcd_panel_init(panel_handle));
         ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel_handle, true));
         ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel_handle, true, false));
-        ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true));
+        ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true)); 
 
-        display_ = CreateSpiLcdDisplay(io_handle, panel_handle,
+        display_ = new SpiLcdDisplay(io_handle, panel_handle,
                                     DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
-            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
-            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
+            app.ToggleChatState();
         });
     }
 
 public:
-    MovecallCuicanESP32S3() : boot_button_(BOOT_BUTTON_GPIO) {
+    MovecallCuicanESP32S3() : boot_button_(BOOT_BUTTON_GPIO) {  
         InitializeCodecI2c();
         InitializeSpi();
         InitializeGc9a01Display();
@@ -99,14 +99,14 @@ public:
     }
 
     virtual Led* GetLed() override {
-        static Ws2812Service led_strip(BUILTIN_LED_GPIO);
+        static SingleLed led_strip(BUILTIN_LED_GPIO);
         return &led_strip;
     }
 
     virtual Display* GetDisplay() override {
         return display_;
     }
-
+    
     virtual Backlight* GetBacklight() override {
         static PwmBacklight backlight(DISPLAY_BACKLIGHT_PIN, DISPLAY_BACKLIGHT_OUTPUT_INVERT);
         return &backlight;
@@ -121,5 +121,3 @@ public:
 };
 
 DECLARE_BOARD(MovecallCuicanESP32S3);
-
-

@@ -25,7 +25,7 @@ private:
     bool is_low_battery_ = false;
     int ticks_ = 0;
     adc_oneshot_unit_handle_t adc_handle_;
-    const int kBatteryAdcInterval = 60;
+    const int kBatteryAdcInterval = 60; 
     const int kBatteryAdcDataCount = 3;
     const int kLowBatteryLevel = 20;
 
@@ -33,7 +33,7 @@ private:
     bool pressed = false;                   // 是否按下电源键
     int PowerControl_ticks_ = 0;            // 开机时长
     int press_ticks_ = 0;                   // 按下时的tick
-    bool is_first_boot = true;              //
+    bool is_first_boot = true;              // 
     uint8_t PowerDec_level_ = 0;            // 电源键电平
     const int power_off_ticks_ = 20;        // 按键按下20/5秒准备关机;
     bool new_charging_status = false;       // 插入usb时无法软件关机
@@ -58,7 +58,7 @@ private:
                 is_shutting_down_ = false;
                 shutdown_delay_ticks_ = 0;
             }
-            return;
+            return;  
         }
 
         if (!is_first_boot) {
@@ -66,7 +66,7 @@ private:
             if (PowerDec_level_ == 0 && pressed == false) {
                 press_ticks_ = PowerControl_ticks_;
                 pressed = true;
-            }
+            }  
             if ((press_ticks_ != 0) &&( PowerControl_ticks_ - press_ticks_ == power_off_ticks_ )&& (!new_charging_status)) {
                 if (timer_handle_) {
                     esp_timer_stop(timer_handle_);
@@ -180,21 +180,21 @@ public:
         powerdecgpio_conf.intr_type = GPIO_INTR_DISABLE;
         powerdecgpio_conf.mode = GPIO_MODE_INPUT;
         powerdecgpio_conf.pin_bit_mask = (1ULL << Power_Dec);
-        powerdecgpio_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
-        powerdecgpio_conf.pull_up_en = GPIO_PULLUP_DISABLE;
+        powerdecgpio_conf.pull_down_en = GPIO_PULLDOWN_DISABLE; 
+        powerdecgpio_conf.pull_up_en = GPIO_PULLUP_DISABLE;     
         gpio_config(&powerdecgpio_conf);
 
         // 初始化电源控制引脚
         gpio_config_t powercontgpio_conf = {};
         powercontgpio_conf.intr_type = GPIO_INTR_DISABLE;
         powercontgpio_conf.mode = GPIO_MODE_OUTPUT;
-        powercontgpio_conf.pin_bit_mask = (1ULL << Power_Control);
-        powercontgpio_conf.pull_down_en = GPIO_PULLDOWN_ENABLE;
-        powercontgpio_conf.pull_up_en = GPIO_PULLUP_DISABLE;
+        powercontgpio_conf.pin_bit_mask = (1ULL << Power_Control); 
+        powercontgpio_conf.pull_down_en = GPIO_PULLDOWN_ENABLE; 
+        powercontgpio_conf.pull_up_en = GPIO_PULLUP_DISABLE;     
         gpio_config(&powercontgpio_conf);
         gpio_set_level(Power_Control, 1);
         ESP_LOGI("powercontrol", "turnded on ...");
-
+        
         // 创建电源控制检查定时器
         esp_timer_create_args_t power_timer_args = {
             .callback = [](void* arg) {
@@ -213,8 +213,8 @@ public:
         io_conf.intr_type = GPIO_INTR_DISABLE;
         io_conf.mode = GPIO_MODE_INPUT;
         io_conf.pin_bit_mask = (1ULL << charging_pin_);
-        io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
-        io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
+        io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE; 
+        io_conf.pull_up_en = GPIO_PULLUP_DISABLE;     
         gpio_config(&io_conf);
 
         // 创建电池电量检查定时器
@@ -291,9 +291,9 @@ public:
             gpio_config_t shutdown_gpio_conf = {};
             shutdown_gpio_conf.intr_type = GPIO_INTR_DISABLE;
             shutdown_gpio_conf.mode = GPIO_MODE_OUTPUT;
-            shutdown_gpio_conf.pin_bit_mask = (1ULL << Power_Dec);
-            shutdown_gpio_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
-            shutdown_gpio_conf.pull_up_en = GPIO_PULLUP_DISABLE;
+            shutdown_gpio_conf.pin_bit_mask = (1ULL << Power_Dec); 
+            shutdown_gpio_conf.pull_down_en = GPIO_PULLDOWN_DISABLE; 
+            shutdown_gpio_conf.pull_up_en = GPIO_PULLUP_DISABLE;     
             gpio_config(&shutdown_gpio_conf);
             gpio_set_level(DISPLAY_BACKLIGHT_PIN, 0);
             gpio_set_level(Power_Control, 0);
@@ -307,7 +307,7 @@ public:
             ESP_LOGI("PowerManager","关机失败，进入深睡眠");
             esp_deep_sleep_start();
         } else {
-            ESP_LOGI("PowerManager","检测到插入usb，无法关机");
+            ESP_LOGI("PowerManager","检测到插入usb，无法关机"); 
         }
     }
 };

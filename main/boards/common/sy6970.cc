@@ -1,6 +1,6 @@
 #include "sy6970.h"
 #include "board.h"
-#include "display.h"
+#include "display/display.h"
 
 #include <esp_log.h>
 

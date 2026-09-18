@@ -1,0 +1,129 @@
+#ifndef DISPLAY_H
+#define DISPLAY_H
+
+#include "theme.h"
+
+#include <esp_timer.h>
+#include <esp_log.h>
+#include <esp_pm.h>
+
+#include <string>
+#include <chrono>
+#include <memory>
+
+class LvglImage;
+enum class DuplexMode;
+
+// Compatibility boundary for legacy board code that still calls semantic
+// Display::SetXXX methods. The implementation lives in ui/compat and turns
+// these calls into page/presenter commands instead of drawing from Display.
+class DisplayUiAdapter {
+public:
+    virtual ~DisplayUiAdapter() = default;
+
+    virtual bool HandleStatus(const char* status) = 0;
+    virtual bool HandleNotification(const char* notification, int duration_ms) = 0;
+    virtual bool HandleEmotion(const char* emotion, bool once) = 0;
+    virtual bool HandleChatMessage(const char* role, const char* content) = 0;
+    virtual bool HandleNetworkIcon(const char* icon) = 0;
+    virtual bool HandleDuplexMode(DuplexMode mode) = 0;
+    virtual bool HandleClockText(const char* text) = 0;
+    virtual bool HandleHomeVisible(bool visible) = 0;
+    virtual bool HandleStatusBarUpdate(bool update_all) = 0;
+    virtual bool HandlePowerSaveMode(bool on) = 0;
+
+#ifdef CONFIG_LSPLATFORM
+    virtual bool HandlePreviewImage(std::unique_ptr<LvglImage> image) = 0;
+    virtual bool HandleActivation(std::unique_ptr<LvglImage> qrcode,
+                                  const std::string& message) = 0;
+    virtual bool HandleDismissActivation() = 0;
+    virtual bool HandleImage(std::unique_ptr<LvglImage> image) = 0;
+    virtual bool HandleDismissImage() = 0;
+#endif
+};
+
+class Display {
+public:
+    Display();
+    virtual ~Display();
+
+    virtual void SetStatus(const char* status);
+    virtual void ShowNotification(const char* notification, int duration_ms = 3000);
+    virtual void ShowNotification(const std::string &notification, int duration_ms = 3000);
+    virtual void SetEmotion(const char* emotion);
+    virtual void ShowEmotionOnce(const char* emotion);
+    virtual void SetChatMessage(const char* role, const char* content);
+    virtual void SetNetworkIcon(const char* icon);
+    virtual void SetDuplexMode(DuplexMode mode);
+    virtual void SetClockText(const char* text);
+    virtual void SetHomeVisible(bool visible);
+    virtual void SetTheme(Theme* theme);
+    virtual Theme* GetTheme() { return current_theme_; }
+    virtual void UpdateStatusBar(bool update_all = false);
+    virtual void SetPowerSaveMode(bool on);
+
+    void SetUiAdapter(DisplayUiAdapter* adapter) { ui_adapter_ = adapter; }
+
+    /* 背光亮度控制（0-100），默认实现经 Board::GetBacklight() 下发；
+       无背光硬件的板子保持空操作 */
+    virtual void SetBrightness(uint8_t brightness);
+    virtual uint8_t GetBrightness();
+
+#ifdef CONFIG_LSPLATFORM
+    virtual void ShowActivation(std::unique_ptr<LvglImage> qrcode, const std::string& message);
+    virtual void DismissActivation();
+
+    virtual void ShowImage(std::unique_ptr<LvglImage> image);
+    virtual void DismissImage();
+#endif // CONFIG_LSPLATFORM
+
+    inline int width() const { return width_; }
+    inline int height() const { return height_; }
+
+protected:
+    int width_ = 0;
+    int height_ = 0;
+
+    Theme* current_theme_ = nullptr;
+    DisplayUiAdapter* ui_adapter_ = nullptr;
+
+    friend class DisplayLockGuard;
+    virtual bool Lock(int timeout_ms = 0) = 0;
+    virtual void Unlock() = 0;
+};
+
+
+class DisplayLockGuard {
+public:
+    explicit DisplayLockGuard(Display *display) : display_(display) {
+        if (display_ != nullptr && display_->Lock(30000)) {
+            locked_ = true;
+        } else {
+            ESP_LOGE("Display", "Failed to lock display");
+        }
+    }
+    ~DisplayLockGuard() {
+        if (locked_) {
+            display_->Unlock();
+        }
+    }
+
+    DisplayLockGuard(const DisplayLockGuard&) = delete;
+    DisplayLockGuard& operator=(const DisplayLockGuard&) = delete;
+
+    bool locked() const { return locked_; }
+
+private:
+    Display *display_;
+    bool locked_ = false;
+};
+
+class NoDisplay : public Display {
+private:
+    virtual bool Lock(int timeout_ms = 0) override {
+        return true;
+    }
+    virtual void Unlock() override {}
+};
+
+#endif

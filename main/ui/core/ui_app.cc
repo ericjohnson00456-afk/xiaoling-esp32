@@ -2,18 +2,15 @@
 
 #include "ui/screens/home/home_presenter.h"
 #include "board.h"
-#include "display.h"
-#include "ui/display/panels/oled_display.h"
-#include "ui/display/display_factory.h"
+#include "display/display.h"
 #include "ui/core/ui_manager.h"
 #include "ui/core/ui_page_ids.h"
 #include "ui/screens/qrcode/qrcode_presenter.h"
-#include "ui/models/home/wifi_model.h"
 #include "events/ui_event_handler.h"
 
 #ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
 #include "resource/assets.h"
-#include "emoji_model.h"
+#include "emoji_repository.h"
 #include "lvgl_theme.h"
 
 #include <esp_log.h>
@@ -31,10 +28,10 @@ bool ReloadEmojiResources() {
     DisplayLockGuard lock(display);
     auto& themes = LvglThemeManager::GetInstance();
     auto* dark = themes.GetTheme("dark");
-    if (dark == nullptr || dark->emoji_model() == nullptr) {
+    if (dark == nullptr || dark->emoji_repository() == nullptr) {
         return false;
     }
-    return dark->emoji_model()->LoadFromAssets(Assets::GetInstance().EmojiStore());
+    return dark->emoji_repository()->LoadFromAssets(Assets::GetInstance().EmojiStore());
 #else
     return true;
 #endif
@@ -46,10 +43,9 @@ bool Initialize() {
         auto& board = Board::GetInstance();
         auto* display = board.GetDisplay();
         if (display == nullptr) {
-            display = CreateDisplay(board.GetDisplayHardware());
+            ESP_LOGE("UiApp", "Board did not provide a display");
+            return false;
         }
-        board.SetDisplay(display, display->width(), display->height(),
-                         dynamic_cast<OledDisplay*>(display) != nullptr);
         ui.Initialize(display);
     }
 
@@ -59,14 +55,14 @@ bool Initialize() {
 
 #ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
     // Home 页面创建前先加载表情动画定义，避免页面打开后再解析 JSON。
-    auto emoji_model = std::make_shared<EmojiModel>();
-    if (emoji_model->LoadFromAssets(Assets::GetInstance().EmojiStore())) {
+    auto emoji_repository = std::make_shared<EmojiRepository>();
+    if (emoji_repository->LoadFromAssets(Assets::GetInstance().EmojiStore())) {
         auto& themes = LvglThemeManager::GetInstance();
         if (auto* light = themes.GetTheme("light")) {
-            light->set_emoji_model(emoji_model);
+            light->set_emoji_repository(emoji_repository);
         }
         if (auto* dark = themes.GetTheme("dark")) {
-            dark->set_emoji_model(emoji_model);
+            dark->set_emoji_repository(emoji_repository);
         }
     } else {
         ESP_LOGW("UiApp", "表情动画资源加载失败，Home 页面将使用无表情回退");
@@ -78,7 +74,6 @@ bool Initialize() {
         ui.SetDefaultScreen(UI_PAGE_HOME) != 0) {
         return false;
     }
-    WifiModel::GetInstance().Refresh();
     return true;
 }
 

@@ -1,8 +1,7 @@
-#include "ui/display/display_factory.h"
-
-#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "tdisplays3promvsrlora_audio_codec.h"
+#include "display/lcd_display.h"
+#include "application.h"
 #include "button.h"
 #include "config.h"
 #include "power_save_timer.h"
@@ -73,18 +72,18 @@ private:
     i2c_master_bus_handle_t i2c_bus_;
     Cst2xxse *cst226se_;
     Sy6970 *sy6970_;
-    Display *display_;
+    LcdDisplay *display_;
     Button boot_button_;
     PowerSaveTimer* power_save_timer_;
 
     void InitializePowerSaveTimer() {
         power_save_timer_ = new PowerSaveTimer(-1, 60, 300);
         power_save_timer_->OnEnterSleepMode([this]() {
-            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOn);
+            GetDisplay()->SetPowerSaveMode(true);
             GetBacklight()->SetBrightness(10);
         });
         power_save_timer_->OnExitSleepMode([this]() {
-            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOff);
+            GetDisplay()->SetPowerSaveMode(false);
             GetBacklight()->RestoreBrightness();
         });
         power_save_timer_->SetEnabled(true);
@@ -139,7 +138,7 @@ private:
                 // On press
                 if (!was_touched) {
                     was_touched = true;
-                    BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
+                    Application::GetInstance().ToggleChatState();
                 }
             }
             // On release
@@ -204,7 +203,7 @@ private:
         ESP_ERROR_CHECK(esp_lcd_panel_set_gap(panel, 49, 0));
         ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel, true));
 
-        display_ = CreateSpiLcdDisplay(panel_io, panel,
+        display_ = new SpiLcdDisplay(panel_io, panel,
                                   DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X,
                                   DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
 
@@ -224,11 +223,12 @@ private:
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
             power_save_timer_->WakeUp();
-            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
-            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
+            app.ToggleChatState();
         });
     }
 
@@ -269,7 +269,7 @@ public:
         }
         WifiBoard::SetPowerSaveLevel(level);
     }
-
+    
     virtual Backlight* GetBacklight() override {
         static PwmBacklight backlight(DISPLAY_BACKLIGHT_PIN, DISPLAY_BACKLIGHT_OUTPUT_INVERT);
         return &backlight;
@@ -281,5 +281,3 @@ public:
 };
 
 DECLARE_BOARD(LilygoTDisplays3ProMVSRLoraBoard);
-
-

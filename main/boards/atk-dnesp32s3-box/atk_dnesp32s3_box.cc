@@ -1,14 +1,14 @@
-#include "boards/common/display_hardware.h"
-
-#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "codecs/es8311_audio_codec.h"
 #include "codecs/no_audio_codec.h"
+#include "display/lcd_display.h"
+#include "application.h"
 #include "button.h"
 #include "config.h"
-#include "services/service_ws2812.h"
+#include "led/single_led.h"
 #include "i2c_device.h"
 #include "usb_esp32_camera.h"
+#include "ui/i18n/lang_config.h"
 
 #include <esp_log.h>
 #include <driver/i2c_master.h>
@@ -27,7 +27,7 @@ public:
         duplex_ = true;
         input_sample_rate_ = input_sample_rate;
         output_sample_rate_ = output_sample_rate;
-
+    
         i2s_chan_config_t chan_cfg = {
             .id = I2S_NUM_0,
             .role = I2S_ROLE_MASTER,
@@ -38,7 +38,7 @@ public:
             .intr_priority = 0,
         };
         ESP_ERROR_CHECK(i2s_new_channel(&chan_cfg, &tx_handle_, &rx_handle_));
-
+    
         i2s_std_config_t std_cfg = {
             .clk_cfg = {
                 .sample_rate_hz = (uint32_t)output_sample_rate_,
@@ -223,13 +223,13 @@ private:
     i2c_master_bus_handle_t i2c_bus_;
     i2c_master_dev_handle_t xl9555_handle_;
     Button boot_button_;
-    DisplayHardwareDescriptor display_hardware_;
+    LcdDisplay* display_;
     XL9555_IN* xl9555_in_;
     XL9555_Button* key1_button_;
     XL9555_Button* key2_button_;
     bool es8311_detected_ = false;
     USB_Esp32Camera* camera_;
-
+    
     void InitializeI2c() {
         // Initialize I2C peripheral
         i2c_master_bus_config_t i2c_bus_cfg = {
@@ -349,27 +349,18 @@ private:
         esp_lcd_panel_mirror(panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
         ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel, true));
 
-        display_hardware_ = DisplayHardwareDescriptor{
-            .type = DisplayHardwareType::Spi,
-            .panel_io = panel_io,
-            .panel = panel,
-            .width = DISPLAY_WIDTH,
-            .height = DISPLAY_HEIGHT,
-            .offset_x = DISPLAY_OFFSET_X,
-            .offset_y = DISPLAY_OFFSET_Y,
-            .mirror_x = DISPLAY_MIRROR_X,
-            .mirror_y = DISPLAY_MIRROR_Y,
-            .swap_xy = DISPLAY_SWAP_XY,
-        };
+        display_ = new SpiLcdDisplay(panel_io, panel,
+                                    DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
-            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
-            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
+            app.ToggleChatState();
         });
 
         key1_button_->OnClick([this]() {
@@ -379,12 +370,12 @@ private:
                 volume = 100;
             }
             codec->SetOutputVolume(volume);
-            BoardEvents::PostInput(BoardEvents::Input::VolumeUp, volume);
+            GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
         });
 
         key1_button_->OnLongPress([this]() {
             GetAudioCodec()->SetOutputVolume(100);
-            BoardEvents::PostInput(BoardEvents::Input::VolumeUpLongPress, 100);
+            GetDisplay()->ShowNotification(Lang::Strings::MAX_VOLUME);
         });
 
         key2_button_->OnClick([this]() {
@@ -394,17 +385,17 @@ private:
                 volume = 0;
             }
             codec->SetOutputVolume(volume);
-            BoardEvents::PostInput(BoardEvents::Input::VolumeDown, volume);
+            GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
         });
 
         key2_button_->OnLongPress([this]() {
             GetAudioCodec()->SetOutputVolume(0);
-            BoardEvents::PostInput(BoardEvents::Input::VolumeDownLongPress, 0);
+            GetDisplay()->ShowNotification(Lang::Strings::MUTED);
         });
     }
 
     void InitializeCamera() {
-        camera_ = new USB_Esp32Camera();
+        camera_ = new USB_Esp32Camera(); 
     }
 
 public:
@@ -422,17 +413,17 @@ public:
         if (es8311_detected_) {
             /* 使用ES8311 驱动 */
             static Es8311AudioCodec audio_codec(
-                i2c_bus_,
-                I2C_NUM_0,
+                i2c_bus_, 
+                I2C_NUM_0, 
                 AUDIO_INPUT_SAMPLE_RATE,
                 AUDIO_OUTPUT_SAMPLE_RATE,
-                GPIO_NUM_NC,
-                AUDIO_I2S_GPIO_BCLK,
+                GPIO_NUM_NC, 
+                AUDIO_I2S_GPIO_BCLK, 
                 AUDIO_I2S_GPIO_WS,
                 AUDIO_I2S_GPIO_DOUT,
                 AUDIO_I2S_GPIO_DIN,
-                GPIO_NUM_NC,
-                AUDIO_CODEC_ES8311_ADDR,
+                GPIO_NUM_NC, 
+                AUDIO_CODEC_ES8311_ADDR, 
                 false);
                 return &audio_codec;
         } else {
@@ -447,9 +438,9 @@ public:
         }
         return NULL;
     }
-
-    virtual DisplayHardwareDescriptor GetDisplayHardware() const override {
-        return display_hardware_;
+    
+    virtual Display* GetDisplay() override {
+        return display_;
     }
 
     virtual Camera* GetCamera() override {
@@ -458,5 +449,3 @@ public:
 };
 
 DECLARE_BOARD(atk_dnesp32s3_box);
-
-

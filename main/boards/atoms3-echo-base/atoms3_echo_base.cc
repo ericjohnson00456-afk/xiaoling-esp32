@@ -1,11 +1,11 @@
-#include "ui/display/display_factory.h"
-
-#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "codecs/es8311_audio_codec.h"
+#include "display/lcd_display.h"
+#include "application.h"
 #include "button.h"
 #include "config.h"
 #include "i2c_device.h"
+#include "ui/i18n/lang_config.h"
 
 #include <esp_log.h>
 #include <driver/i2c_master.h>
@@ -100,16 +100,16 @@ private:
         if (is_echo_base_connected_) {
             return;
         }
-
+        
         // Pop error page
         InitializeSpi();
         InitializeGc9107Display();
         InitializeButtons();
         GetBacklight()->SetBrightness(100);
-        BoardEvents::PostLocalizedText(BoardEvents::LocalizedText::Error);
-        BoardEvents::PostEmotion("triangle_exclamation");
-        BoardEvents::PostSystemMessage("system", "Echo Base\nnot connected");
-
+        display_->SetStatus(Lang::Strings::ERROR);
+        display_->SetEmotion("triangle_exclamation");
+        display_->SetChatMessage("system", "Echo Base\nnot connected");
+        
         while (1) {
             ESP_LOGE(TAG, "Atomic Echo Base is disconnected");
             vTaskDelay(pdMS_TO_TICKS(1000));
@@ -154,7 +154,7 @@ private:
         io_config.lcd_cmd_bits = 8;
         io_config.lcd_param_bits = 8;
         ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi(SPI3_HOST, &io_config, &io_handle));
-
+    
         ESP_LOGI(TAG, "Install GC9A01 panel driver");
         esp_lcd_panel_handle_t panel_handle = NULL;
         gc9a01_vendor_config_t gc9107_vendor_config = {
@@ -170,19 +170,20 @@ private:
         ESP_ERROR_CHECK(esp_lcd_new_panel_gc9a01(io_handle, &panel_config, &panel_handle));
         ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_handle));
         ESP_ERROR_CHECK(esp_lcd_panel_init(panel_handle));
-        ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true));
+        ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true)); 
 
-        display_ = CreateSpiLcdDisplay(io_handle, panel_handle,
+        display_ = new SpiLcdDisplay(io_handle, panel_handle,
             DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
         }
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
-            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
-            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
+            app.ToggleChatState();
         });
     }
 
@@ -199,17 +200,17 @@ public:
 
     virtual AudioCodec* GetAudioCodec() override {
         static Es8311AudioCodec audio_codec(
-            i2c_bus_,
-            I2C_NUM_1,
-            AUDIO_INPUT_SAMPLE_RATE,
+            i2c_bus_, 
+            I2C_NUM_1, 
+            AUDIO_INPUT_SAMPLE_RATE, 
             AUDIO_OUTPUT_SAMPLE_RATE,
-            AUDIO_I2S_GPIO_MCLK,
-            AUDIO_I2S_GPIO_BCLK,
-            AUDIO_I2S_GPIO_WS,
-            AUDIO_I2S_GPIO_DOUT,
+            AUDIO_I2S_GPIO_MCLK, 
+            AUDIO_I2S_GPIO_BCLK, 
+            AUDIO_I2S_GPIO_WS, 
+            AUDIO_I2S_GPIO_DOUT, 
             AUDIO_I2S_GPIO_DIN,
-            AUDIO_CODEC_GPIO_PA,
-            AUDIO_CODEC_ES8311_ADDR,
+            AUDIO_CODEC_GPIO_PA, 
+            AUDIO_CODEC_ES8311_ADDR, 
             false);
         return &audio_codec;
     }
@@ -225,4 +226,3 @@ public:
 };
 
 DECLARE_BOARD(AtomS3EchoBaseBoard);
-

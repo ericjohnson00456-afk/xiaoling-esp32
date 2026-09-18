@@ -1,13 +1,13 @@
-#include "ui/display/display_factory.h"
-
-#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "codecs/es8388_audio_codec.h"
+#include "display/lcd_display.h"
+#include "application.h"
 #include "button.h"
 #include "config.h"
 #include "i2c_device.h"
-#include "services/service_ws2812.h"
+#include "led/single_led.h"
 #include "driver/gpio.h"
+#include "ui/i18n/lang_config.h"
 
 #include <esp_log.h>
 #include <driver/i2c_master.h>
@@ -25,7 +25,7 @@ private:
     Button volume_up_button_;
     Button volume_down_button_;
     Button phone_button_;
-    Display* display_;
+    LcdDisplay* display_;
 
     void InitializeI2c() {
         // Initialize I2C peripheral
@@ -58,17 +58,18 @@ private:
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
-            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
-            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
+            app.ToggleChatState();
         });
         boot_button_.OnPressDown([this]() {
-            BoardEvents::PostInput(BoardEvents::Input::TouchDown);
+            Application::GetInstance().StartListening();
         });
         boot_button_.OnPressUp([this]() {
-            BoardEvents::PostInput(BoardEvents::Input::TouchUp);
+            Application::GetInstance().StopListening();
         });
 
         volume_up_button_.OnClick([this]() {
@@ -78,12 +79,12 @@ private:
                 volume = 100;
             }
             codec->SetOutputVolume(volume);
-            BoardEvents::PostInput(BoardEvents::Input::VolumeChanged, volume);
+            GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
         });
 
         volume_up_button_.OnLongPress([this]() {
             GetAudioCodec()->SetOutputVolume(100);
-            BoardEvents::PostInput(BoardEvents::Input::VolumeMax);
+            GetDisplay()->ShowNotification(Lang::Strings::MAX_VOLUME);
         });
 
         volume_down_button_.OnClick([this]() {
@@ -93,12 +94,12 @@ private:
                 volume = 0;
             }
             codec->SetOutputVolume(volume);
-            BoardEvents::PostInput(BoardEvents::Input::VolumeChanged, volume);
+            GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
         });
 
         volume_down_button_.OnLongPress([this]() {
             GetAudioCodec()->SetOutputVolume(0);
-            BoardEvents::PostInput(BoardEvents::Input::VolumeMuted);
+            GetDisplay()->ShowNotification(Lang::Strings::MUTED);
         });
 
         //不插耳机
@@ -169,18 +170,18 @@ private:
         esp_lcd_panel_io_tx_param(panel_io, 0xe1, data1, 16);
 
         esp_lcd_panel_invert_color(panel, true);
-        esp_lcd_panel_swap_xy(panel, DISPLAY_SWAP_XY);
+        esp_lcd_panel_swap_xy(panel, DISPLAY_SWAP_XY); 
         esp_lcd_panel_mirror(panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
 
-        display_ = CreateSpiLcdDisplay(panel_io, panel,
+        display_ = new SpiLcdDisplay(panel_io, panel,
                                     DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
 
 public:
-    atk_dnesp32s3m_wifi() :
+    atk_dnesp32s3m_wifi() : 
         boot_button_(BOOT_BUTTON_GPIO),
         volume_up_button_(VOLUME_UP_BUTTON_GPIO),
-        volume_down_button_(VOLUME_DOWN_BUTTON_GPIO),
+        volume_down_button_(VOLUME_DOWN_BUTTON_GPIO), 
         phone_button_(PHONE_CK_PIN, true) {
         InitializeI2c();
         InitializeSpi();
@@ -192,22 +193,22 @@ public:
     }
 
     virtual Led* GetLed() override {
-        static Ws2812Service led(BUILTIN_LED_GPIO);
+        static SingleLed led(BUILTIN_LED_GPIO);
         return &led;
     }
 
     virtual AudioCodec* GetAudioCodec() override {
         static Es8388AudioCodec audio_codec(
-            i2c_bus_,
-            I2C_NUM_0,
-            AUDIO_INPUT_SAMPLE_RATE,
+            i2c_bus_, 
+            I2C_NUM_0, 
+            AUDIO_INPUT_SAMPLE_RATE, 
             AUDIO_OUTPUT_SAMPLE_RATE,
-            AUDIO_I2S_GPIO_MCLK,
-            AUDIO_I2S_GPIO_BCLK,
-            AUDIO_I2S_GPIO_WS,
-            AUDIO_I2S_GPIO_DOUT,
+            AUDIO_I2S_GPIO_MCLK, 
+            AUDIO_I2S_GPIO_BCLK, 
+            AUDIO_I2S_GPIO_WS, 
+            AUDIO_I2S_GPIO_DOUT, 
             AUDIO_I2S_GPIO_DIN,
-            GPIO_NUM_NC,
+            GPIO_NUM_NC, 
             AUDIO_CODEC_ES8388_ADDR
         );
         return &audio_codec;
@@ -227,5 +228,3 @@ public:
 };
 
 DECLARE_BOARD(atk_dnesp32s3m_wifi);
-
-

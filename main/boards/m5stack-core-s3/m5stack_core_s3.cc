@@ -1,8 +1,7 @@
-#include "ui/display/display_factory.h"
-
-#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "cores3_audio_codec.h"
+#include "display/lcd_display.h"
+#include "application.h"
 #include "config.h"
 #include "power_save_timer.h"
 #include "i2c_device.h"
@@ -90,7 +89,7 @@ public:
         int x = -1;
         int y = -1;
     };
-
+    
     Ft6336(i2c_master_bus_handle_t i2c_bus, uint8_t addr) : I2cDevice(i2c_bus, addr) {
         uint8_t chip_id = ReadReg(0xA3);
         ESP_LOGI(TAG, "Get chip ID: 0x%02X", chip_id);
@@ -123,7 +122,7 @@ private:
     Pmic* pmic_;
     Aw9523* aw9523_;
     Ft6336* ft6336_;
-    Display* display_;
+    LcdDisplay* display_;
     Esp32Camera* camera_;
     esp_timer_handle_t touchpad_timer_;
     PowerSaveTimer* power_save_timer_;
@@ -131,11 +130,11 @@ private:
     void InitializePowerSaveTimer() {
         power_save_timer_ = new PowerSaveTimer(-1, 60, 300);
         power_save_timer_->OnEnterSleepMode([this]() {
-            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOn);
+            GetDisplay()->SetPowerSaveMode(true);
             GetBacklight()->SetBrightness(10);
         });
         power_save_timer_->OnExitSleepMode([this]() {
-            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOff);
+            GetDisplay()->SetPowerSaveMode(false);
             GetBacklight()->RestoreBrightness();
         });
         power_save_timer_->OnShutdownRequest([this]() {
@@ -197,27 +196,28 @@ private:
         static bool was_touched = false;
         static int64_t touch_start_time = 0;
         const int64_t TOUCH_THRESHOLD_MS = 500;  // 触摸时长阈值，超过500ms视为长按
-
+        
         ft6336_->UpdateTouchPoint();
         auto& touch_point = ft6336_->GetTouchPoint();
-
+        
         // 检测触摸开始
         if (touch_point.num > 0 && !was_touched) {
             was_touched = true;
             touch_start_time = esp_timer_get_time() / 1000; // 转换为毫秒
-        }
+        } 
         // 检测触摸释放
         else if (touch_point.num == 0 && was_touched) {
             was_touched = false;
             int64_t touch_duration = (esp_timer_get_time() / 1000) - touch_start_time;
-
+            
             // 只有短触才触发
             if (touch_duration < TOUCH_THRESHOLD_MS) {
-                if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
+                auto& app = Application::GetInstance();
+                if (app.GetDeviceState() == kDeviceStateStarting) {
                     EnterWifiConfigMode();
                     return;
                 }
-                BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
+                app.ToggleChatState();
             }
         }
     }
@@ -225,7 +225,7 @@ private:
     void InitializeFt6336TouchPad() {
         ESP_LOGI(TAG, "Init FT6336");
         ft6336_ = new Ft6336(i2c_bus_, 0x38);
-
+        
         // 创建定时器，20ms 间隔
         esp_timer_create_args_t timer_args = {
             .callback = [](void* arg) {
@@ -237,7 +237,7 @@ private:
             .name = "touchpad_timer",
             .skip_unhandled_events = true,
         };
-
+        
         ESP_ERROR_CHECK(esp_timer_create(&timer_args, &touchpad_timer_));
         ESP_ERROR_CHECK(esp_timer_start_periodic(touchpad_timer_, 20 * 1000));
     }
@@ -276,7 +276,7 @@ private:
         panel_config.rgb_ele_order = LCD_RGB_ELEMENT_ORDER_BGR;
         panel_config.bits_per_pixel = 16;
         ESP_ERROR_CHECK(esp_lcd_new_panel_ili9341(panel_io, &panel_config, &panel));
-
+        
         esp_lcd_panel_reset(panel);
         aw9523_->ResetIli9342();
 
@@ -285,7 +285,7 @@ private:
         esp_lcd_panel_swap_xy(panel, DISPLAY_SWAP_XY);
         esp_lcd_panel_mirror(panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
 
-        display_ = CreateSpiLcdDisplay(panel_io, panel,
+        display_ = new SpiLcdDisplay(panel_io, panel,
                                     DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
 
@@ -394,5 +394,3 @@ public:
 };
 
 DECLARE_BOARD(M5StackCoreS3Board);
-
-

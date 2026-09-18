@@ -1,12 +1,11 @@
-#include "ui/display/display_factory.h"
-
-#include "boards/common/board_events.h"
 #include "dual_network_board.h"
 #include "codecs/no_audio_codec.h"
+#include "display/lcd_display.h"
 #include "system_reset.h"
+#include "application.h"
 #include "button.h"
 #include "config.h"
-#include "services/service_ws2812.h"
+#include "led/single_led.h"
 
 #include <esp_log.h>
 #include <driver/i2c_master.h>
@@ -55,7 +54,7 @@ static const gc9a01_lcd_init_cmd_t gc9107_lcd_init_cmds[] = {
     {0xba, (uint8_t[]){0xFF, 0xFF}, 2, 0},
 };
 #endif
-
+ 
 #define TAG "ESP32-LCD-MarsbearSupport"
 
 class CompactWifiBoardLCD : public DualNetworkBoard {
@@ -64,7 +63,7 @@ private:
     Button touch_button_;
     Button asr_button_;
 
-    Display* display_;
+    LcdDisplay* display_;
 
     void InitializeSpi() {
         spi_bus_config_t buscfg = {};
@@ -105,11 +104,11 @@ private:
         gc9a01_vendor_config_t gc9107_vendor_config = {
             .init_cmds = gc9107_lcd_init_cmds,
             .init_cmds_size = sizeof(gc9107_lcd_init_cmds) / sizeof(gc9a01_lcd_init_cmd_t),
-        };
+        };        
 #else
         ESP_ERROR_CHECK(esp_lcd_new_panel_st7789(panel_io, &panel_config, &panel));
 #endif
-
+        
         esp_lcd_panel_reset(panel);
 
         esp_lcd_panel_init(panel);
@@ -119,7 +118,7 @@ private:
 #ifdef  LCD_TYPE_GC9A01_SERIAL
         panel_config.vendor_config = &gc9107_vendor_config;
 #endif
-        display_ = CreateSpiLcdDisplay(panel_io, panel,
+        display_ = new SpiLcdDisplay(panel_io, panel,
                                     DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
 
@@ -136,8 +135,9 @@ private:
         gpio_config(&io_conf);  // 应用配置
 
         boot_button_.OnClick([this]() {
+            auto& app = Application::GetInstance();
             if (GetNetworkType() == NetworkType::WIFI) {
-                if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
+                if (app.GetDeviceState() == kDeviceStateStarting) {
                     // cast to WifiBoard
                     auto& wifi_board = static_cast<WifiBoard&>(GetCurrentBoard());
                     wifi_board.EnterWifiConfigMode();
@@ -145,29 +145,30 @@ private:
                 }
             }
             gpio_set_level(BUILTIN_LED_GPIO, 1);
-            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
+            app.ToggleChatState();
         });
 
 
         boot_button_.OnDoubleClick([this]() {
-            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting || BoardEvents::GetRuntimeState() == kDeviceStateWifiConfiguring) {
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateStarting || app.GetDeviceState() == kDeviceStateWifiConfiguring) {
                 SwitchNetworkType();
             }
         });
 
         asr_button_.OnClick([this]() {
             std::string wake_word="你好小智";
-            BoardEvents::PostWakeWord(wake_word);
+            Application::GetInstance().WakeWordInvoke(wake_word);
         });
 
         touch_button_.OnPressDown([this]() {
             gpio_set_level(BUILTIN_LED_GPIO, 1);
-            BoardEvents::PostInput(BoardEvents::Input::TouchDown);
+            Application::GetInstance().StartListening();
         });
 
         touch_button_.OnPressUp([this]() {
             gpio_set_level(BUILTIN_LED_GPIO, 0);
-            BoardEvents::PostInput(BoardEvents::Input::TouchUp);
+            Application::GetInstance().StopListening();
         });
 
     }
@@ -182,7 +183,7 @@ public:
         if (DISPLAY_BACKLIGHT_PIN != GPIO_NUM_NC) {
             GetBacklight()->RestoreBrightness();
         }
-
+        
     }
 
     virtual AudioCodec* GetAudioCodec() override {
@@ -210,5 +211,3 @@ public:
 };
 
 DECLARE_BOARD(CompactWifiBoardLCD);
-
-

@@ -18,7 +18,6 @@
 #include "audio_service.h"
 #include "player/audio_player.h"
 #include "xiaoling/session/session_core.h"
-#include "button/button_events.h"
 #include "system/device_status.h"
 #include "boards/common/board_events.h"
 #include "system/watchdog.h"
@@ -187,15 +186,16 @@ private:
     void HandleBoardSystemMessage(const BoardEvents::SystemMessageEvent& event);
     void HandleBoardEmotion(const BoardEvents::EmotionEvent& event);
     void HandleBoardLocalizedText(const BoardEvents::LocalizedTextEvent& event);
-    void HandleButtonEvent(int32_t event_id, uint8_t click_count);
+    void HandleButtonEvent(const BoardEvents::ButtonEvent& event);
+    void InitializeButtonEvents();
     void ClearNetworkConfiguration();
     // 恢复出厂设置：播提示音、擦除全部 NVS，等提示音播完后复位
     void StartFactoryReset();
     void FactoryResetTask();
     static void OnBoardInputEvent(void* arg, esp_event_base_t event_base,
                                   int32_t event_id, void* event_data);
-    static void OnButtonEvent(void* arg, esp_event_base_t event_base,
-                              int32_t event_id, void* event_data);
+    static void OnBoardButtonEvent(void* arg, esp_event_base_t event_base,
+                                   int32_t event_id, void* event_data);
 
     // Activation task (runs in background)
     void ActivationTask();
@@ -212,6 +212,7 @@ private:
     bool EndListeningSessionForWakeup();
     void BeginWakeup(ListeningMode mode);
     void CancelWakeup();
+    void PublishWifiIcon();
 
     // State change handler called by state machine
     void OnStateChanged(DeviceState old_state, DeviceState new_state);

@@ -1,7 +1,7 @@
 #ifndef __CUSTOM_LCD_DISPLAY_H__
 #define __CUSTOM_LCD_DISPLAY_H__
 
-#include "ui/display/panels/lcd_display.h"
+#include "display/lcd_display.h"
 
 // // SPI LCD显示器
 class CustomLcdDisplay : public LcdDisplay {

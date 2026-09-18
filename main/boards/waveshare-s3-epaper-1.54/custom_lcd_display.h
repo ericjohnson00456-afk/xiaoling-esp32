@@ -2,7 +2,7 @@
 #define __CUSTOM_LCD_DISPLAY_H__
 
 #include <driver/gpio.h>
-#include "ui/display/panels/lcd_display.h"
+#include "display/lcd_display.h"
 
 /* Display color */
 typedef enum {

@@ -1,12 +1,13 @@
-#include "boards/common/board_events.h"
 #include "dual_network_board.h"
 #include "codecs/no_audio_codec.h"
 #include "../zhengchen-1.54tft-wifi/zhengchen_lcd_display.h"
 #include "system_reset.h"
+#include "application.h"
 #include "button.h"
 #include "config.h"
 #include "power_save_timer.h"
-#include "services/service_ws2812.h"
+#include "led/single_led.h"
+#include "ui/i18n/lang_config.h"
 #include "../zhengchen-1.54tft-wifi/power_manager.h"
 
 #include <esp_log.h>
@@ -49,11 +50,11 @@ private:
 
         power_save_timer_ = new PowerSaveTimer(-1, 60, 300);
         power_save_timer_->OnEnterSleepMode([this]() {
-            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOn);
+            GetDisplay()->SetPowerSaveMode(true);
             GetBacklight()->SetBrightness(1);
         });
         power_save_timer_->OnExitSleepMode([this]() {
-            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOff);
+            GetDisplay()->SetPowerSaveMode(false);
             GetBacklight()->RestoreBrightness();
         });
         power_save_timer_->SetEnabled(true);
@@ -73,15 +74,16 @@ private:
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
             power_save_timer_->WakeUp();
+            auto& app = Application::GetInstance();
             if (GetNetworkType() == NetworkType::WIFI) {
-                if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
+                if (app.GetDeviceState() == kDeviceStateStarting) {
                     // cast to WifiBoard
                     auto& wifi_board = static_cast<WifiBoard&>(GetCurrentBoard());
                     wifi_board.EnterWifiConfigMode();
                     return;
                 }
             }
-            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
+            app.ToggleChatState();
         });
 
         boot_button_.OnLongPress([this]() {
@@ -96,13 +98,13 @@ private:
                 volume = 100;
             }
             codec->SetOutputVolume(volume);
-            BoardEvents::PostInput(BoardEvents::Input::VolumeChanged, volume/10);
+            GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume/10));
         });
 
         volume_up_button_.OnLongPress([this]() {
             power_save_timer_->WakeUp();
             GetAudioCodec()->SetOutputVolume(100);
-            BoardEvents::PostInput(BoardEvents::Input::VolumeMax);
+            GetDisplay()->ShowNotification(Lang::Strings::MAX_VOLUME);
         });
 
         volume_down_button_.OnClick([this]() {
@@ -113,13 +115,13 @@ private:
                 volume = 0;
             }
             codec->SetOutputVolume(volume);
-            BoardEvents::PostInput(BoardEvents::Input::VolumeChanged, volume/10);
+            GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume/10));
         });
 
         volume_down_button_.OnLongPress([this]() {
             power_save_timer_->WakeUp();
             GetAudioCodec()->SetOutputVolume(0);
-            BoardEvents::PostInput(BoardEvents::Input::VolumeMuted);
+            GetDisplay()->ShowNotification(Lang::Strings::MUTED);
         });
     }
 
@@ -147,7 +149,7 @@ private:
         ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel_, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y));
         ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel_, true));
 
-        display_ = new ZHENGCHEN_LcdDisplay(panel_io_, panel_, DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y,
+        display_ = new ZHENGCHEN_LcdDisplay(panel_io_, panel_, DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, 
             DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
         display_->SetupHighTempWarningPopup();
     }
@@ -175,7 +177,7 @@ public:
     virtual Display* GetDisplay() override {
         return display_;
     }
-
+    
     virtual Backlight* GetBacklight() override {
         static PwmBacklight backlight(DISPLAY_BACKLIGHT_PIN, DISPLAY_BACKLIGHT_OUTPUT_INVERT);
         return &backlight;

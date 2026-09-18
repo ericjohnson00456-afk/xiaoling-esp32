@@ -1,7 +1,7 @@
-#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "codecs/es8311_audio_codec.h"
-#include "ui/display/panels/lcd_display.h"
+#include "display/lcd_display.h"
+#include "application.h"
 #include "button.h"
 #include "config.h"
 #include "i2c_device.h"
@@ -10,7 +10,8 @@
 #include <esp_lcd_panel_vendor.h>
 #include <driver/i2c_master.h>
 #include <driver/spi_common.h>
-#include "services/service_ws2812.h"
+#include "led/single_led.h"
+#include "ui/i18n/lang_config.h"
 #include "esp_lcd_panel_gc9301.h"
 
 #include "power_save_timer.h"
@@ -63,12 +64,12 @@ private:
         // 确保输入在有效范围内
         if (internal_volume < 0) internal_volume = 0;
         if (internal_volume > 80) internal_volume = 80;
-
+        
         // 将0-80映射到0-100
         // 公式: 显示音量 = (内部音量 / 80) * 100
         return (internal_volume * 100) / 80;
     }
-
+    
     void InitializePowerManager() {
         power_manager_ = new PowerManager(PWR_ADC_GPIO);
         power_manager_->OnChargingStatusChanged([this](bool is_charging) {
@@ -95,7 +96,7 @@ private:
                 }
                 vTaskDelay(100 / portTICK_PERIOD_MS);
             }
-
+            
             if (long_press_occurred) {
                 ESP_LOGI(TAG, "Long press wakeup");
                 long_press_occurred = false;
@@ -112,11 +113,11 @@ private:
         power_save_timer_ = new PowerSaveTimer(-1, (60*5), -1);
         // power_save_timer_ = new PowerSaveTimer(-1, 6, 10);//test
         power_save_timer_->OnEnterSleepMode([this]() {
-            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOn);
+            GetDisplay()->SetPowerSaveMode(true);
             GetBacklight()->SetBrightness(1);
         });
         power_save_timer_->OnExitSleepMode([this]() {
-            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOff);
+            GetDisplay()->SetPowerSaveMode(false);
             GetBacklight()->RestoreBrightness();
         });
         power_save_timer_->OnShutdownRequest([this]() {
@@ -184,19 +185,19 @@ private:
                 ESP_LOGI(TAG, "开机后电源键未松开,取消关机");
                 return;
             }
-
+            
             // 高电平有效防抖确认
             for (int i = 0; i < 5; i++) {
                 int level = GpioManager::GetLevel(PWR_BUTTON_GPIO);
                 ESP_LOGD(TAG, "Debounce check %d: GPIO%d level=%d", i+1, PWR_BUTTON_GPIO, level);
-
+                
                 if (level == 0) {
                     ESP_LOGW(TAG, "Power button inactive during confirmation - abort shutdown");
                     return;
                 }
                 vTaskDelay(100 / portTICK_PERIOD_MS);
             }
-
+            
             ESP_LOGI(TAG, "Confirmed power button pressed - initiating shutdown");
             power_manager_->SetPowerState(PowerState::SHUTDOWN); });
 
@@ -204,22 +205,23 @@ private:
         pwr_button_.OnClick([this]()
                             {
             // 获取当前应用实例和状态
-            auto current_state = BoardEvents::GetRuntimeState();
+            auto &app = Application::GetInstance();
+            auto current_state = app.GetDeviceState();
 
             ESP_LOGI(TAG, "当前设备状态: %d", current_state);
-
+            
             if (current_state == kDeviceStateIdle) {
                 // 如果当前是待命状态，切换到聆听状态
                 ESP_LOGI(TAG, "从待命状态切换到聆听状态");
-                BoardEvents::PostInput(BoardEvents::Input::PrimaryClick); // 切换到聆听状态
+                app.ToggleChatState(); // 切换到聆听状态
             } else if (current_state == kDeviceStateListening) {
                 // 如果当前是聆听状态，切换到待命状态
                 ESP_LOGI(TAG, "从聆听状态切换到待命状态");
-                BoardEvents::PostInput(BoardEvents::Input::PrimaryClick); // 切换到待命状态
+                app.ToggleChatState(); // 切换到待命状态
             } else if (current_state == kDeviceStateSpeaking) {
                 // 如果当前是说话状态，终止说话并切换到待命状态
                 ESP_LOGI(TAG, "从说话状态切换到待命状态");
-                BoardEvents::PostInput(BoardEvents::Input::PrimaryClick); // 终止说话
+                app.ToggleChatState(); // 终止说话
             } else {
                 // 其他状态下只唤醒设备
                 ESP_LOGI(TAG, "唤醒设备");
@@ -241,12 +243,12 @@ private:
             auto codec = GetAudioCodec();
             int current_vol = codec->output_volume(); // 获取实际当前音量
             current_vol = (current_vol + 8 > 80) ? 80 : current_vol + 8;
-
+            
             codec->SetOutputVolume(current_vol);
 
             ESP_LOGI(TAG, "Current volume: %d", current_vol);
             int display_volume = MapVolumeForDisplay(current_vol);
-            BoardEvents::PostInput(BoardEvents::Input::VolumeChanged, display_volume, true);});
+            GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(display_volume) + "%");});
 
         cmd_button.OnPressDown([this]()
                            {
@@ -256,15 +258,15 @@ private:
             auto codec = GetAudioCodec();
             int current_vol = codec->output_volume(); // 获取实际当前音量
             current_vol = (current_vol - 8 < 0) ? 0 : current_vol - 8;
-
+            
             codec->SetOutputVolume(current_vol);
 
             ESP_LOGI(TAG, "Current volume: %d", current_vol);
             if (current_vol == 0) {
-                BoardEvents::PostInput(BoardEvents::Input::VolumeMuted);
+                GetDisplay()->ShowNotification(Lang::Strings::MUTED);
             } else {
                 int display_volume = MapVolumeForDisplay(current_vol);
-                BoardEvents::PostInput(BoardEvents::Input::VolumeChanged, display_volume, true);
+                GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(display_volume) + "%");
             }});
     }
 
@@ -327,23 +329,23 @@ public:
     }
 
     virtual Led* GetLed() override {
-        static Ws2812Service led(BUILTIN_LED_GPIO);
+        static SingleLed led(BUILTIN_LED_GPIO);
         return &led;
     }
 
     virtual AudioCodec* GetAudioCodec() override {
 
         static Es8311AudioCodec audio_codec(
-            codec_i2c_bus_,
-            I2C_NUM_0,
-            AUDIO_INPUT_SAMPLE_RATE,
+            codec_i2c_bus_, 
+            I2C_NUM_0, 
+            AUDIO_INPUT_SAMPLE_RATE, 
             AUDIO_OUTPUT_SAMPLE_RATE,
-            AUDIO_I2S_GPIO_MCLK,
-            AUDIO_I2S_GPIO_BCLK,
-            AUDIO_I2S_GPIO_WS,
-            AUDIO_I2S_GPIO_DOUT,
+            AUDIO_I2S_GPIO_MCLK, 
+            AUDIO_I2S_GPIO_BCLK, 
+            AUDIO_I2S_GPIO_WS, 
+            AUDIO_I2S_GPIO_DOUT, 
             AUDIO_I2S_GPIO_DIN,
-            AUDIO_CODEC_PA_PIN,
+            AUDIO_CODEC_PA_PIN, 
             AUDIO_CODEC_ES8311_ADDR);
         return &audio_codec;
     }
@@ -351,7 +353,7 @@ public:
     virtual Display* GetDisplay() override {
         return display_;
     }
-
+    
     virtual Backlight* GetBacklight() override {
         static PwmBacklight backlight(DISPLAY_BACKLIGHT_PIN, DISPLAY_BACKLIGHT_OUTPUT_INVERT);
         return &backlight;
@@ -378,5 +380,3 @@ public:
 };
 
 DECLARE_BOARD(JiuchuanDevBoard);
-
-

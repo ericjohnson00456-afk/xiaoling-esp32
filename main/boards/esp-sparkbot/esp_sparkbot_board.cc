@@ -1,8 +1,7 @@
-#include "ui/display/display_factory.h"
-
-#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "codecs/es8311_audio_codec.h"
+#include "display/lcd_display.h"
+#include "application.h"
 #include "button.h"
 #include "config.h"
 #include "mcp_server.h"
@@ -20,7 +19,7 @@
 #define TAG "esp_sparkbot"
 
 class SparkBotEs8311AudioCodec : public Es8311AudioCodec {
-private:
+private:    
 
 public:
     SparkBotEs8311AudioCodec(void* i2c_master_handle, i2c_port_t i2c_port, int input_sample_rate, int output_sample_rate,
@@ -79,11 +78,12 @@ private:
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
-            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
-            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
+            app.ToggleChatState();
         });
     }
 
@@ -111,12 +111,12 @@ private:
         panel_config.rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB;
         panel_config.bits_per_pixel = 16;
         ESP_ERROR_CHECK(esp_lcd_new_panel_st7789(panel_io, &panel_config, &panel));
-
+        
         esp_lcd_panel_reset(panel);
         esp_lcd_panel_init(panel);
         esp_lcd_panel_invert_color(panel, true);
         esp_lcd_panel_disp_on_off(panel, true);
-        display_ = CreateSpiLcdDisplay(panel_io, panel,
+        display_ = new SpiLcdDisplay(panel_io, panel,
                                     DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
 
@@ -161,7 +161,7 @@ private:
         esp_video_init_config_t video_config = {
             .dvp = &dvp_config,
         };
-
+        
         camera_ = new Esp32Camera(video_config);
 
         Settings settings("sparkbot", false);
@@ -199,7 +199,8 @@ private:
         ESP_LOGI(TAG, "Sent command: %s", command_str);
     }
 
-    void RegisterMcpTools(McpServer& mcp_server) override {
+    void InitializeTools() {
+        auto& mcp_server = McpServer::GetInstance();
         // 定义设备的属性
         mcp_server.AddTool("self.chassis.get_light_mode", "获取灯光效果编号", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
             if (light_mode_ < 2) {
@@ -228,7 +229,7 @@ private:
             SendUartMessage("x1.0 y0.0");
             return true;
         });
-
+        
         mcp_server.AddTool("self.chassis.dance", "跳舞", PropertyList(), [this](const PropertyList& properties) -> ReturnValue {
             SendUartMessage("d1");
             light_mode_ = LIGHT_MODE_MAX;
@@ -255,12 +256,12 @@ private:
             Settings settings("sparkbot", true);
             // 考虑到部分复刻使用了不可动摄像头的设计，默认启用翻转
             bool flipped = !static_cast<bool>(settings.GetInt("camera-flipped", 1));
-
+            
             camera_->SetHMirror(flipped);
             camera_->SetVFlip(flipped);
-
+            
             settings.SetInt("camera-flipped", flipped ? 1 : 0);
-
+            
             return true;
         });
     }
@@ -273,6 +274,7 @@ public:
         InitializeButtons();
         InitializeCamera();
         InitializeEchoUart();
+        InitializeTools();
         GetBacklight()->RestoreBrightness();
     }
 
@@ -298,4 +300,3 @@ public:
 };
 
 DECLARE_BOARD(EspSparkBot);
-

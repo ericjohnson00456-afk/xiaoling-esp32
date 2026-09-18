@@ -1,12 +1,12 @@
-#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "codecs/no_audio_codec.h"
 #include "system_reset.h"
+#include "application.h"
 #include "button.h"
 #include "config.h"
 #include "esp32_camera.h"
 
-#include "services/service_led.h"
+#include "led/gpio_led.h"
 #include <esp_log.h>
 #include <driver/i2c_master.h>
 #include <driver/gpio.h>
@@ -20,11 +20,12 @@ class DfrobotEsp32S3AiCam : public WifiBoard {
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
-            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
-            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
+            app.ToggleChatState();
         });
     }
 
@@ -83,7 +84,7 @@ class DfrobotEsp32S3AiCam : public WifiBoard {
     // Wakenet model only
 
     virtual Led* GetLed() override {
-        static LedService led(BUILTIN_LED_GPIO, 0);
+        static GpioLed led(BUILTIN_LED_GPIO, 0);
         return &led;
     }
 

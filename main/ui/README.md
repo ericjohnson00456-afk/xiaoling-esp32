@@ -7,21 +7,23 @@ Application / Board / Cloud
             |
           events
             |
-          models
+       presenters
             |
-       screens + presenters
+          views
             |
         display backend
             |
         LVGL / esp_lcd
+
+  resources ---------> views
 ```
 
 ## 目录职责
 
 - `core/`：UI 初始化、任务调度、页面注册和导航栈。
 - `events/`：跨任务 UI 事件定义和事件入口。事件处理器不直接持有页面控件。
-- `models/`：线程安全的 UI 状态和资源模型，不创建 LVGL 控件。
-- `screens/`：页面生命周期、Presenter 和 View。
+- `resources/`：可复用的资源仓库（当前为表情动画资源），不保存页面状态，也不创建 LVGL 控件。
+- `screens/`：每个页面由 Presenter 保存外部推送的状态，View 创建并直接绘制 LVGL 控件。
 - `display/`：显示后端。它负责 panel 句柄、`lvgl_port`、flush、缓冲区、锁和显示能力。
 - `themes/`：主题、字体和主题资源选择。
 - `tools/`：图片、字体和动画等 UI 基础工具。

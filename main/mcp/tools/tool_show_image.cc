@@ -2,10 +2,10 @@
 #include <string>
 
 #include "board.h"
-#include "display.h"
+#include "display/display.h"
 #include "image_fetcher.h"
 #include "mcp_server.h"
-#include "ui/models/home/image_model.h"
+#include "ui/screens/home/home_presenter.h"
 #include <esp_log.h>
 
 namespace {
@@ -26,7 +26,7 @@ MCP_REGISTER_TOOL(RegisterShowImage, McpToolGroup::kCommon, 70) {
                      ESP_LOGE(TAG, "Failed to fetch image: %s", url.c_str());
                      throw std::runtime_error("图片下载失败");
                    }
-                   ImageModel::GetInstance().SetImage(std::move(image));
+                   HomePresenter::GetInstance().SetImage(std::move(image));
                    return std::string("已完成操作");
                  });
 #endif

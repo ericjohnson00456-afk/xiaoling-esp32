@@ -14,6 +14,15 @@ esp_err_t PostInput(Input input, int32_t value, bool percent) {
     return esp_event_post(BOARD_EVENT, kInput, &event, sizeof(event), portMAX_DELAY);
 }
 
+esp_err_t PostButton(ButtonId button, ButtonGesture gesture, uint8_t click_count) {
+    const ButtonEvent event{
+        .button = button,
+        .gesture = gesture,
+        .click_count = click_count,
+    };
+    return esp_event_post(BOARD_EVENT, kButton, &event, sizeof(event), portMAX_DELAY);
+}
+
 esp_err_t PostWifiConfigHint(std::string_view ssid, std::string_view url) {
     WifiConfigHintEvent event{.ssid = {}, .url = {}};
     const size_t ssid_length = std::min(ssid.size(), sizeof(event.ssid) - 1);

@@ -1,7 +1,8 @@
-#include "boards/common/board_events.h"
 #include "cst816x.h"
 #include "board.h"
-#include "display.h"
+#include "application.h"
+#include "display/display.h"
+#include "ui/i18n/lang_config.h"
 #include "wifi_board.h"
 #include "power_save_timer.h"
 #include "codecs/es8311_audio_codec.h"
@@ -33,7 +34,7 @@ Cst816x::~Cst816x() {
 
 int64_t Cst816x::getCurrentTimeUs() {
     struct timeval tv;
-    gettimeofday(&tv, nullptr);
+    gettimeofday(&tv, nullptr);  
     return (int64_t)tv.tv_sec * 1000000L + tv.tv_usec;
 }
 
@@ -58,15 +59,15 @@ void Cst816x::resetTouchCounters() {
 }
 
 void Cst816x::touchpad_daemon(void* arg) {
-    Cst816x* cst816x = static_cast<Cst816x*>(arg);
-    auto& board = Board::GetInstance();
-    auto codec = board.GetAudioCodec();
-    auto display = board.GetDisplay();
+    Cst816x* cst816x = static_cast<Cst816x*>(arg);  
+    auto& board = Board::GetInstance();             
+    auto codec = board.GetAudioCodec();             
+    auto display = board.GetDisplay();             
 
     while (1) {
         cst816x->UpdateTouchPoint();
-        auto& tp = cst816x->GetTouchPoint();
-        int64_t current_time = cst816x->getCurrentTimeUs();
+        auto& tp = cst816x->GetTouchPoint(); 
+        int64_t current_time = cst816x->getCurrentTimeUs(); 
 
         const auto& config = cst816x->getThresholdConfig(tp.x, tp.y);
         if (tp.num > 0) {
@@ -77,16 +78,16 @@ void Cst816x::touchpad_daemon(void* arg) {
                 config.long_press_thresh_us / 1000);
         }
 
-        TouchEvent current_event;
+        TouchEvent current_event;  
         bool event_detected = false;
 
         if (tp.num > 0 && !cst816x->is_touching_) {
             cst816x->is_touching_ = true;
-            cst816x->touch_start_time_ = current_time;
+            cst816x->touch_start_time_ = current_time;  
             cst816x->long_press_started_ = false;
         }
         else if (tp.num > 0 && cst816x->is_touching_) {
-            if (!cst816x->long_press_started_ &&
+            if (!cst816x->long_press_started_ && 
                 (current_time - cst816x->touch_start_time_ >= config.long_press_thresh_us)) {
                 current_event = {TouchEventType::LONG_PRESS_START, tp.x, tp.y};
                 event_detected = true;
@@ -106,7 +107,7 @@ void Cst816x::touchpad_daemon(void* arg) {
             }
         }
         else if (tp.num == 0 && !cst816x->is_touching_) {
-            if (cst816x->click_count_ > 0 &&
+            if (cst816x->click_count_ > 0 && 
                 (current_time - cst816x->last_release_time_ >= config.double_click_window_us)) {
                 if (cst816x->click_count_ == 2) {
                     current_event = {TouchEventType::DOUBLE_CLICK, tp.x, tp.y};
@@ -116,7 +117,7 @@ void Cst816x::touchpad_daemon(void* arg) {
                     current_event = {TouchEventType::SINGLE_CLICK, tp.x, tp.y};
                     event_detected = true;
                 }
-                cst816x->click_count_ = 0;
+                cst816x->click_count_ = 0; 
             }
         }
 
@@ -126,12 +127,13 @@ void Cst816x::touchpad_daemon(void* arg) {
                     case TouchEventType::SINGLE_CLICK:
                         if (current_event.x == 40) {
                             board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
-                            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
+                            auto& app = Application::GetInstance();
+                            if (app.GetDeviceState() == kDeviceStateStarting) {
                                 auto& wifi_board = static_cast<WifiBoard&>(Board::GetInstance());
                                 wifi_board.EnterWifiConfigMode();
                                 return;
                             }
-                            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
+                            app.ToggleChatState();  
                         } else if (current_event.x == 20) {     // 20,600 单击：音量+
                             int current_vol = codec->output_volume();
                             int new_vol = current_vol + 10;
@@ -139,7 +141,7 @@ void Cst816x::touchpad_daemon(void* arg) {
                             ESP_LOGI(TAG, "current_vol, new_vol(%d, %d)", current_vol, new_vol);
                             codec->EnableOutput(true);
                             codec->SetOutputVolume(new_vol);
-                            BoardEvents::PostInput(BoardEvents::Input::VolumeChanged, new_vol);
+                            display->ShowNotification(Lang::Strings::VOLUME + std::to_string(new_vol));
                         } else if (current_event.x == 60) {     // 60,600 单击：音量-
                             int current_vol = codec->output_volume();
                             int new_vol = current_vol - 10;
@@ -147,7 +149,7 @@ void Cst816x::touchpad_daemon(void* arg) {
                             ESP_LOGI(TAG, "current_vol, new_vol(%d, %d)", current_vol, new_vol);
                             codec->EnableOutput(true);
                             codec->SetOutputVolume(new_vol);
-                            BoardEvents::PostInput(BoardEvents::Input::VolumeChanged, new_vol);
+                            display->ShowNotification(Lang::Strings::VOLUME + std::to_string(new_vol));
                         }
                         break;
 
@@ -163,7 +165,7 @@ void Cst816x::touchpad_daemon(void* arg) {
                             cst816x->last_volume_adjust_time_ = current_time;
                         } else if (current_event.x == 60) {
                             cst816x->is_volume_long_pressing_ = true;
-                            cst816x->volume_long_press_dir_ = -1;
+                            cst816x->volume_long_press_dir_ = -1; 
                             cst816x->last_volume_adjust_time_ = current_time;
                         }
                         break;
@@ -185,14 +187,14 @@ void Cst816x::touchpad_daemon(void* arg) {
             if (now - cst816x->last_volume_adjust_time_ >= cst816x->VOL_ADJ_INTERVAL_US) {
                 int current_vol = codec->output_volume();
                 int new_vol = current_vol + (cst816x->volume_long_press_dir_ * cst816x->VOL_ADJ_STEP);
-
+                
                 new_vol = std::max(ES8311_VOL_MIN, std::min(ES8311_VOL_MAX, new_vol));
-
+                
                 if (new_vol != current_vol) {
                     codec->EnableOutput(true);
                     codec->SetOutputVolume(new_vol);
-                    BoardEvents::PostInput(BoardEvents::Input::VolumeChanged, new_vol);
-                    cst816x->last_volume_adjust_time_ = now;
+                    display->ShowNotification(Lang::Strings::VOLUME + std::to_string(new_vol));
+                    cst816x->last_volume_adjust_time_ = now; 
                 } else {
                     cst816x->is_volume_long_pressing_ = false;
                     cst816x->volume_long_press_dir_ = 0;

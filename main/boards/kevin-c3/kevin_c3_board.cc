@@ -1,9 +1,9 @@
-#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "codecs/es8311_audio_codec.h"
+#include "application.h"
 #include "button.h"
 #include "config.h"
-#include "services/service_circular_strip.h"
+#include "led/circular_strip.h"
 #include "led_strip_control.h"
 
 #include <esp_log.h>
@@ -45,21 +45,22 @@ private:
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
-            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
         });
         boot_button_.OnPressDown([this]() {
-            BoardEvents::PostInput(BoardEvents::Input::TouchDown);
+            Application::GetInstance().StartListening();
         });
         boot_button_.OnPressUp([this]() {
-            BoardEvents::PostInput(BoardEvents::Input::TouchUp);
+            Application::GetInstance().StopListening();
         });
     }
 
     // 物联网初始化，添加对 AI 可见设备
-    void RegisterMcpTools(McpServer& mcp_server) override {
+    void InitializeTools() {
         led_strip_ = new CircularStrip(BUILTIN_LED_GPIO, 8);
         new LedStripControl(led_strip_);
     }
@@ -68,7 +69,8 @@ public:
     KevinBoxBoard() : boot_button_(BOOT_BUTTON_GPIO) {
         InitializeCodecI2c();
         InitializeButtons();
-
+        InitializeTools();
+        
         // 把 ESP32C3 的 VDD SPI 引脚作为普通 GPIO 口使用
         esp_efuse_write_field_bit(ESP_EFUSE_VDD_SPI_AS_GPIO);
     }

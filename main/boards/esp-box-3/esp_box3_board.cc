@@ -1,11 +1,11 @@
-#include "ui/display/display_factory.h"
+#include "display/lcd_display.h"
 
-#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "codecs/box_audio_codec.h"
 #include "esp_lcd_ili9341.h"
 #include "button.h"
 #include "config.h"
+#include "application.h"
 
 #include <esp_log.h>
 #include <esp_lcd_panel_vendor.h>
@@ -39,7 +39,7 @@ class EspBox3Board : public WifiBoard {
 private:
     i2c_master_bus_handle_t i2c_bus_;
     Button boot_button_;
-    Display* display_;
+    LcdDisplay* display_;
 
     void InitializeI2c() {
         // Initialize I2C peripheral
@@ -70,7 +70,23 @@ private:
     }
 
     void InitializeButtons() {
-        ESP_ERROR_CHECK(boot_button_.EnableEventPublishing());
+        boot_button_.OnClick([this]() {
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateStarting) {
+                EnterWifiConfigMode();
+                return;
+            }
+            app.ToggleChatState();
+        });
+
+#if CONFIG_USE_DEVICE_AEC
+        boot_button_.OnDoubleClick([]() {
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateIdle) {
+                app.SetAecMode(app.GetAecMode() == kAecOff ? kAecOnDeviceSide : kAecOff);
+            }
+        });
+#endif
     }
 
     void InitializeIli9341Display() {
@@ -111,18 +127,11 @@ private:
         esp_lcd_panel_mirror(panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
         esp_lcd_panel_disp_on_off(panel, true);
 
-        display_ = CreateDisplay(DisplayHardwareDescriptor{
-            .type = DisplayHardwareType::Spi,
-            .panel_io = panel_io,
-            .panel = panel,
-            .width = DISPLAY_WIDTH,
-            .height = DISPLAY_HEIGHT,
-            .offset_x = DISPLAY_OFFSET_X,
-            .offset_y = DISPLAY_OFFSET_Y,
-            .mirror_x = DISPLAY_MIRROR_X,
-            .mirror_y = DISPLAY_MIRROR_Y,
-            .swap_xy = DISPLAY_SWAP_XY,
-        });
+        display_ = new SpiLcdDisplay(panel_io, panel,
+                                     DISPLAY_WIDTH, DISPLAY_HEIGHT,
+                                     DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y,
+                                     DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y,
+                                     DISPLAY_SWAP_XY);
     }
 
 public:
@@ -163,5 +172,3 @@ public:
 };
 
 DECLARE_BOARD(EspBox3Board);
-
-

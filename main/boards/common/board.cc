@@ -1,4 +1,6 @@
 #include "board.h"
+#include "display/display.h"
+#include "display/oled_display.h"
 #include "system/system_info.h"
 #include "settings.h"
 #include "ui/i18n/lang_config.h"
@@ -56,7 +58,8 @@ bool Board::GetTemperature(float& esp32temp){
 }
 
 Display* Board::GetDisplay() {
-    return display_;
+    static NoDisplay display;
+    return &display;
 }
 
 Camera* Board::GetCamera() {
@@ -162,18 +165,14 @@ std::string Board::GetSystemInfoJson() {
     json += R"("label":")" + std::string(ota_partition->label) + R"(")";
     json += R"(},)";
 
-    // Append display info from the hardware descriptor.  The board layer
-    // does not include or inspect the UI Display class.
-    const auto display_hardware = GetDisplayHardware();
-    const int display_width = display_width_ > 0 ? display_width_ : display_hardware.width;
-    const int display_height = display_height_ > 0 ? display_height_ : display_hardware.height;
-    const bool display_monochrome = display_width_ > 0 ? display_monochrome_ :
-        display_hardware.type == DisplayHardwareType::Monochrome;
-    if (display_width > 0 && display_height > 0) {
+    // Board implementations own their concrete display object. Report its
+    // geometry without asking the UI layer to create or configure it.
+    auto* display = GetDisplay();
+    if (display != nullptr && display->width() > 0 && display->height() > 0) {
         json += R"("display":{)";
-        json += R"("monochrome":)" + std::string(display_monochrome ? "true" : "false") + R"(,)";
-        json += R"("width":)" + std::to_string(display_width) + R"(,)";
-        json += R"("height":)" + std::to_string(display_height) + R"(,)";
+        json += R"("monochrome":)" + std::string(dynamic_cast<OledDisplay*>(display) != nullptr ? "true" : "false") + R"(,)";
+        json += R"("width":)" + std::to_string(display->width()) + R"(,)";
+        json += R"("height":)" + std::to_string(display->height()) + R"(,)";
         json.pop_back(); // Remove the last comma
         json += R"(},)";
     } else {

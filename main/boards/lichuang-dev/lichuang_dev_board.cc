@@ -1,8 +1,8 @@
-#include "ui/display/display_factory.h"
-
-#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "codecs/box_audio_codec.h"
+#include "display/lcd_display.h"
+#include "display/emote_display.h"
+#include "application.h"
 #include "button.h"
 #include "config.h"
 #include "i2c_device.h"
@@ -38,18 +38,18 @@ private:
     Pca9557* pca9557_;
 
 public:
-    CustomAudioCodec(i2c_master_bus_handle_t i2c_bus, Pca9557* pca9557)
-        : BoxAudioCodec(i2c_bus,
-                       AUDIO_INPUT_SAMPLE_RATE,
+    CustomAudioCodec(i2c_master_bus_handle_t i2c_bus, Pca9557* pca9557) 
+        : BoxAudioCodec(i2c_bus, 
+                       AUDIO_INPUT_SAMPLE_RATE, 
                        AUDIO_OUTPUT_SAMPLE_RATE,
-                       AUDIO_I2S_GPIO_MCLK,
-                       AUDIO_I2S_GPIO_BCLK,
-                       AUDIO_I2S_GPIO_WS,
-                       AUDIO_I2S_GPIO_DOUT,
+                       AUDIO_I2S_GPIO_MCLK, 
+                       AUDIO_I2S_GPIO_BCLK, 
+                       AUDIO_I2S_GPIO_WS, 
+                       AUDIO_I2S_GPIO_DOUT, 
                        AUDIO_I2S_GPIO_DIN,
-                       GPIO_NUM_NC,
-                       AUDIO_CODEC_ES8311_ADDR,
-                       AUDIO_CODEC_ES7210_ADDR,
+                       GPIO_NUM_NC, 
+                       AUDIO_CODEC_ES8311_ADDR, 
+                       AUDIO_CODEC_ES7210_ADDR, 
                        AUDIO_INPUT_REFERENCE),
           pca9557_(pca9557) {
     }
@@ -106,18 +106,20 @@ private:
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
+            auto& app = Application::GetInstance();
             // During startup (before connected), pressing BOOT button enters Wi-Fi config mode without reboot
-            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
+            if (app.GetDeviceState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
-            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
+            app.ToggleChatState();
         });
 
 #if CONFIG_USE_DEVICE_AEC
         boot_button_.OnDoubleClick([this]() {
-            if (BoardEvents::GetRuntimeState() == kDeviceStateIdle) {
-                BoardEvents::PostInput(BoardEvents::Input::AecToggle);
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateIdle) {
+                app.SetAecMode(app.GetAecMode() == kAecOff ? kAecOnDeviceSide : kAecOff);
             }
         });
 #endif
@@ -145,7 +147,7 @@ private:
         panel_config.rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB;
         panel_config.bits_per_pixel = 16;
         ESP_ERROR_CHECK(esp_lcd_new_panel_st7789(panel_io, &panel_config, &panel));
-
+        
         esp_lcd_panel_reset(panel);
         pca9557_->SetOutputState(0, 0);
 
@@ -155,8 +157,12 @@ private:
         esp_lcd_panel_mirror(panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
         esp_lcd_panel_disp_on_off(panel, true);
 
-display_ = CreateSpiLcdDisplay(panel_io, panel,
+#if CONFIG_USE_EMOTE_MESSAGE_STYLE
+        display_ = new emote::EmoteDisplay(panel, panel_io, DISPLAY_WIDTH, DISPLAY_HEIGHT);
+#else
+        display_ = new SpiLcdDisplay(panel_io, panel,
             DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
+#endif
     }
 
     void InitializeTouch()
@@ -166,7 +172,7 @@ display_ = CreateSpiLcdDisplay(panel_io, panel,
             .x_max = DISPLAY_HEIGHT,
             .y_max = DISPLAY_WIDTH,
             .rst_gpio_num = GPIO_NUM_NC, // Shared with LCD reset
-            .int_gpio_num = GPIO_NUM_NC,
+            .int_gpio_num = GPIO_NUM_NC, 
             .levels = {
                 .reset = 0,
                 .interrupt = 0,
@@ -187,7 +193,7 @@ display_ = CreateSpiLcdDisplay(panel_io, panel,
 
         /* Add touch input (for selected screen) */
         const lvgl_port_touch_cfg_t touch_cfg = {
-            .disp = lv_display_get_default(),
+            .disp = lv_display_get_default(), 
             .handle = tp,
         };
 
@@ -241,7 +247,8 @@ display_ = CreateSpiLcdDisplay(panel_io, panel,
         camera_ = new Esp32Camera(video_config);
     }
 
-    void RegisterMcpTools(McpServer& mcp_server) override {
+    void InitializeTools() {
+        auto &mcp_server = McpServer::GetInstance();
         mcp_server.AddTool("self.system.reconfigure_wifi",
             "End this conversation and enter WiFi configuration mode.\n"
             "**CAUTION** You must ask the user to confirm this action.",
@@ -259,13 +266,14 @@ public:
         InitializeTouch();
         InitializeButtons();
         InitializeCamera();
+        InitializeTools();
 
         GetBacklight()->RestoreBrightness();
     }
 
     virtual AudioCodec* GetAudioCodec() override {
         static CustomAudioCodec audio_codec(
-            i2c_bus_,
+            i2c_bus_, 
             pca9557_);
         return &audio_codec;
     }
@@ -273,7 +281,7 @@ public:
     virtual Display* GetDisplay() override {
         return display_;
     }
-
+    
     virtual Backlight* GetBacklight() override {
         static PwmBacklight backlight(DISPLAY_BACKLIGHT_PIN, DISPLAY_BACKLIGHT_OUTPUT_INVERT);
         return &backlight;
@@ -285,5 +293,3 @@ public:
 };
 
 DECLARE_BOARD(LichuangDevBoard);
-
-

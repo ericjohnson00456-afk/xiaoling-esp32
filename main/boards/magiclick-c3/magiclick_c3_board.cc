@@ -1,9 +1,9 @@
-#include "boards/common/board_events.h"
 #include "wifi_board.h"
-#include "ui/display/panels/lcd_display.h"
+#include "display/lcd_display.h"
 #include "codecs/es8311_audio_codec.h"
+#include "application.h"
 #include "button.h"
-#include "services/service_ws2812.h"
+#include "led/single_led.h"
 #include "config.h"
 #include "power_save_timer.h"
 
@@ -56,11 +56,11 @@ private:
     void InitializePowerSaveTimer() {
         power_save_timer_ = new PowerSaveTimer(160);
         power_save_timer_->OnEnterSleepMode([this]() {
-            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOn);
+            GetDisplay()->SetPowerSaveMode(true);
             GetBacklight()->SetBrightness(10);
         });
         power_save_timer_->OnExitSleepMode([this]() {
-            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOff);
+            GetDisplay()->SetPowerSaveMode(false);
             GetBacklight()->RestoreBrightness();
         });
         power_save_timer_->SetEnabled(true);
@@ -93,17 +93,18 @@ private:
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
-            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
         });
         boot_button_.OnPressDown([this]() {
             power_save_timer_->WakeUp();
-            BoardEvents::PostInput(BoardEvents::Input::TouchDown);
+            Application::GetInstance().StartListening();
         });
         boot_button_.OnPressUp([this]() {
-            BoardEvents::PostInput(BoardEvents::Input::TouchUp);
+            Application::GetInstance().StopListening();
         });
     }
 
@@ -146,7 +147,7 @@ private:
         esp_lcd_panel_invert_color(panel, false);
         esp_lcd_panel_swap_xy(panel, DISPLAY_SWAP_XY);
         esp_lcd_panel_mirror(panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
-        esp_lcd_panel_disp_on_off(panel, true);
+        esp_lcd_panel_disp_on_off(panel, true); 
         display_ = new NV3023Display(panel_io, panel,
                                     DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
@@ -159,13 +160,13 @@ public:
         InitializeSpi();
         InitializeNv3023Display();
         GetBacklight()->RestoreBrightness();
-
+        
         // 把 ESP32C3 的 VDD SPI 引脚作为普通 GPIO 口使用
         esp_efuse_write_field_bit(ESP_EFUSE_VDD_SPI_AS_GPIO);
     }
 
     virtual Led* GetLed() override {
-        static Ws2812Service led(BUILTIN_LED_GPIO);
+        static SingleLed led(BUILTIN_LED_GPIO);
         return &led;
     }
 
@@ -187,5 +188,3 @@ public:
 };
 
 DECLARE_BOARD(magiclick_c3);
-
-

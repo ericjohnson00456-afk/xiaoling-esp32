@@ -1,8 +1,7 @@
-#include "ui/display/display_factory.h"
-
-#include "boards/common/board_events.h"
 #include "wifi_board.h"
 #include "codecs/es8311_audio_codec.h"
+#include "display/lcd_display.h"
+#include "application.h"
 #include "button.h"
 #include "config.h"
 #include "i2c_device.h"
@@ -16,7 +15,7 @@
 
 #include "power_save_timer.h"
 #include "power_manager.h"
-// #include <esp_sleep.h>
+// #include <esp_sleep.h> 
 
 #define TAG "SURFERC3114TFT"
 
@@ -24,7 +23,7 @@ class SurferC3114TFT : public WifiBoard {
 private:
     i2c_master_bus_handle_t codec_i2c_bus_;
     Button boot_button_;
-    Display* display_;
+    LcdDisplay* display_;
     PowerSaveTimer* power_save_timer_;
     PowerManager* power_manager_;
     esp_lcd_panel_io_handle_t panel_io_ = nullptr;
@@ -72,22 +71,22 @@ private:
         power_save_timer_ = new PowerSaveTimer(-1, 60, -1);
         power_save_timer_->OnEnterSleepMode([this]() {
             ESP_LOGI(TAG, "Enabling modem-sleep mode");
-            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOn);
-            GetBacklight()->SetBrightness(1);
-            esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+            GetDisplay()->SetPowerSaveMode(true);
+            GetBacklight()->SetBrightness(1);            
+            esp_wifi_set_ps(WIFI_PS_MIN_MODEM); 
         });
         power_save_timer_->OnExitSleepMode([this]() {
-            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOff);
-            GetBacklight()->RestoreBrightness();
+            GetDisplay()->SetPowerSaveMode(false);
+            GetBacklight()->RestoreBrightness();            
             esp_wifi_set_ps(WIFI_PS_NONE);  // 关闭Wi-Fi省电，恢复正常
             // esp_lcd_panel_disp_on_off(panel_, true); // 重新打开显示
         });
         power_save_timer_->OnShutdownRequest([this]() {
-            ESP_LOGI(TAG, "Shutting down display");
+            ESP_LOGI(TAG, "Shutting down display");            
             GetBacklight()->SetBrightness(1);
             // esp_lcd_panel_disp_on_off(panel_, false);   //关闭显示
             // power_save_timer_->SetEnabled(false);   // 禁用定时器，防止重复
-
+            
         });
         power_save_timer_->SetEnabled(true);
     }
@@ -105,16 +104,17 @@ private:
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
-            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
-            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
+            app.ToggleChatState();
         });
     }
 
     void InitializeSt7789Display() {
-
+        
         // 液晶屏控制IO初始化
         ESP_LOGD(TAG, "Install panel IO");
         esp_lcd_panel_io_spi_config_t io_config = {};
@@ -134,27 +134,27 @@ private:
         panel_config.rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB;
         panel_config.bits_per_pixel = 16;
         ESP_ERROR_CHECK(esp_lcd_new_panel_st7789(panel_io_, &panel_config, &panel_));
-
+        
         esp_lcd_panel_reset(panel_);
 
         esp_lcd_panel_init(panel_);
         esp_lcd_panel_invert_color(panel_, true);
         esp_lcd_panel_swap_xy(panel_, DISPLAY_SWAP_XY);
         esp_lcd_panel_mirror(panel_, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
-        display_ = CreateSpiLcdDisplay(panel_io_, panel_,
+        display_ = new SpiLcdDisplay(panel_io_, panel_,
                                     DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
 
 public:
     SurferC3114TFT() : boot_button_(BOOT_BUTTON_GPIO) {
         InitializePowerManager();
-        InitializePowerSaveTimer();
+        InitializePowerSaveTimer(); 
 
         InitializeI2c();
         InitializeSpi();
         InitializeSt7789Display();
         InitializeButtons();
-
+        
         GetBacklight()->RestoreBrightness();
 
         // 把 ESP32C3 的 VDD SPI 引脚作为普通 GPIO 口使用
@@ -163,16 +163,16 @@ public:
 
     virtual AudioCodec* GetAudioCodec() override {
         static Es8311AudioCodec audio_codec(
-            codec_i2c_bus_,
-            I2C_NUM_0,
-            AUDIO_INPUT_SAMPLE_RATE,
+            codec_i2c_bus_, 
+            I2C_NUM_0, 
+            AUDIO_INPUT_SAMPLE_RATE, 
             AUDIO_OUTPUT_SAMPLE_RATE,
-            AUDIO_I2S_GPIO_MCLK,
-            AUDIO_I2S_GPIO_BCLK,
-            AUDIO_I2S_GPIO_WS,
-            AUDIO_I2S_GPIO_DOUT,
+            AUDIO_I2S_GPIO_MCLK, 
+            AUDIO_I2S_GPIO_BCLK, 
+            AUDIO_I2S_GPIO_WS, 
+            AUDIO_I2S_GPIO_DOUT, 
             AUDIO_I2S_GPIO_DIN,
-            AUDIO_CODEC_PA_PIN,
+            AUDIO_CODEC_PA_PIN, 
             AUDIO_CODEC_ES8311_ADDR);
         return &audio_codec;
     }
@@ -180,7 +180,7 @@ public:
     virtual Display* GetDisplay() override {
         return display_;
     }
-
+    
     virtual Backlight* GetBacklight() override {
         static PwmBacklight backlight(DISPLAY_BACKLIGHT_PIN, DISPLAY_BACKLIGHT_OUTPUT_INVERT);
         return &backlight;
@@ -208,5 +208,3 @@ public:
 };
 
 DECLARE_BOARD(SurferC3114TFT);
-
-

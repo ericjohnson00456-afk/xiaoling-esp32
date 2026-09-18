@@ -5,7 +5,7 @@
 #include "image_fetcher.h"
 #include "mcp_server.h"
 #include "ui/events/ui_events.h"
-#include "ui/models/qrcode/qrcode_model.h"
+#include "ui/screens/qrcode/qrcode_presenter.h"
 #include <esp_log.h>
 
 namespace {
@@ -30,7 +30,7 @@ MCP_REGISTER_TOOL(RegisterShowQrcode, McpToolGroup::kCommon, 60) {
         auto message = properties["message"].value<std::string>();
         const auto err_code = properties["err_code"].value<std::string>();
         if (!err_code.empty()) message += "\n" + err_code;
-        QrCodeModel::GetInstance().SetCustomQrCode(std::move(image), std::move(message));
+        QrCodePresenter::GetInstance().SetCustomQrCode(std::move(image), std::move(message));
         const auto err = UiEvents::PostQrCodeRequested();
         if (err != ESP_OK) {
           ESP_LOGE(TAG, "Failed to request QR code page: %s", esp_err_to_name(err));

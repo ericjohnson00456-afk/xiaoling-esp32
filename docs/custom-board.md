@@ -450,4 +450,4 @@ python scripts/release.py my-custom-board
 
 - ESP-IDF 文档: https://docs.espressif.com/projects/esp-idf/
 - LVGL 文档: https://docs.lvgl.io/
-- ESP-SR 文档: https://github.com/espressif/esp-sr 
+- ESP-SR 文档: https://github.com/espressif/esp-sr

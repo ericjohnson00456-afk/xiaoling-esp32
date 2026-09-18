@@ -1,7 +1,7 @@
 #ifndef LED_STRIP_CONTROL_H
 #define LED_STRIP_CONTROL_H
 
-#include "services/service_circular_strip.h"
+#include "led/circular_strip.h"
 
 class LedStripControl {
 private:

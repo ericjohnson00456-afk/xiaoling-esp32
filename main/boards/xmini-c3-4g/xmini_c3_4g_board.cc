@@ -1,10 +1,10 @@
-#include "ui/display/display_factory.h"
-
-#include "boards/common/board_events.h"
 #include "ml307_board.h"
 #include "codecs/es8311_audio_codec.h"
+#include "display/oled_display.h"
+#include "application.h"
 #include "button.h"
-#include "services/service_ws2812.h"
+#include "led/single_led.h"
+#include "mcp_server.h"
 #include "settings.h"
 #include "config.h"
 #include "sleep_timer.h"
@@ -47,7 +47,7 @@ private:
         sleep_timer_->OnEnterLightSleepMode([this]() {
             ESP_LOGI(TAG, "Enabling sleep mode");
             // Show the standby screen
-            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOn);
+            GetDisplay()->SetPowerSaveMode(true);
             // Enable sleep mode, and sleep in 1 second after DTR is set to high
             modem_->SetSleepMode(true, 1);
             // Set the DTR pin to high to make the modem enter sleep mode
@@ -57,7 +57,7 @@ private:
             // Set the DTR pin to low to make the modem wake up
             modem_->GetAtUart()->SetDtrPin(false);
             // Hide the standby screen
-            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOff);
+            GetDisplay()->SetPowerSaveMode(false);
         });
         sleep_timer_->SetEnabled(true);
     }
@@ -122,7 +122,7 @@ private:
         ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_));
         if (esp_lcd_panel_init(panel_) != ESP_OK) {
             ESP_LOGE(TAG, "Failed to initialize display");
-            display_ = CreateNoDisplay();
+            display_ = new NoDisplay();
             return;
         }
 
@@ -130,28 +130,29 @@ private:
         ESP_LOGI(TAG, "Turning display on");
         ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_, true));
 
-        display_ = CreateOledDisplay(panel_io_, panel_, DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
+        display_ = new OledDisplay(panel_io_, panel_, DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
     }
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
+            auto& app = Application::GetInstance();
             if (!press_to_talk_tool_ || !press_to_talk_tool_->IsPressToTalkEnabled()) {
-                BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
+                app.ToggleChatState();
             }
         });
         boot_button_.OnPressDown([this]() {
             if (press_to_talk_tool_ && press_to_talk_tool_->IsPressToTalkEnabled()) {
-                BoardEvents::PostInput(BoardEvents::Input::TouchDown);
+                Application::GetInstance().StartListening();
             }
         });
         boot_button_.OnPressUp([this]() {
             if (press_to_talk_tool_ && press_to_talk_tool_->IsPressToTalkEnabled()) {
-                BoardEvents::PostInput(BoardEvents::Input::TouchUp);
+                Application::GetInstance().StopListening();
             }
         });
     }
 
-    void RegisterMcpTools(McpServer& mcp_server) override {
+    void InitializeTools() {
         press_to_talk_tool_ = new PressToTalkMcpTool();
         press_to_talk_tool_->Initialize();
     }
@@ -165,10 +166,11 @@ public:
         InitializeCodecI2c();
         InitializeSsd1306Display();
         InitializeButtons();
+        InitializeTools();
     }
 
     virtual Led* GetLed() override {
-        static Ws2812Service led(BUILTIN_LED_GPIO);
+        static SingleLed led(BUILTIN_LED_GPIO);
         return &led;
     }
 
@@ -199,5 +201,3 @@ public:
 };
 
 DECLARE_BOARD(XminiC3Board);
-
-

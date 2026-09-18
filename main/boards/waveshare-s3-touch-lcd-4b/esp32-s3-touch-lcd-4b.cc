@@ -1,12 +1,11 @@
-#include "ui/display/display_factory.h"
-
-#include "boards/common/board_events.h"
 #include "wifi_board.h"
+#include "display/lcd_display.h"
 #include "esp_lcd_st7701.h"
 
 #include "codecs/box_audio_codec.h"
+#include "application.h"
 #include "button.h"
-#include "services/service_ws2812.h"
+#include "led/single_led.h"
 #include "mcp_server.h"
 #include "config.h"
 #include "power_save_timer.h"
@@ -108,7 +107,7 @@ private:
     i2c_master_bus_handle_t i2c_bus_;
     Pmic* pmic_ = nullptr;
     Button boot_button_;
-    Display* display_;
+    LcdDisplay* display_;
     esp_io_expander_handle_t io_expander = NULL;
     PowerSaveTimer* power_save_timer_;
 
@@ -119,12 +118,12 @@ private:
     void InitializePowerSaveTimer() {
         power_save_timer_ = new PowerSaveTimer(-1, 60, 300);
         power_save_timer_->OnEnterSleepMode([this]() {
-            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOn);
+            GetDisplay()->SetPowerSaveMode(true);
             GetBacklight()->SetBrightness(70); });
         power_save_timer_->OnExitSleepMode([this]() {
-            BoardEvents::PostInput(BoardEvents::Input::PowerSaveOff);
+            GetDisplay()->SetPowerSaveMode(false);
             GetBacklight()->RestoreBrightness(); });
-        power_save_timer_->OnShutdownRequest([this](){
+        power_save_timer_->OnShutdownRequest([this](){ 
             pmic_->PowerOff(); });
         power_save_timer_->SetEnabled(true);
     }
@@ -234,24 +233,26 @@ private:
         ESP_ERROR_CHECK(esp_lcd_new_panel_st7701(panel_io, &panel_config, &panel_handle));
         esp_lcd_panel_init(panel_handle);
 
-        display_ = CreateRgbLcdDisplay(panel_io, panel_handle,
+        display_ = new RgbLcdDisplay(panel_io, panel_handle,
                                   DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X,
                                   DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
-            if (BoardEvents::GetRuntimeState() == kDeviceStateStarting) {
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
             }
-            BoardEvents::PostInput(BoardEvents::Input::PrimaryClick);
+            app.ToggleChatState();
         });
 
 #if CONFIG_USE_DEVICE_AEC
         boot_button_.OnDoubleClick([this]() {
-            if (BoardEvents::GetRuntimeState() == kDeviceStateIdle) {
-                BoardEvents::PostInput(BoardEvents::Input::AecToggle);
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateIdle) {
+                app.SetAecMode(app.GetAecMode() == kAecOff ? kAecOnDeviceSide : kAecOff);
             }
         });
 #endif
@@ -288,7 +289,8 @@ private:
         ESP_LOGI(TAG, "Touch panel initialized successfully");
     }
 
-    void RegisterMcpTools(McpServer& mcp_server) override {
+    void InitializeTools() {
+        auto &mcp_server = McpServer::GetInstance();
         mcp_server.AddTool("self.system.reconfigure_wifi",
             "End this conversation and enter WiFi configuration mode.\n"
             "**CAUTION** You must ask the user to confirm this action.",
@@ -312,7 +314,7 @@ private:
 
         if (current_level != last_level) {
             last_level = current_level;
-
+            
             if (current_level > 0) {
                 press_start_time_ms = esp_timer_get_time() / 1000;
                 ESP_LOGD(TAG, "Button pressed, start time recorded");
@@ -373,23 +375,24 @@ public:
         InitializeRGB();
         InitializeTouch();
         InitializeButtons();
+        InitializeTools();
         InitializeKeyMonitor();  // 启动按键监听
         GetBacklight()->SetBrightness(100);
     }
 
     virtual AudioCodec* GetAudioCodec() override {
         static BoxAudioCodec audio_codec(
-            i2c_bus_,
-            AUDIO_INPUT_SAMPLE_RATE,
+            i2c_bus_, 
+            AUDIO_INPUT_SAMPLE_RATE, 
             AUDIO_OUTPUT_SAMPLE_RATE,
-            AUDIO_I2S_GPIO_MCLK,
-            AUDIO_I2S_GPIO_BCLK,
-            AUDIO_I2S_GPIO_WS,
-            AUDIO_I2S_GPIO_DOUT,
+            AUDIO_I2S_GPIO_MCLK, 
+            AUDIO_I2S_GPIO_BCLK, 
+            AUDIO_I2S_GPIO_WS, 
+            AUDIO_I2S_GPIO_DOUT, 
             AUDIO_I2S_GPIO_DIN,
-            AUDIO_CODEC_PA_PIN,
-            AUDIO_CODEC_ES8311_ADDR,
-            AUDIO_CODEC_ES7210_ADDR,
+            AUDIO_CODEC_PA_PIN, 
+            AUDIO_CODEC_ES8311_ADDR, 
+            AUDIO_CODEC_ES7210_ADDR, 
             AUDIO_INPUT_REFERENCE);
         return &audio_codec;
     }
@@ -426,5 +429,3 @@ public:
 };
 
 DECLARE_BOARD(WaveshareEsp32s3TouchLCD4b);
-
-

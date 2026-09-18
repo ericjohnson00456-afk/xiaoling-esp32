@@ -1,8 +1,8 @@
 #include "sleep_timer.h"
 #include "application.h"
-#include "display.h"
+#include "board.h"
+#include "display/display.h"
 #include "settings.h"
-#include "board_events.h"
 
 #include <esp_log.h>
 #include <esp_sleep.h>
@@ -87,7 +87,7 @@ void SleepTimer::CheckTimer() {
 
             app.Schedule([this, &app]() {
                 while (in_light_sleep_mode_) {
-                    BoardEvents::PostInput(BoardEvents::Input::StatusBarRefresh, 1);
+                    Board::GetInstance().GetDisplay()->UpdateStatusBar(true);
                     lv_refr_now(nullptr);
                     lvgl_port_stop();
 
