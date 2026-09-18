@@ -1,7 +1,7 @@
 #pragma once
 
-#include "ui/tools/image/lvgl_image.h"
-#include "ui/tools/image/png_animation_player.h"
+#include "ui/utils/image/lvgl_image.h"
+#include "ui/utils/emoji/png_animation_player.h"
 
 #include <lvgl.h>
 

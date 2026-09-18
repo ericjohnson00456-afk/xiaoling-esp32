@@ -1,6 +1,6 @@
 #pragma once
 
-#include "lvgl_image.h"
+#include "ui/utils/image/lvgl_image.h"
 
 #include <cstdint>
 #include <map>

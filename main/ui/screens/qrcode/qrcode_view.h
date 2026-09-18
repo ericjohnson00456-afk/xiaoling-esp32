@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ui/tools/image/lvgl_image.h"
+#include "ui/utils/image/lvgl_image.h"
 
 #include <lvgl.h>
 

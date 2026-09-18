@@ -2,8 +2,8 @@
 
 #include "boards/common/board.h"
 #include "system/system_reset.h"
-#include "ui/core/ui_manager.h"
-#include "ui/core/ui_page_ids.h"
+#include "ui/ui_manager.h"
+#include "ui/ui_page_ids.h"
 #include "ui/events/ui_events.h"
 #include "ui/screens/qrcode/qrcode_presenter.h"
 

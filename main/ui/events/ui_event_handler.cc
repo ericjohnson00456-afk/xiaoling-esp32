@@ -2,8 +2,8 @@
 #include "ui_events.h"
 
 #include "ui/i18n/lang_config.h"
-#include "ui/core/ui_manager.h"
-#include "ui/core/ui_page_ids.h"
+#include "ui/ui_manager.h"
+#include "ui/ui_page_ids.h"
 #include "system/device_status.h"
 #include "ui/screens/home/home_presenter.h"
 

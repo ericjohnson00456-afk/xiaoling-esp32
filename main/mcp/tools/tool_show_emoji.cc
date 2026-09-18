@@ -3,10 +3,10 @@
 
 #include "mcp_server.h"
 #include "ui/events/ui_events.h"
-#include "ui/core/ui_manager.h"
+#include "ui/ui_manager.h"
 #include "display/display.h"
 #include "ui/themes/lvgl_theme.h"
-#include "ui/resources/emoji_repository.h"
+#include "ui/utils/emoji/emoji_repository.h"
 
 namespace {
 MCP_REGISTER_TOOL(RegisterShowEmoji, McpToolGroup::kCommon, 130) {

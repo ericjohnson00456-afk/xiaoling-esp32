@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ui/core/nav_stack.h"
+#include "ui/nav_stack.h"
 #include "xiaoling/session/session_core.h"
 
 #include <cstdint>

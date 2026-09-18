@@ -1,6 +1,6 @@
 #pragma once
 
-#include "emoji_repository.h"
+#include "ui/utils/emoji/emoji_repository.h"
 
 #include <functional>
 

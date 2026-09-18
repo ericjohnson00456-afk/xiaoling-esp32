@@ -25,10 +25,11 @@ set(SOURCES "audio/audio_codec.cc"
             "display/lvgl_display.cc"
             "ui/themes/lvgl_theme.cc"
             "ui/themes/lvgl_theme_setup.cc"
-            "ui/tools/font/lvgl_font.cc"
-            "ui/tools/image/lvgl_image.cc"
-            "ui/tools/image/image_fetcher.cc"
-            "ui/tools/image/png_animation_player.cc"
+            "ui/utils/font/lvgl_font.cc"
+            "ui/utils/image/lvgl_image.cc"
+            "ui/utils/image/image_fetcher.cc"
+            "ui/utils/emoji/emoji_repository.cc"
+            "ui/utils/emoji/png_animation_player.cc"
             "xiaoling/conn/xiaoling_conn.cc"
             "xiaoling/conn/xiaoling_conn_auth.cc"
             "xiaoling/conn/xiaoling_conn_message.cc"
@@ -58,11 +59,10 @@ file(GLOB MCP_TOOL_SOURCES
      "${CMAKE_CURRENT_SOURCE_DIR}/mcp/tools/tool_*.cc")
 list(APPEND SOURCES ${MCP_TOOL_SOURCES})
 
-# UI 层按职责分为 core、资源仓库、events 和 screens；显示后端单独在上方登记。
+# UI 顶层基础设施直接放在 ui，其他代码按资源仓库、events 和 screens 分类；显示后端单独在上方登记。
 file(GLOB UI_SOURCES
-     "${CMAKE_CURRENT_SOURCE_DIR}/ui/core/*.cc"
+     "${CMAKE_CURRENT_SOURCE_DIR}/ui/*.cc"
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/compat/*.cc"
-     "${CMAKE_CURRENT_SOURCE_DIR}/ui/resources/emoji_repository.cc"
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/screens/home/*.cc"
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/screens/qrcode/*.cc"
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/events/*.cc")
@@ -74,9 +74,9 @@ file(GLOB SHELL_CMD_SOURCES
 list(APPEND SOURCES ${SHELL_CMD_SOURCES})
 
 set(INCLUDE_DIRS "."
-                 "ui/themes" "ui/tools/font" "ui/tools/image" "audio"
+                 "ui/themes" "ui/utils/font" "ui/utils/image" "ui/utils/emoji" "audio"
                  "player" "player/core" "player/engine" "player/channels" "player/resource" "xiaoling" "xiaoling/session" "xiaoling/conn" "mcp"
-                  "ui" "ui/core" "ui/compat" "ui/resources" "ui/screens" "ui/screens/home" "ui/screens/qrcode"
+                  "ui" "ui/compat" "ui/screens" "ui/screens/home" "ui/screens/qrcode"
                   "system" "resource" "shell" "ota")
 
 # Add board common files

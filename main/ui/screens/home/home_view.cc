@@ -2,7 +2,7 @@
 
 #include "display/display.h"
 #include "resource/assets.h"
-#include "ui/core/ui_manager.h"
+#include "ui/ui_manager.h"
 #include "display/lvgl_display.h"
 #include "ui/themes/lvgl_theme.h"
 #include "xiaoling/session/session_core.h"

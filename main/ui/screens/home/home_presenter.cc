@@ -2,9 +2,9 @@
 
 #include "display/display.h"
 #include "home_view.h"
-#include "ui/core/ui_manager.h"
-#include "ui/core/ui_page_ids.h"
-#include "ui/tools/image/lvgl_image.h"
+#include "ui/ui_manager.h"
+#include "ui/ui_page_ids.h"
+#include "ui/utils/image/lvgl_image.h"
 #include "xiaoling/xiaoling_events.h"
 
 #include <utility>

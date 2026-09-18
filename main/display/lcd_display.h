@@ -2,7 +2,7 @@
 #define LCD_DISPLAY_H
 
 #include "display/lvgl_display.h"
-#include "ui/tools/image/png_animation_player.h"
+#include "ui/utils/emoji/png_animation_player.h"
 
 #include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>

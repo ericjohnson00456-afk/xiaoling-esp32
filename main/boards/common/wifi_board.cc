@@ -25,7 +25,7 @@
 
 #ifdef CONFIG_PROV_MODE_BLE
 #include "application.h"
-#include "ui/tools/image/lvgl_image.h"
+#include "ui/utils/image/lvgl_image.h"
 
 extern const char xl_ble_prov_png_start[] asm("_binary_xl_ble_prov_png_start");
 extern const char xl_ble_prov_png_end[] asm("_binary_xl_ble_prov_png_end");

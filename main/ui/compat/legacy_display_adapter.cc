@@ -1,11 +1,11 @@
 #include "legacy_display_adapter.h"
 
-#include "ui/core/ui_manager.h"
-#include "ui/core/ui_page_ids.h"
+#include "ui/ui_manager.h"
+#include "ui/ui_page_ids.h"
 #include "ui/events/ui_events.h"
 #include "ui/screens/home/home_presenter.h"
 #include "ui/screens/qrcode/qrcode_presenter.h"
-#include "ui/tools/image/lvgl_image.h"
+#include "ui/utils/image/lvgl_image.h"
 
 #include <utility>
 

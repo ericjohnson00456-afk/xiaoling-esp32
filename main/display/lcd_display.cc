@@ -14,7 +14,7 @@
 
 #include "board.h"
 #include "system/device_status.h"
-#include "ui/core/ui_manager.h"
+#include "ui/ui_manager.h"
 #ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
 #include "resource/assets.h"
 #include "xiaoling/session/session_core.h"

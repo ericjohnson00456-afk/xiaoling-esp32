@@ -2,7 +2,7 @@
 #define LVGL_DISPLAY_H
 
 #include "display/display.h"
-#include "ui/tools/image/lvgl_image.h"
+#include "ui/utils/image/lvgl_image.h"
 
 #include <lvgl.h>
 #include <esp_timer.h>

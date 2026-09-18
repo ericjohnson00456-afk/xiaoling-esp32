@@ -3,14 +3,14 @@
 #include "ui/screens/home/home_presenter.h"
 #include "board.h"
 #include "display/display.h"
-#include "ui/core/ui_manager.h"
-#include "ui/core/ui_page_ids.h"
+#include "ui/ui_manager.h"
+#include "ui/ui_page_ids.h"
 #include "ui/screens/qrcode/qrcode_presenter.h"
 #include "events/ui_event_handler.h"
 
 #ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
 #include "resource/assets.h"
-#include "emoji_repository.h"
+#include "ui/utils/emoji/emoji_repository.h"
 #include "lvgl_theme.h"
 
 #include <esp_log.h>

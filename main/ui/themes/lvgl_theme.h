@@ -1,9 +1,9 @@
 #pragma once
 
 #include "theme.h"
-#include "lvgl_image.h"
+#include "ui/utils/image/lvgl_image.h"
 #include "lvgl_font.h"
-#include "emoji_repository.h"
+#include "ui/utils/emoji/emoji_repository.h"
 
 #include <lvgl.h>
 #include <memory>
