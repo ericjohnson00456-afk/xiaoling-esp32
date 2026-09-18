@@ -2,7 +2,6 @@
 
 #include "display/display.h"
 #include "ui/compat/legacy_display_adapter.h"
-#include "ui/screens/home/home_presenter.h"
 #include "display/lvgl_display.h"
 
 #include <esp_log.h>
@@ -110,8 +109,4 @@ uint8_t UiManager::GetBrightness() {
         return 0;
     }
     return display_->GetBrightness();
-}
-
-void UiManager::SetBannerIdleProvider(std::function<bool()> provider) {
-    HomePresenter::GetInstance().SetBannerIdleProvider(std::move(provider));
 }

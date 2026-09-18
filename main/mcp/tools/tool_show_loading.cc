@@ -1,6 +1,6 @@
 #include <string>
 #include "mcp_server.h"
-#include "ui/events/ui_events.h"
+#include "ui/ui_app.h"
 
 namespace {
 MCP_REGISTER_TOOL(RegisterShowLoading, McpToolGroup::kCommon, 131) {
@@ -8,7 +8,7 @@ MCP_REGISTER_TOOL(RegisterShowLoading, McpToolGroup::kCommon, 131) {
                  PropertyList({Property("text", kPropertyTypeString, "请稍等...", {"等待提示文本"})}),
                  [](const PropertyList &properties) -> ReturnValue {
                    (void)properties;
-                   UiEvents::PostEmotionOnce("wait");
+                   UiApp::ShowEmotionOnce("wait");
                    return std::string("已完成操作");
                  });
 }

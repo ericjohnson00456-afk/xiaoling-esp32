@@ -2,7 +2,6 @@
 
 #include "ui/ui_manager.h"
 #include "ui/ui_page_ids.h"
-#include "ui/events/ui_events.h"
 #include "ui/screens/home/home_presenter.h"
 #include "ui/screens/qrcode/qrcode_presenter.h"
 #include "ui/utils/image/lvgl_image.h"
@@ -91,7 +90,7 @@ bool LegacyDisplayAdapter::HandleHomeVisible(bool visible) {
 bool LegacyDisplayAdapter::HandleStatusBarUpdate(bool update_all) {
     // Status-bar values are now pushed to the active View by their presenters.
     // Keep the legacy call as a handled no-op to avoid routing it back through
-    // UiEventHandler and recursively calling Display::UpdateStatusBar().
+    // UiApp and recursively calling Display::UpdateStatusBar().
     (void)update_all;
     return true;
 }

@@ -59,13 +59,12 @@ file(GLOB MCP_TOOL_SOURCES
      "${CMAKE_CURRENT_SOURCE_DIR}/mcp/tools/tool_*.cc")
 list(APPEND SOURCES ${MCP_TOOL_SOURCES})
 
-# UI 顶层基础设施直接放在 ui，其他代码按资源仓库、events 和 screens 分类；显示后端单独在上方登记。
+# UI 顶层基础设施直接放在 ui，页面代码放在 screens；显示后端单独在上方登记。
 file(GLOB UI_SOURCES
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/*.cc"
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/compat/*.cc"
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/screens/home/*.cc"
-     "${CMAKE_CURRENT_SOURCE_DIR}/ui/screens/qrcode/*.cc"
-     "${CMAKE_CURRENT_SOURCE_DIR}/ui/events/*.cc")
+     "${CMAKE_CURRENT_SOURCE_DIR}/ui/screens/qrcode/*.cc")
 list(APPEND SOURCES ${UI_SOURCES})
 
 # Shell commands are split by function under shell/cmd.

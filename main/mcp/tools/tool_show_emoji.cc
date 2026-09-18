@@ -2,7 +2,7 @@
 #include <string>
 
 #include "mcp_server.h"
-#include "ui/events/ui_events.h"
+#include "ui/ui_app.h"
 #include "ui/ui_manager.h"
 #include "display/display.h"
 #include "ui/themes/lvgl_theme.h"
@@ -30,7 +30,7 @@ MCP_REGISTER_TOOL(RegisterShowEmoji, McpToolGroup::kCommon, 130) {
                  [](const PropertyList &properties) -> ReturnValue {
                    const auto emotion = properties["emotion"].value<std::string>();
                    if (emotion.empty()) throw std::runtime_error("emotion 不能为空");
-                   UiEvents::PostEmotionOnce(emotion);
+                   UiApp::ShowEmotionOnce(emotion);
                    return std::string("已完成操作");
                  });
 }

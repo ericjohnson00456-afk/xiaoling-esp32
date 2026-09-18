@@ -46,9 +46,6 @@ public:
     void SetBrightness(uint8_t brightness);
     uint8_t GetBrightness();
 
-    /* Banner 是否允许轮换，由 application 注入当前设备空闲状态。 */
-    void SetBannerIdleProvider(std::function<bool()> provider);
-
 private:
     UiManager();
     ~UiManager();

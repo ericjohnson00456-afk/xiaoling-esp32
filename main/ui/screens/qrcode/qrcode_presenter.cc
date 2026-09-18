@@ -4,7 +4,7 @@
 #include "display/display.h"
 #include "ui/ui_manager.h"
 #include "ui/ui_page_ids.h"
-#include "ui/events/ui_events.h"
+#include "ui/ui_app.h"
 #include "ui/utils/image/lvgl_image.h"
 #include "qrcode_view.h"
 
@@ -265,10 +265,7 @@ void QrCodePresenter::DestroyTimeoutTimer() {
 
 void QrCodePresenter::TimeoutCallback(void* arg) {
     (void)arg;
-    const esp_err_t err = UiEvents::PostHomeRequested();
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to post QR code timeout event: %s", esp_err_to_name(err));
-    }
+    UiApp::NavigateHome();
 }
 
 void QrCodePresenter::Refresh() {

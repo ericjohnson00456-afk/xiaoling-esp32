@@ -1,21 +1,104 @@
 #include "ui_app.h"
 
-#include "ui/screens/home/home_presenter.h"
 #include "board.h"
 #include "display/display.h"
+#include "system/device_status.h"
+#include "ui/i18n/lang_config.h"
+#include "ui/screens/home/home_presenter.h"
+#include "ui/screens/qrcode/qrcode_presenter.h"
 #include "ui/ui_manager.h"
 #include "ui/ui_page_ids.h"
-#include "ui/screens/qrcode/qrcode_presenter.h"
-#include "events/ui_event_handler.h"
+
+#include <esp_log.h>
+
+#include <string>
+#include <utility>
 
 #ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
 #include "resource/assets.h"
-#include "ui/utils/emoji/emoji_repository.h"
 #include "lvgl_theme.h"
+#include "ui/utils/emoji/emoji_repository.h"
 
-#include <esp_log.h>
 #include <memory>
 #endif
+
+namespace {
+
+constexpr char kTag[] = "UiApp";
+
+std::string LocalizeStatus(UiApp::Status status) {
+    switch (status) {
+        case UiApp::Status::Initializing:
+            return Lang::Strings::INITIALIZING;
+        case UiApp::Status::ScanningWifi:
+            return Lang::Strings::SCANNING_WIFI;
+        case UiApp::Status::RegisteringNetwork:
+            return Lang::Strings::REGISTERING_NETWORK;
+        case UiApp::Status::DetectingModule:
+            return Lang::Strings::DETECTING_MODULE;
+        case UiApp::Status::CheckingNewVersion:
+            return Lang::Strings::CHECKING_NEW_VERSION;
+        case UiApp::Status::LoadingProtocol:
+            return Lang::Strings::LOADING_PROTOCOL;
+        case UiApp::Status::Standby:
+            return Lang::Strings::STANDBY;
+        case UiApp::Status::Connecting:
+            return Lang::Strings::CONNECTING;
+        case UiApp::Status::Listening:
+            return Lang::Strings::LISTENING;
+        case UiApp::Status::Speaking:
+            return Lang::Strings::SPEAKING;
+    }
+    return Lang::Strings::INITIALIZING;
+}
+
+std::string LocalizeNotification(UiApp::Notification notification, const std::string& detail) {
+    switch (notification) {
+        case UiApp::Notification::ScanningWifi:
+            return Lang::Strings::SCANNING_WIFI;
+        case UiApp::Notification::ConnectingToNetwork:
+            return std::string(Lang::Strings::CONNECT_TO) + detail + "...";
+        case UiApp::Notification::ConnectedToNetwork:
+            return std::string(Lang::Strings::CONNECTED_TO) + detail;
+        case UiApp::Notification::SwitchTo4G:
+            return Lang::Strings::SWITCH_TO_4G_NETWORK;
+        case UiApp::Notification::SwitchToWifi:
+            return Lang::Strings::SWITCH_TO_WIFI_NETWORK;
+        case UiApp::Notification::EnteringWifiConfigMode:
+            return Lang::Strings::ENTERING_WIFI_CONFIG_MODE;
+    }
+    return {};
+}
+
+void ShowNotificationOnDisplay(std::string text, int32_t duration_ms) {
+    if (UiManager::GetInstance().lvgl_display() != nullptr) {
+        HomePresenter::GetInstance().ShowNotification(std::move(text), duration_ms);
+    } else if (auto* display = UiManager::GetInstance().display(); display != nullptr) {
+        display->ShowNotification(text, duration_ms);
+    }
+}
+
+void ShowVolumeText(std::string text) {
+    UiManager::GetInstance().Dispatch([text = std::move(text)]() mutable {
+        ShowNotificationOnDisplay(std::move(text), 3000);
+    });
+}
+
+bool ShouldIgnoreStandbyEmotion(const std::string& emotion) {
+    const auto state = DeviceStatus::GetState();
+    const bool conversation_active = state == kDeviceStateConnecting ||
+                                     state == kDeviceStateListening ||
+                                     state == kDeviceStateSpeaking;
+    const bool standby_emotion = emotion == "待机" || emotion == "neutral" || emotion == "relaxed";
+    if (!conversation_active || !standby_emotion) {
+        return false;
+    }
+    ESP_LOGI(kTag, "Ignoring standby emotion while device is in %s state",
+             DeviceStatus::GetStateName(state));
+    return true;
+}
+
+}  // namespace
 
 namespace UiApp {
 
@@ -37,20 +120,20 @@ bool ReloadEmojiResources() {
 #endif
 }
 
+void SetBannerIdleProvider(std::function<bool()> provider) {
+    HomePresenter::GetInstance().SetBannerIdleProvider(std::move(provider));
+}
+
 bool Initialize() {
     auto& ui = UiManager::GetInstance();
     if (!ui.initialized()) {
         auto& board = Board::GetInstance();
         auto* display = board.GetDisplay();
         if (display == nullptr) {
-            ESP_LOGE("UiApp", "Board did not provide a display");
+            ESP_LOGE(kTag, "Board did not provide a display");
             return false;
         }
         ui.Initialize(display);
-    }
-
-    if (UiEventHandler::Initialize() != ESP_OK) {
-        return false;
     }
 
 #ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
@@ -65,7 +148,7 @@ bool Initialize() {
             dark->set_emoji_repository(emoji_repository);
         }
     } else {
-        ESP_LOGW("UiApp", "表情动画资源加载失败，Home 页面将使用无表情回退");
+        ESP_LOGW(kTag, "表情动画资源加载失败，Home 页面将使用无表情回退");
     }
 #endif
 
@@ -75,6 +158,167 @@ bool Initialize() {
         return false;
     }
     return true;
+}
+
+void SetStatus(Status status) {
+    UiManager::GetInstance().Dispatch([status]() {
+        HomePresenter::GetInstance().SetStatus(LocalizeStatus(status));
+    });
+}
+
+void SetStatusText(std::string text) {
+    UiManager::GetInstance().Dispatch([text = std::move(text)]() mutable {
+        HomePresenter::GetInstance().SetStatus(std::move(text));
+    });
+}
+
+void ShowNotification(Notification notification, int32_t duration_ms, std::string detail) {
+    UiManager::GetInstance().Dispatch(
+        [notification, duration_ms, detail = std::move(detail)]() mutable {
+            auto text = LocalizeNotification(notification, detail);
+            if (!text.empty()) {
+                ShowNotificationOnDisplay(std::move(text), duration_ms);
+            }
+        });
+}
+
+void ShowNotification(std::string text, int32_t duration_ms) {
+    UiManager::GetInstance().Dispatch([text = std::move(text), duration_ms]() mutable {
+        ShowNotificationOnDisplay(std::move(text), duration_ms);
+    });
+}
+
+void SetChatMessage(std::string role, std::string content) {
+    UiManager::GetInstance().Dispatch(
+        [role = std::move(role), content = std::move(content)]() mutable {
+            if (UiManager::GetInstance().lvgl_display() != nullptr) {
+                HomePresenter::GetInstance().SetChatMessage(std::move(role), std::move(content));
+            } else if (auto* display = UiManager::GetInstance().display(); display != nullptr) {
+                display->SetChatMessage(role.c_str(), content.c_str());
+            }
+        });
+}
+
+void SetVoicePrompt(std::string text) {
+    UiManager::GetInstance().Dispatch([text = std::move(text)]() mutable {
+        HomePresenter::GetInstance().SetText(std::move(text));
+    });
+}
+
+void SetEmotion(std::string emotion) {
+    if (ShouldIgnoreStandbyEmotion(emotion)) {
+        return;
+    }
+    UiManager::GetInstance().Dispatch([emotion = std::move(emotion)]() mutable {
+        HomePresenter::GetInstance().SetEmotion(std::move(emotion));
+    });
+}
+
+void ShowEmotionOnce(std::string emotion) {
+    if (ShouldIgnoreStandbyEmotion(emotion)) {
+        return;
+    }
+    UiManager::GetInstance().Dispatch([emotion = std::move(emotion)]() mutable {
+        if (UiManager::GetInstance().lvgl_display() != nullptr) {
+            HomePresenter::GetInstance().ShowEmotionOnce(std::move(emotion));
+        } else if (auto* display = UiManager::GetInstance().display(); display != nullptr) {
+            display->ShowEmotionOnce(emotion.c_str());
+        }
+    });
+}
+
+void UpdateStatusBar(bool update_all) {
+    UiManager::GetInstance().Dispatch([update_all]() {
+        if (auto* display = UiManager::GetInstance().display(); display != nullptr) {
+            display->UpdateStatusBar(update_all);
+        }
+    });
+}
+
+void DismissOverlays() {
+    UiManager::GetInstance().Dispatch([]() {
+#ifdef CONFIG_LSPLATFORM
+        if (UiManager::GetInstance().lvgl_display() != nullptr) {
+            if (UiManager::GetInstance().TopScreenId() == UI_PAGE_QRCODE) {
+                UiManager::GetInstance().NavigateHome();
+            } else {
+                HomePresenter::GetInstance().ClearImage();
+            }
+        } else if (auto* display = UiManager::GetInstance().display(); display != nullptr) {
+            display->DismissImage();
+            display->DismissActivation();
+        }
+#endif
+    });
+}
+
+void ShowVolume(int32_t volume, bool percent) {
+    auto text = std::string(Lang::Strings::VOLUME) + std::to_string(volume);
+    if (percent) {
+        text += "%";
+    }
+    ShowVolumeText(std::move(text));
+}
+
+void ShowMaxVolume() {
+    ShowVolumeText(Lang::Strings::MAX_VOLUME);
+}
+
+void ShowMuted() {
+    ShowVolumeText(Lang::Strings::MUTED);
+}
+
+void SetLocalizedText(TextKey key) {
+    UiManager::GetInstance().Dispatch([key]() {
+        switch (key) {
+            case TextKey::Error:
+                HomePresenter::GetInstance().SetStatus(Lang::Strings::ERROR);
+                break;
+            case TextKey::PleaseWait:
+                HomePresenter::GetInstance().SetStatus(Lang::Strings::PLEASE_WAIT);
+                break;
+        }
+    });
+}
+
+void ShowWifiConfigHint(std::string ssid, std::string url) {
+    UiManager::GetInstance().Dispatch(
+        [ssid = std::move(ssid), url = std::move(url)]() mutable {
+            std::string hint = std::string(Lang::Strings::CONNECT_TO_HOTSPOT) + ssid;
+            hint += Lang::Strings::ACCESS_VIA_BROWSER;
+            hint += url;
+            HomePresenter::GetInstance().SetStatus(Lang::Strings::WIFI_CONFIG_MODE);
+            HomePresenter::GetInstance().SetEmotion("gear");
+            HomePresenter::GetInstance().SetChatMessage("system", std::move(hint));
+        });
+}
+
+void SetPowerSaveMode(bool enabled) {
+    UiManager::GetInstance().Dispatch([enabled]() {
+        if (UiManager::GetInstance().lvgl_display() != nullptr) {
+            HomePresenter::GetInstance().SetPowerSaveMode(enabled);
+        } else if (auto* display = UiManager::GetInstance().display(); display != nullptr) {
+            display->SetPowerSaveMode(enabled);
+        }
+    });
+}
+
+void SetDuplexMode(DuplexMode mode) {
+    UiManager::GetInstance().Dispatch([mode]() {
+        HomePresenter::GetInstance().SetDuplexMode(mode);
+    });
+}
+
+void NavigateToQrCode() {
+    UiManager::GetInstance().Dispatch([]() {
+        UiManager::GetInstance().NavigateTo(UI_PAGE_QRCODE);
+    });
+}
+
+void NavigateHome() {
+    UiManager::GetInstance().Dispatch([]() {
+        UiManager::GetInstance().NavigateHome();
+    });
 }
 
 }  // UiApp 命名空间

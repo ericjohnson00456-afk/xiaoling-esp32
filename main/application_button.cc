@@ -4,7 +4,7 @@
 #include "system/system_reset.h"
 #include "ui/ui_manager.h"
 #include "ui/ui_page_ids.h"
-#include "ui/events/ui_events.h"
+#include "ui/ui_app.h"
 #include "ui/screens/qrcode/qrcode_presenter.h"
 
 #include <esp_log.h>
@@ -28,7 +28,7 @@ void Application::ProcessButtonClick(uint8_t click_count) {
         case 1:
             if (UiManager::GetInstance().lvgl_display() != nullptr &&
                 UiManager::GetInstance().TopScreenId() != UI_PAGE_HOME) {
-                UiEvents::PostHomeRequested();
+                UiApp::NavigateHome();
                 break;
             }
             if (GetDeviceState() == kDeviceStateStarting &&
@@ -48,7 +48,7 @@ void Application::ProcessButtonClick(uint8_t click_count) {
             auto& qrcode_presenter = QrCodePresenter::GetInstance();
             const bool has_role_config_qrcode = qrcode_presenter.HasRoleConfigQrCode();
             qrcode_presenter.SelectRoleConfig();
-            UiEvents::PostQrCodeRequested();
+            UiApp::NavigateToQrCode();
             PlayTone(has_role_config_qrcode ? kDeviceConfigToneId : kProvisioningToneId);
             break;
         }

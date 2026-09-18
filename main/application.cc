@@ -13,7 +13,6 @@
 #include "ui/ui_app.h"
 #include "ui/ui_manager.h"
 #include "ui/ui_page_ids.h"
-#include "ui/events/ui_events.h"
 #include "ui/screens/qrcode/qrcode_presenter.h"
 #include "xiaoling/xiaoling_events.h"
 #include "player/resource/tone_model.h"
@@ -110,7 +109,7 @@ void Application::Initialize() {
     HomePresenter::GetInstance().SetWakeWordProvider([this]() {
         return audio_service_.GetWakeWordName();
     });
-    ui_manager.SetBannerIdleProvider([this]() {
+    UiApp::SetBannerIdleProvider([this]() {
         return GetDeviceState() == kDeviceStateIdle;
     });
 #endif // CONFIG_LSPLATFORM_BANNERS
@@ -118,14 +117,14 @@ void Application::Initialize() {
         ESP_LOGE(TAG, "Home 页面初始化失败");
     }
     PublishWifiIcon();
-    UiEvents::PostDuplexMode(static_cast<int32_t>(session_controller_.policy().mode));
+    UiApp::SetDuplexMode(session_controller_.policy().mode);
 #ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
     // 语音播放初始化前建立 ROMFS tone 索引，播放器随后可按 tone_id 读取资源。
     ToneModel::GetInstance().Initialize(Assets::GetInstance().ToneStore(), "/");
 #endif
 
     // Print board name/version info
-    UiEvents::PostChatMessage("system", SystemInfo::GetUserAgent());
+    UiApp::SetChatMessage("system", SystemInfo::GetUserAgent());
 
     // Setup the audio service
     auto codec = board.GetAudioCodec();
@@ -205,22 +204,22 @@ void Application::Initialize() {
     board.SetNetworkEventCallback([this](NetworkEvent event, const std::string& data) {
         switch (event) {
             case NetworkEvent::Scanning:
-                UiEvents::PostNotification(UiEvents::Notification::ScanningWifi, 30000);
+                UiApp::ShowNotification(UiApp::Notification::ScanningWifi, 30000);
                 network_connected_ = false;
                 xEventGroupSetBits(event_group_, MAIN_EVENT_NETWORK_DISCONNECTED);
                 break;
             case NetworkEvent::Connecting: {
                 if (data.empty()) {
                     // Cellular network - registering without carrier info yet
-                    UiEvents::PostStatus(UiEvents::Status::RegisteringNetwork);
+                    UiApp::SetStatus(UiApp::Status::RegisteringNetwork);
                 } else {
                     // WiFi or cellular with carrier info
-                    UiEvents::PostNotification(UiEvents::Notification::ConnectingToNetwork, 30000, data);
+                    UiApp::ShowNotification(UiApp::Notification::ConnectingToNetwork, 30000, data);
                 }
                 break;
             }
             case NetworkEvent::Connected: {
-                    UiEvents::PostNotification(UiEvents::Notification::ConnectedToNetwork, 30000, data);
+                UiApp::ShowNotification(UiApp::Notification::ConnectedToNetwork, 30000, data);
                 network_connected_ = true;
                 xEventGroupSetBits(event_group_, MAIN_EVENT_NETWORK_CONNECTED);
                 break;
@@ -238,7 +237,7 @@ void Application::Initialize() {
                 break;
             // Cellular modem specific events
             case NetworkEvent::ModemDetecting:
-                UiEvents::PostStatus(UiEvents::Status::DetectingModule);
+                UiApp::SetStatus(UiApp::Status::DetectingModule);
                 break;
             case NetworkEvent::ModemErrorNoSim:
                 Alert(Lang::Strings::ERROR, Lang::Strings::PIN_ERROR, "triangle_exclamation", "err_pin");
@@ -247,11 +246,11 @@ void Application::Initialize() {
                 Alert(Lang::Strings::ERROR, Lang::Strings::REG_ERROR, "triangle_exclamation", "err_reg");
                 break;
             case NetworkEvent::ModemErrorInitFailed:
-                UiEvents::PostStatus(UiEvents::Status::DetectingModule);
-                UiEvents::PostChatMessage("system", Lang::Strings::DETECTING_MODULE);
+                UiApp::SetStatus(UiApp::Status::DetectingModule);
+                UiApp::SetChatMessage("system", Lang::Strings::DETECTING_MODULE);
                 break;
             case NetworkEvent::ModemErrorTimeout:
-                UiEvents::PostStatus(UiEvents::Status::RegisteringNetwork);
+                UiApp::SetStatus(UiApp::Status::RegisteringNetwork);
                 break;
         }
         PublishWifiIcon();
@@ -261,7 +260,7 @@ void Application::Initialize() {
     board.StartNetwork();
 
     // Update the status bar immediately to show the network state
-    UiEvents::PostStatusBarUpdate(true);
+    UiApp::UpdateStatusBar(true);
 
     // Serial debug shell (independent module, failure is non-fatal)
     if (!SerialShell::GetInstance().Initialize()) {
@@ -365,7 +364,7 @@ void Application::Run() {
         if (bits & MAIN_EVENT_CLOCK_TICK) {
             clock_ticks_++;
             PublishWifiIcon();
-            UiEvents::PostStatusBarUpdate();
+            UiApp::UpdateStatusBar();
 
             // Print debug info every 10 seconds
             if (clock_ticks_ % 10 == 0) {
@@ -396,14 +395,14 @@ void Application::HandleNetworkConnectedEvent() {
     }
 
     // Update the status bar immediately to show the network state
-    UiEvents::PostStatusBarUpdate(true);
+    UiApp::UpdateStatusBar(true);
 }
 
 void Application::HandleNetworkDisconnectedEvent() {
     audio_player_.Stop(PlaybackEndReason::kCancelled);
 
     // Update the status bar immediately to show the network state
-    UiEvents::PostStatusBarUpdate(true);
+    UiApp::UpdateStatusBar(true);
 }
 
 void Application::HandleActivationDoneEvent() {
@@ -413,8 +412,8 @@ void Application::HandleActivationDoneEvent() {
     SetDeviceState(kDeviceStateIdle);
 
     std::string message = std::string(Lang::Strings::VERSION) + ota_->GetCurrentVersion();
-    UiEvents::PostNotificationText(message);
-    UiEvents::PostChatMessage("system", "");
+    UiApp::ShowNotification(message);
+    UiApp::SetChatMessage("system", "");
 
     // Play the success sound to indicate the device is ready
     PlayTone(59);
@@ -501,7 +500,7 @@ void Application::CheckAssetsVersion() {
                     char buffer[48];
                     snprintf(buffer, sizeof(buffer), "%d%% %uKB/s", progress,
                              static_cast<unsigned>(speed / 1024));
-                    UiEvents::PostChatMessage("system", buffer);
+                    UiApp::SetChatMessage("system", buffer);
                 }).detach();
             });
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
@@ -522,7 +521,7 @@ void Application::CheckAssetsVersion() {
     if (downloaded) {
         // Tone/emoji/wake-word models may still be referenced by running tasks;
         // reboot after the transaction so every consumer remaps a new image.
-        UiEvents::PostChatMessage("system", Lang::Strings::PLEASE_WAIT);
+        UiApp::SetChatMessage("system", Lang::Strings::PLEASE_WAIT);
         vTaskDelay(pdMS_TO_TICKS(500));
         Reboot();
         return;
@@ -533,12 +532,12 @@ void Application::CheckAssetsVersion() {
     ToneModel::GetInstance().Initialize(assets.ToneStore(), "/");
     UiApp::ReloadEmojiResources();
 #endif
-    UiEvents::PostChatMessage("system", "");
-    UiEvents::PostEmotion("microchip_ai");
+    UiApp::SetChatMessage("system", "");
+    UiApp::SetEmotion("microchip_ai");
 }
 
 bool Application::CheckNewVersion() {
-    UiEvents::PostStatus(UiEvents::Status::CheckingNewVersion);
+    UiApp::SetStatus(UiApp::Status::CheckingNewVersion);
     if (ota_ == nullptr || ota_->CheckVersion() != ESP_OK) {
         return false;
     }
@@ -549,7 +548,7 @@ void Application::InitializeXiaolingConn() {
     auto& board = Board::GetInstance();
     auto codec = board.GetAudioCodec();
 
-    UiEvents::PostStatus(UiEvents::Status::LoadingProtocol);
+    UiApp::SetStatus(UiApp::Status::LoadingProtocol);
 
     // 小聆只使用 HTTP 鉴权和 WebSocket 会话。
     xiaoling_conn_ = std::make_unique<XiaolingConn>();
@@ -605,7 +604,7 @@ void Application::InitializeXiaolingConn() {
             if (GetDeviceState() == kDeviceStateWifiConfiguring) {
                 return;
             }
-            UiEvents::PostChatMessage("system", "");
+            UiApp::SetChatMessage("system", "");
             if (audio_player_.IsWakeupPending()) {
                 CancelWakeup();
                 return;
@@ -735,9 +734,9 @@ void Application::ShowActivationCode(const std::string& code, const std::string&
 
 void Application::Alert(const char* status, const char* message, const char* emotion, const std::string_view& sound) {
     ESP_LOGW(TAG, "Alert [%s] %s: %s", emotion, status, message);
-    UiEvents::PostStatusText(status);
-    UiEvents::PostEmotion(emotion);
-    UiEvents::PostChatMessage("system", message);
+    UiApp::SetStatusText(status);
+    UiApp::SetEmotion(emotion);
+    UiApp::SetChatMessage("system", message);
     if (!sound.empty()) {
         PlayLocalizedTone(std::string(sound).c_str());
     }
@@ -745,17 +744,17 @@ void Application::Alert(const char* status, const char* message, const char* emo
 
 void Application::Alert(const char* status, const char* message, const char* emotion, uint16_t tone_id) {
     ESP_LOGW(TAG, "Alert [%s] %s: %s", emotion, status, message);
-    UiEvents::PostStatusText(status);
-    UiEvents::PostEmotion(emotion);
-    UiEvents::PostChatMessage("system", message);
+    UiApp::SetStatusText(status);
+    UiApp::SetEmotion(emotion);
+    UiApp::SetChatMessage("system", message);
     PlayTone(tone_id);
 }
 
 void Application::DismissAlert() {
     if (GetDeviceState() == kDeviceStateIdle) {
-        UiEvents::PostStatus(UiEvents::Status::Standby);
-        UiEvents::PostEmotion("neutral");
-        UiEvents::PostChatMessage("system", "");
+        UiApp::SetStatus(UiApp::Status::Standby);
+        UiApp::SetEmotion("neutral");
+        UiApp::SetChatMessage("system", "");
     }
 }
 
@@ -1084,10 +1083,10 @@ void Application::HandleStateChangedEvent() {
         case kDeviceStateUnknown:
         case kDeviceStateIdle:
             session_controller_.EndSession();
-            UiEvents::PostStatus(UiEvents::Status::Standby);
-            UiEvents::PostEmotion("待机");
+            UiApp::SetStatus(UiApp::Status::Standby);
+            UiApp::SetEmotion("待机");
 #ifdef CONFIG_LSPLATFORM
-            UiEvents::PostDismissOverlays();
+            UiApp::DismissOverlays();
 #endif // CONFIG_LSPLATFORM
             if (keep_voice_processing_on_idle_) {
                 keep_voice_processing_on_idle_ = false;
@@ -1104,17 +1103,17 @@ void Application::HandleStateChangedEvent() {
         case kDeviceStateConnecting:
             // 唤醒提示音阶段的过渡态：连接已就绪，直接预告聆听，避免
             // "连接中..." 一闪而过。
-            UiEvents::PostStatus(UiEvents::Status::Listening);
-            UiEvents::PostEmotion("聆听");
-            UiEvents::PostChatMessage("system", "");
+            UiApp::SetStatus(UiApp::Status::Listening);
+            UiApp::SetEmotion("聆听");
+            UiApp::SetChatMessage("system", "");
             break;
         case kDeviceStateListening:
             session_controller_.StartListening(listening_mode_ == kListeningModeRealtime);
-            UiEvents::PostStatus(UiEvents::Status::Listening);
-            UiEvents::PostEmotion("聆听");
-            UiEvents::PostVoicePrompt(Lang::Strings::PLEASE_SPEAK);
+            UiApp::SetStatus(UiApp::Status::Listening);
+            UiApp::SetEmotion("聆听");
+            UiApp::SetVoicePrompt(Lang::Strings::PLEASE_SPEAK);
 #ifdef CONFIG_LSPLATFORM
-            UiEvents::PostDismissOverlays();
+            UiApp::DismissOverlays();
 #endif // CONFIG_LSPLATFORM
 
             // Make sure the audio processor is running
@@ -1129,8 +1128,8 @@ void Application::HandleStateChangedEvent() {
 
             break;
         case kDeviceStateSpeaking:
-            UiEvents::PostStatus(UiEvents::Status::Speaking);
-            UiEvents::PostEmotion("说话");
+            UiApp::SetStatus(UiApp::Status::Speaking);
+            UiApp::SetEmotion("说话");
 
             if (listening_mode_ != kListeningModeRealtime ||
                 session_controller_.policy().mode == DuplexMode::kSimplex) {
@@ -1195,7 +1194,7 @@ bool Application::UpgradeFirmware(const std::string& url, const std::string& ver
     SetDeviceState(kDeviceStateUpgrading);
 
     std::string message = std::string(Lang::Strings::NEW_VERSION) + version_info;
-    UiEvents::PostChatMessage("system", message);
+    UiApp::SetChatMessage("system", message);
 
     board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
     audio_service_.Stop();
@@ -1205,7 +1204,7 @@ bool Application::UpgradeFirmware(const std::string& url, const std::string& ver
         std::thread([progress, speed]() {
             char buffer[32];
             snprintf(buffer, sizeof(buffer), "%d%% %uKB/s", progress, speed / 1024);
-            UiEvents::PostChatMessage("system", buffer);
+            UiApp::SetChatMessage("system", buffer);
         }).detach();
     });
 
@@ -1220,7 +1219,7 @@ bool Application::UpgradeFirmware(const std::string& url, const std::string& ver
     } else {
         // Upgrade success, reboot immediately
         ESP_LOGI(TAG, "Firmware upgrade successful, rebooting...");
-        UiEvents::PostChatMessage("system", "Upgrade successful, rebooting...");
+        UiApp::SetChatMessage("system", "Upgrade successful, rebooting...");
         vTaskDelay(pdMS_TO_TICKS(1000)); // Brief pause to show message
         Reboot();
         return true;
@@ -1296,16 +1295,16 @@ void Application::SetAecMode(AecMode mode) {
         switch (aec_mode_) {
         case kAecOff:
             audio_service_.EnableDeviceAec(false);
-            UiEvents::PostNotificationText(Lang::Strings::RTC_MODE_OFF);
+            UiApp::ShowNotification(Lang::Strings::RTC_MODE_OFF);
             break;
         case kAecOnServerSide:
             audio_service_.EnableDeviceAec(false);
-            UiEvents::PostNotificationText(Lang::Strings::RTC_MODE_ON);
+            UiApp::ShowNotification(Lang::Strings::RTC_MODE_ON);
             break;
         case kAecOnDeviceSide:
             audio_service_.EnableDeviceAec(true);
             session_controller_.SetMode(DuplexMode::kFullDuplex);
-            UiEvents::PostNotificationText(Lang::Strings::RTC_MODE_ON);
+            UiApp::ShowNotification(Lang::Strings::RTC_MODE_ON);
             break;
         }
         if (aec_mode_ != kAecOnDeviceSide) {
@@ -1314,7 +1313,7 @@ void Application::SetAecMode(AecMode mode) {
         listening_mode_ = session_controller_.policy().mode == DuplexMode::kFullDuplex
                               ? kListeningModeRealtime
                               : kListeningModeAutoStop;
-        UiEvents::PostDuplexMode(static_cast<int32_t>(session_controller_.policy().mode));
+        UiApp::SetDuplexMode(session_controller_.policy().mode);
 
         // If the AEC mode is changed, close the audio channel
         if (xiaoling_conn_ && xiaoling_conn_->IsConnected()) {
@@ -1347,7 +1346,7 @@ void Application::SetDuplexMode(DuplexMode mode) {
         }
 
         session_controller_.SetMode(mode);
-        UiEvents::PostDuplexMode(static_cast<int32_t>(mode));
+        UiApp::SetDuplexMode(mode);
         listening_mode_ = mode == DuplexMode::kFullDuplex
                               ? kListeningModeRealtime
                               : kListeningModeAutoStop;
