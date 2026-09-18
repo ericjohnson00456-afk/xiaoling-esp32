@@ -34,7 +34,7 @@ MCP_REGISTER_TOOL(RegisterDisplaySetBrightness, McpToolGroup::kCommon, 40) {
         } else {
           throw std::runtime_error("intent 不支持，必须是 set/adjustUp/adjustDown");
         }
-        backlight->SetBrightness(static_cast<uint8_t>(std::clamp(target, 0, 100)), true);
+        backlight->SetBrightness(static_cast<uint8_t>(std::clamp(target, 10, 100)), true);
         return std::string("已完成操作");
       });
 }

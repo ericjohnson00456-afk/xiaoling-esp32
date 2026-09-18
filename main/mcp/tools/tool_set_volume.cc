@@ -36,7 +36,7 @@ MCP_REGISTER_TOOL(RegisterSetVolume, McpToolGroup::kCommon, 10) {
         } else {
           throw std::runtime_error("intent 不支持，必须是 set/adjustUp/adjustDown");
         }
-        codec->SetOutputVolume(std::clamp(target, 0, 100));
+        codec->SetOutputVolume(std::clamp(target, 10, 100));
         return std::string("已设置音量为") + std::to_string(codec->output_volume()) + "%";
       });
 }
