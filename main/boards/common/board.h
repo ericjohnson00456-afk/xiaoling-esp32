@@ -115,7 +115,6 @@ public:
     // concrete WiFi/dual-network board when it needs to request a network
     // action in response to a button event.
     virtual bool EnterNetworkConfigMode() { return false; }
-    virtual bool ClearNetworkConfiguration() { return false; }
     virtual void SwitchNetworkType() {}
 
 private:

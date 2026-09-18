@@ -1007,7 +1007,7 @@ void AudioService::SetMicroWakeWordModel(const void* model_data, size_t model_si
     wake_word_->OnWakeWordDetected([this](const std::string& wake_word) {
         // The callback runs under MicroWakeWord's model lock, so Stop() would
         // deadlock here. Stop feeding immediately; the application task will
-        // stop the model and restart it after the wake-word cooldown.
+        // reset and restart the detector synchronously.
         xEventGroupClearBits(event_group_, AS_EVENT_WAKE_WORD_RUNNING);
         if (callbacks_.on_wake_word_detected) {
             callbacks_.on_wake_word_detected(wake_word);

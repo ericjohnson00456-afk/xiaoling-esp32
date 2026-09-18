@@ -62,15 +62,6 @@ bool DualNetworkBoard::EnterNetworkConfigMode() {
     return wifi_board->EnterNetworkConfigMode();
 }
 
-bool DualNetworkBoard::ClearNetworkConfiguration() {
-    if (network_type_ != NetworkType::WIFI) {
-        return false;
-    }
-    auto* wifi_board = dynamic_cast<WifiBoard*>(current_board_.get());
-    return wifi_board != nullptr && wifi_board->ClearNetworkConfiguration();
-}
-
-
 std::string DualNetworkBoard::GetBoardType() {
     return current_board_->GetBoardType();
 }

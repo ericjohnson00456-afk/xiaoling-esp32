@@ -45,8 +45,6 @@ static const int kBadNetworkSampleWindowSec = 60;
 static const int kBadNetworkSampleCount = 3;
 #endif
 
-static constexpr int64_t kWakeWordPauseUs = 500 * 1000;
-
 Application::Application() {
     event_group_ = xEventGroupCreate();
 
@@ -78,17 +76,6 @@ Application::Application() {
     };
     esp_timer_create(&clock_timer_args, &clock_timer_handle_);
 
-    esp_timer_create_args_t wake_word_restart_timer_args = {
-        .callback = [](void* arg) {
-            auto* app = static_cast<Application*>(arg);
-            xEventGroupSetBits(app->event_group_, MAIN_EVENT_WAKE_WORD_RESTART);
-        },
-        .arg = this,
-        .dispatch_method = ESP_TIMER_TASK,
-        .name = "wake_restart",
-        .skip_unhandled_events = true
-    };
-    esp_timer_create(&wake_word_restart_timer_args, &wake_word_restart_timer_handle_);
 }
 
 Application::~Application() {
@@ -104,10 +91,6 @@ Application::~Application() {
     if (clock_timer_handle_ != nullptr) {
         esp_timer_stop(clock_timer_handle_);
         esp_timer_delete(clock_timer_handle_);
-    }
-    if (wake_word_restart_timer_handle_ != nullptr) {
-        esp_timer_stop(wake_word_restart_timer_handle_);
-        esp_timer_delete(wake_word_restart_timer_handle_);
     }
     vEventGroupDelete(event_group_);
 }
@@ -448,18 +431,10 @@ void Application::Run() {
         MAIN_EVENT_START_LISTENING |
         MAIN_EVENT_STOP_LISTENING |
         MAIN_EVENT_ACTIVATION_DONE |
-        MAIN_EVENT_STATE_CHANGED |
-        MAIN_EVENT_WAKE_WORD_RESTART;
+        MAIN_EVENT_STATE_CHANGED;
 
     while (true) {
         auto bits = xEventGroupWaitBits(event_group_, ALL_EVENTS, pdTRUE, pdFALSE, portMAX_DELAY);
-
-        // Resume before handling any wake event from the same batch. A new
-        // wake event can then stop and re-arm the timer without being undone.
-        if ((bits & MAIN_EVENT_WAKE_WORD_RESTART) && wake_word_restart_pending_) {
-            wake_word_restart_pending_ = false;
-            audio_service_.EnableWakeWordDetection(true);
-        }
 
         if (bits & MAIN_EVENT_ERROR) {
             SetDeviceState(kDeviceStateIdle);
@@ -1042,8 +1017,7 @@ void Application::HandleWakeWordDetectedEvent() {
     PauseWakeWordDetection();
 
     // Only accept audio wake words while the device is standing by. Wake-word
-    // candidates during a conversation, playback, or activation are ignored;
-    // PauseWakeWordDetection() still re-arms the detector after its cooldown.
+    // candidates during a conversation, playback, or activation are ignored.
     auto state = GetDeviceState();
     if (state != kDeviceStateIdle) {
         ESP_LOGI(TAG, "Ignoring wake word while device is in %s state",
@@ -1078,6 +1052,21 @@ void Application::HandleWakeWordDetectedEvent() {
 void Application::AbortSpeaking(AbortReason reason) {
     ESP_LOGI(TAG, "Abort speaking");
     aborted_ = true;
+
+    // In half-duplex mode the exit tool can arrive while the microphone
+    // session is still listening.  A speaking cancel only stops playback and
+    // does not close that cloud session, so explicitly send the session end.
+    if (GetDeviceState() == kDeviceStateListening) {
+        iat_utterance_active_ = false;
+        audio_service_.EnableVoiceProcessing(false);
+        session_controller_.EndSession();
+        if (xiaoling_conn_ && !xiaoling_conn_->EndSession()) {
+            ESP_LOGW(TAG, "Failed to end the listening session while aborting");
+        }
+        SetDeviceState(kDeviceStateIdle);
+        return;
+    }
+
     if (reason == kAbortReasonWakeWordDetected) {
         audio_player_.StopNonMusic(PlaybackEndReason::kPreempted);
     } else {
@@ -1162,21 +1151,7 @@ bool Application::EndListeningSessionForWakeup() {
 
 void Application::PauseWakeWordDetection() {
     audio_service_.PauseWakeWordDetection();
-    wake_word_restart_pending_ = true;
-
-    if (wake_word_restart_timer_handle_ == nullptr) {
-        wake_word_restart_pending_ = false;
-        audio_service_.EnableWakeWordDetection(true);
-        return;
-    }
-
-    esp_timer_stop(wake_word_restart_timer_handle_);
-    const auto err = esp_timer_start_once(wake_word_restart_timer_handle_, kWakeWordPauseUs);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to start wake word pause timer: %s", esp_err_to_name(err));
-        wake_word_restart_pending_ = false;
-        audio_service_.EnableWakeWordDetection(true);
-    }
+    audio_service_.EnableWakeWordDetection(true);
 }
 
 void Application::CancelWakeup() {
@@ -1253,9 +1228,7 @@ void Application::HandleStateChangedEvent() {
             } else {
                 audio_service_.EnableVoiceProcessing(false);
             }
-            if (!wake_word_restart_pending_) {
-                audio_service_.EnableWakeWordDetection(true);
-            }
+            audio_service_.EnableWakeWordDetection(true);
 #ifdef CONFIG_LSPLATFORM
             uplink_watchdog_.Stop();
             downlink_watchdog_.Stop();
@@ -1303,9 +1276,7 @@ void Application::HandleStateChangedEvent() {
             if (!audio_player_.IsPlaying()) {
                 audio_service_.ResetDecoder();
             }
-            if (!wake_word_restart_pending_) {
-                audio_service_.EnableWakeWordDetection(true);
-            }
+            audio_service_.EnableWakeWordDetection(true);
             break;
         case kDeviceStateWifiConfiguring:
             audio_service_.EnableVoiceProcessing(false);

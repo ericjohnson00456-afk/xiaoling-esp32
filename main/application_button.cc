@@ -8,6 +8,8 @@
 #include "ui/models/qrcode/qrcode_model.h"
 
 #include <esp_log.h>
+#include <ssid_manager.h>
+#include <wifi_manager.h>
 
 namespace {
 constexpr char kTag[] = "ApplicationButton";
@@ -84,7 +86,9 @@ void Application::ClearNetworkConfiguration() {
                  DeviceStatus::GetStateName(state));
         return;
     }
-    if (!Board::GetInstance().ClearNetworkConfiguration()) {
+    WifiManager::GetInstance().StopStation();
+    SsidManager::GetInstance().Clear();
+    if (!Board::GetInstance().EnterNetworkConfigMode()) {
         ESP_LOGW(kTag, "Current board does not support Wi-Fi configuration reset");
         return;
     }
