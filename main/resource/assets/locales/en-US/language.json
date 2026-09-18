@@ -52,6 +52,13 @@
         "FOUND_NEW_ASSETS": "Found new assets: %s",
         "DOWNLOAD_ASSETS_FAILED": "Failed to download assets",
         "LOADING_ASSETS": "Loading assets...",
-        "HELLO_MY_FRIEND": "Hello, my friend!"
+        "HELLO_MY_FRIEND": "Hello, my friend!",
+        "LANGUAGE_SWITCHED": "Switched to English",
+        "BLUFI_CONFIG_INSTRUCTIONS": "Scan the QR code or search for the Xiaoling AI mini app\nSelect ESP32 - Bluetooth setup",
+        "ECHO_BASE_NOT_CONNECTED": "Echo Base\nnot connected",
+        "POWER_OFF": "Power off",
+        "HIGH_TEMPERATURE_WARNING": "Warning: temperature too high",
+        "UPGRADE_SUCCESSFUL_REBOOTING": "Upgrade successful, rebooting...",
+        "ROLE_CONFIGURATION": "Role configuration"
     }
 }

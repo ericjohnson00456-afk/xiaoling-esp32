@@ -56,6 +56,8 @@ void DismissOverlays();
 void ShowVolume(int32_t volume, bool percent = false);
 void ShowMaxVolume();
 void ShowMuted();
+// 切换主语言/英语，持久化选择并立即刷新当前状态文案。
+void ToggleLanguage();
 void SetLocalizedText(TextKey key);
 void ShowWifiConfigHint(std::string ssid, std::string url);
 void SetPowerSaveMode(bool enabled);

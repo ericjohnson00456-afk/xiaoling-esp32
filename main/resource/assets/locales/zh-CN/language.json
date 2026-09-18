@@ -20,6 +20,7 @@
         "STANDBY": "待命",
         "CONNECT_TO": "连接 ",
         "CONNECTING": "连接中...",
+        "CONNECTION_SUCCESSFUL": "连接成功",
         "CONNECTED_TO": "已连接 ",
         "LISTENING": "聆听中...",
         "PLEASE_SPEAK": "请说话",
@@ -51,6 +52,13 @@
         "LOADING_ASSETS": "加载资源...",
         "PLEASE_WAIT": "请稍候...",
         "FOUND_NEW_ASSETS": "发现新资源: %s",
-        "HELLO_MY_FRIEND": "你好，我的朋友！"
+        "HELLO_MY_FRIEND": "你好，我的朋友！",
+        "LANGUAGE_SWITCHED": "已切换为中文",
+        "BLUFI_CONFIG_INSTRUCTIONS": "扫码或搜索“小聆AI”小程序\n选择ESP32 - 蓝牙配网",
+        "ECHO_BASE_NOT_CONNECTED": "Echo Base\n未连接",
+        "POWER_OFF": "关机",
+        "HIGH_TEMPERATURE_WARNING": "警告：温度过高",
+        "UPGRADE_SUCCESSFUL_REBOOTING": "升级成功，正在重启...",
+        "ROLE_CONFIGURATION": "角色配置"
     }
 }

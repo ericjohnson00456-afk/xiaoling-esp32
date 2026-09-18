@@ -3,6 +3,7 @@
 
 #include "display/lcd_display.h"
 #include "lvgl_theme.h"
+#include "ui/i18n/lang_config.h"
 #include <esp_lvgl_port.h>
 
 class ZHENGCHEN_LcdDisplay : public SpiLcdDisplay {
@@ -27,7 +28,7 @@ public:
         
         // 创建警告标签
         high_temp_label_ = lv_label_create(high_temp_popup_);
-        lv_label_set_text(high_temp_label_, "警告：温度过高");
+        lv_label_set_text(high_temp_label_, Lang::Strings::HIGH_TEMPERATURE_WARNING);
         lv_obj_set_style_text_color(high_temp_label_, lv_color_white(), 0);
         lv_obj_center(high_temp_label_);
         

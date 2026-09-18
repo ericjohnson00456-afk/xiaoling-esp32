@@ -34,7 +34,7 @@ extern const char xl_ble_prov_png_end[] asm("_binary_xl_ble_prov_png_end");
 #if CONFIG_LSPLATFORM
 std::unique_ptr<LvglImage> WifiBoard::GetProvisioningQRCode(std::string& message) {
 #ifdef CONFIG_PROV_MODE_BLE
-    message = "扫码或搜索“小聆AI”小程序\n选择ESP32 - 蓝牙配网";
+    message = Lang::Strings::BLUFI_CONFIG_INSTRUCTIONS;
     return std::make_unique<LvglRawImage>(
         (void*)xl_ble_prov_png_start,
         (size_t)(xl_ble_prov_png_end - xl_ble_prov_png_start));
@@ -217,7 +217,7 @@ void WifiBoard::StartWifiConfigMode() {
     auto qrcode = std::make_unique<LvglRawImage>((void *)xl_ble_prov_png_start,
                                                  (size_t)(xl_ble_prov_png_end - xl_ble_prov_png_start));
     auto display = Board::GetInstance().GetDisplay();
-    display->ShowActivation(std::move(qrcode), "扫码或搜索“小聆AI”小程序\n选择ESP32 - 蓝牙配网");
+    display->ShowActivation(std::move(qrcode), Lang::Strings::BLUFI_CONFIG_INSTRUCTIONS);
     // 配网提示音由应用层根据当前语言从 ROMFS 加载。
     Application::GetInstance().PlayTone(70);
 #else //!CONFIG_PROV_MODE_BLE

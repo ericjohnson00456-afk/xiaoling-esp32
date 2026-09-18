@@ -108,7 +108,7 @@ private:
         GetBacklight()->SetBrightness(100);
         display_->SetStatus(Lang::Strings::ERROR);
         display_->SetEmotion("triangle_exclamation");
-        display_->SetChatMessage("system", "Echo Base\nnot connected");
+        display_->SetChatMessage("system", Lang::Strings::ECHO_BASE_NOT_CONNECTED);
         
         while (1) {
             ESP_LOGE(TAG, "Atomic Echo Base is disconnected");

@@ -8,6 +8,7 @@
 #include "codecs/es8311_audio_codec.h"
 #include "config.h"
 #include "wifi_board.h"
+#include "ui/i18n/lang_config.h"
 #include "board_power_bsp.h"
 #include "custom_lcd_display.h"
 #include "lvgl.h"
@@ -50,7 +51,7 @@ class CustomBoard : public WifiBoard {
         });
 
         pwr_button_.OnLongPress([this]() {
-            GetDisplay()->SetChatMessage("system", "OFF");
+            GetDisplay()->SetChatMessage("system", Lang::Strings::POWER_OFF);
             vTaskDelay(pdMS_TO_TICKS(1000));
             power_->PowerAudioOff();
             power_->PowerEpdOff();

@@ -52,17 +52,9 @@ void Application::ProcessButtonClick(uint8_t click_count) {
             PlayTone(has_role_config_qrcode ? kDeviceConfigToneId : kProvisioningToneId);
             break;
         }
-        case 4: {
-            auto mode = GetDuplexMode();
-            DuplexMode next = mode == DuplexMode::kSimplex ? DuplexMode::kHalfDuplex :
-                              mode == DuplexMode::kHalfDuplex ? DuplexMode::kFullDuplex :
-                                                               DuplexMode::kSimplex;
-            if (next == DuplexMode::kFullDuplex && !audio_service_.SupportsAec()) {
-                next = DuplexMode::kSimplex;
-            }
-            SetDuplexMode(next);
+        case 4:
+            UiApp::ToggleLanguage();
             break;
-        }
         case 5:
             ClearNetworkConfiguration();
             break;

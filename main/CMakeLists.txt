@@ -731,6 +731,7 @@ endif()
 
 # Define generation path
 set(LANG_JSON "${CMAKE_CURRENT_SOURCE_DIR}/resource/assets/locales/${LANG_DIR}/language.json")
+set(ENGLISH_LANG_JSON "${CMAKE_CURRENT_SOURCE_DIR}/resource/assets/locales/en-US/language.json")
 set(LANG_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/ui/i18n/lang_config.h")
 
 # If target chip is ESP32, exclude specific files to avoid build errors
@@ -775,6 +776,7 @@ add_custom_command(
             --output "${LANG_HEADER}"
     DEPENDS
         ${LANG_JSON}
+        ${ENGLISH_LANG_JSON}
         ${PROJECT_DIR}/scripts/gen_lang.py
     COMMENT "Generating ${LANG_DIR} language config"
 )

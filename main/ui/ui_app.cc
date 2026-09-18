@@ -3,6 +3,7 @@
 #include "board.h"
 #include "display/display.h"
 #include "system/device_status.h"
+#include "shell/settings.h"
 #include "ui/i18n/lang_config.h"
 #include "ui/screens/home/home_presenter.h"
 #include "ui/screens/qrcode/qrcode_presenter.h"
@@ -12,6 +13,7 @@
 #include <esp_log.h>
 
 #include <string>
+#include <optional>
 #include <utility>
 
 #ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
@@ -25,6 +27,9 @@
 namespace {
 
 constexpr char kTag[] = "UiApp";
+constexpr char kUiSettingsNamespace[] = "ui";
+constexpr char kLanguageSettingsKey[] = "language";
+std::optional<UiApp::Status> current_localized_status;
 
 std::string LocalizeStatus(UiApp::Status status) {
     switch (status) {
@@ -125,6 +130,12 @@ void SetBannerIdleProvider(std::function<bool()> provider) {
 }
 
 bool Initialize() {
+    Settings settings(kUiSettingsNamespace);
+    const auto saved_language = settings.GetString(kLanguageSettingsKey);
+    if (!saved_language.empty() && !Lang::SetLanguageByCode(saved_language.c_str())) {
+        ESP_LOGW(kTag, "Ignoring unsupported saved language: %s", saved_language.c_str());
+    }
+
     auto& ui = UiManager::GetInstance();
     if (!ui.initialized()) {
         auto& board = Board::GetInstance();
@@ -162,12 +173,14 @@ bool Initialize() {
 
 void SetStatus(Status status) {
     UiManager::GetInstance().Dispatch([status]() {
+        current_localized_status = status;
         HomePresenter::GetInstance().SetStatus(LocalizeStatus(status));
     });
 }
 
 void SetStatusText(std::string text) {
     UiManager::GetInstance().Dispatch([text = std::move(text)]() mutable {
+        current_localized_status.reset();
         HomePresenter::GetInstance().SetStatus(std::move(text));
     });
 }
@@ -268,8 +281,27 @@ void ShowMuted() {
     ShowVolumeText(Lang::Strings::MUTED);
 }
 
+void ToggleLanguage() {
+    UiManager::GetInstance().Dispatch([]() {
+        Lang::ToggleLanguage();
+        {
+            Settings settings(kUiSettingsNamespace, true);
+            settings.SetString(kLanguageSettingsKey, Lang::GetLanguageCode());
+        }
+        if (current_localized_status.has_value()) {
+            HomePresenter::GetInstance().SetStatus(LocalizeStatus(*current_localized_status));
+        }
+        if (auto* display = UiManager::GetInstance().display(); display != nullptr) {
+            display->UpdateStatusBar(true);
+        }
+        ShowNotificationOnDisplay(Lang::Strings::LANGUAGE_SWITCHED, 3000);
+        ESP_LOGI(kTag, "Display language switched to %s", Lang::GetLanguageCode());
+    });
+}
+
 void SetLocalizedText(TextKey key) {
     UiManager::GetInstance().Dispatch([key]() {
+        current_localized_status.reset();
         switch (key) {
             case TextKey::Error:
                 HomePresenter::GetInstance().SetStatus(Lang::Strings::ERROR);

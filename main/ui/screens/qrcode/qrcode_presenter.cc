@@ -5,6 +5,7 @@
 #include "ui/ui_manager.h"
 #include "ui/ui_page_ids.h"
 #include "ui/ui_app.h"
+#include "ui/i18n/lang_config.h"
 #include "ui/utils/image/lvgl_image.h"
 #include "qrcode_view.h"
 
@@ -289,7 +290,7 @@ void QrCodePresenter::Refresh() {
     }
     if (image != nullptr) {
         if (message.empty() && !custom_selected) {
-            message = "角色配置";
+            message = Lang::Strings::ROLE_CONFIGURATION;
         }
         if (rendered_ && image == last_rendered_image_ && message == last_rendered_message_) {
             return;
