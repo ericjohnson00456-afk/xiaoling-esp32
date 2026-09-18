@@ -6,6 +6,7 @@
 #include "ui/models/home/duplex_model.h"
 #include "ui/core/ui_manager.h"
 #include "ui/core/ui_page_ids.h"
+#include "system/device_status.h"
 
 #include "display.h"
 #include "ui/models/home/voice_model.h"
@@ -113,6 +114,19 @@ void OnVoicePromptChanged(void*, esp_event_base_t, int32_t, void* event_data) {
 
 void OnEmotionChanged(void*, esp_event_base_t, int32_t, void* event_data) {
     const auto event = *static_cast<const UiEvents::EmotionEvent*>(event_data);
+    const auto state = DeviceStatus::GetState();
+    const bool conversation_active = state == kDeviceStateConnecting ||
+                                     state == kDeviceStateListening ||
+                                     state == kDeviceStateSpeaking;
+    const bool standby_emotion = std::strcmp(event.emotion, "待机") == 0 ||
+                                 std::strcmp(event.emotion, "neutral") == 0 ||
+                                 std::strcmp(event.emotion, "relaxed") == 0;
+    if (conversation_active && standby_emotion) {
+        ESP_LOGI(TAG, "Ignoring standby emotion while device is in %s state",
+                 DeviceStatus::GetStateName(state));
+        return;
+    }
+
     UiManager::GetInstance().Dispatch([event]() {
         if (event.once) {
             if (auto* display = UiManager::GetInstance().display(); display != nullptr) {

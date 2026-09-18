@@ -1040,44 +1040,39 @@ void Application::HandleStopListeningEvent() {
 
 void Application::HandleWakeWordDetectedEvent() {
     PauseWakeWordDetection();
+
+    // Only accept audio wake words while the device is standing by. Wake-word
+    // candidates during a conversation, playback, or activation are ignored;
+    // PauseWakeWordDetection() still re-arms the detector after its cooldown.
+    auto state = GetDeviceState();
+    if (state != kDeviceStateIdle) {
+        ESP_LOGI(TAG, "Ignoring wake word while device is in %s state",
+                 DeviceStatus::GetStateName(state));
+        return;
+    }
+
     if (!xiaoling_conn_) {
         return;
     }
 
-    auto state = GetDeviceState();
-    if (state == kDeviceStateIdle || state == kDeviceStateListening) {
 #if CONFIG_SEND_WAKE_WORD_DATA
-        audio_service_.EncodeWakeWord();
+    audio_service_.EncodeWakeWord();
 #endif
 
-        if (!EnsureXiaolingReadyForWakeup()) {
-            return;
-        }
-
-        auto wake_word = audio_service_.GetLastWakeWord();
-        ESP_LOGI(TAG, "Wake word detected: %s", wake_word.c_str());
-        if (state == kDeviceStateListening && !EndListeningSessionForWakeup()) {
-            return;
-        }
-        xiaoling_conn_->SendWakeWordDetected(wake_word);
-#if CONFIG_SEND_WAKE_WORD_DATA
-        // lschat 在 started 前不接收音频，客户端会暂存这些唤醒词数据。
-        while (auto packet = audio_service_.PopWakeWordPacket()) {
-            xiaoling_conn_->SendAudio(std::move(packet));
-        }
-#endif
-        BeginWakeup(listening_mode_);
-    } else if (state == kDeviceStateSpeaking) {
-        AbortSpeaking(kAbortReasonWakeWordDetected);
-        SetDeviceState(kDeviceStateIdle);
-        if (EnsureXiaolingReadyForWakeup()) {
-            xiaoling_conn_->SendWakeWordDetected(audio_service_.GetLastWakeWord());
-            BeginWakeup(listening_mode_);
-        }
-    } else if (state == kDeviceStateActivating) {
-        // Restart the activation check if the wake word is detected during activation
-        SetDeviceState(kDeviceStateIdle);
+    if (!EnsureXiaolingReadyForWakeup()) {
+        return;
     }
+
+    auto wake_word = audio_service_.GetLastWakeWord();
+    ESP_LOGI(TAG, "Wake word detected: %s", wake_word.c_str());
+    xiaoling_conn_->SendWakeWordDetected(wake_word);
+#if CONFIG_SEND_WAKE_WORD_DATA
+    // lschat 在 started 前不接收音频，客户端会暂存这些唤醒词数据。
+    while (auto packet = audio_service_.PopWakeWordPacket()) {
+        xiaoling_conn_->SendAudio(std::move(packet));
+    }
+#endif
+    BeginWakeup(listening_mode_);
 }
 
 void Application::AbortSpeaking(AbortReason reason) {
@@ -1248,7 +1243,7 @@ void Application::HandleStateChangedEvent() {
         case kDeviceStateIdle:
             session_controller_.EndSession();
             UiEvents::PostStatus(UiEvents::Status::Standby);
-            UiEvents::PostEmotion("neutral");
+            UiEvents::PostEmotion("待机");
 #ifdef CONFIG_LSPLATFORM
             UiEvents::PostDismissOverlays();
 #endif // CONFIG_LSPLATFORM
@@ -1270,13 +1265,13 @@ void Application::HandleStateChangedEvent() {
             // 唤醒提示音阶段的过渡态：连接已就绪，直接预告聆听，避免
             // "连接中..." 一闪而过。
             UiEvents::PostStatus(UiEvents::Status::Listening);
-            UiEvents::PostEmotion("neutral");
+            UiEvents::PostEmotion("聆听");
             UiEvents::PostChatMessage("system", "");
             break;
         case kDeviceStateListening:
             session_controller_.StartListening(listening_mode_ == kListeningModeRealtime);
             UiEvents::PostStatus(UiEvents::Status::Listening);
-            UiEvents::PostEmotion("wakeup");
+            UiEvents::PostEmotion("聆听");
             UiEvents::PostVoicePrompt(Lang::Strings::PLEASE_SPEAK);
 #ifdef CONFIG_LSPLATFORM
             UiEvents::PostDismissOverlays();
@@ -1295,7 +1290,7 @@ void Application::HandleStateChangedEvent() {
             break;
         case kDeviceStateSpeaking:
             UiEvents::PostStatus(UiEvents::Status::Speaking);
-            UiEvents::PostEmotion("speaking");
+            UiEvents::PostEmotion("说话");
 
             if (listening_mode_ != kListeningModeRealtime ||
                 session_controller_.policy().mode == DuplexMode::kSimplex) {

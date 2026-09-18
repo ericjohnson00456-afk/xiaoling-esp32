@@ -35,6 +35,8 @@ protected:
     std::unique_ptr<LvglRawImage> full_duplex_icon_;
 #endif
     std::unique_ptr<PngAnimationPlayer> animation_player_ = nullptr;
+    std::string current_emotion_;
+    bool one_shot_emotion_active_ = false;
     lv_obj_t* emoji_box_ = nullptr;
     lv_obj_t* chat_message_label_ = nullptr;
 #ifndef CONFIG_USE_XIAOLING_MESSAGE_STYLE

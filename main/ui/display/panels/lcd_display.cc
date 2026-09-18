@@ -13,12 +13,18 @@
 #include <cstring>
 
 #include "board.h"
+#include "system/device_status.h"
+#include "ui/core/ui_manager.h"
 #ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
 #include "resource/assets.h"
 #include "xiaoling/session/session_core.h"
 #endif
 
 #define TAG "LcdDisplay"
+
+#ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
+static constexpr uint32_t kOneShotEmotionDurationMs = 3000;
+#endif
 
 #ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
 static std::map<std::string, std::string> xl_emoji_mappings {
@@ -996,6 +1002,14 @@ void LcdDisplay::SetHomeVisible(bool visible) {
 }
 
 void LcdDisplay::SetEmotion(const char* emotion) {
+    current_emotion_ = emotion != nullptr ? emotion : "";
+
+    // A persistent state update must not interrupt an MCP one-shot emotion.
+    // The latest value is retained above and restored when the one-shot ends.
+    if (one_shot_emotion_active_) {
+        return;
+    }
+
     if (animation_player_) {
         DisplayLockGuard lock(this);
         animation_player_->Stop();
@@ -1118,8 +1132,6 @@ void LcdDisplay::ShowEmotionOnce(const char* emotion) {
 
     if (animation != nullptr &&
         (!animation->intro.empty() || !animation->loop.empty() || !animation->outro.empty())) {
-        EmojiAnimation one_shot = *animation;
-        one_shot.loop.loop = 0;
         DisplayLockGuard lock(this);
         if (!lock.locked()) {
             return;
@@ -1127,7 +1139,34 @@ void LcdDisplay::ShowEmotionOnce(const char* emotion) {
         if (animation_player_ == nullptr) {
             animation_player_ = std::make_unique<PngAnimationPlayer>(emoji_image_);
         }
-        animation_player_->Play(&one_shot);
+        one_shot_emotion_active_ = true;
+        auto complete = [this]() {
+            // The animation timer runs in LVGL's task. Marshal restoration and
+            // persistent state back to the application task to avoid lock nesting.
+            UiManager::GetInstance().Dispatch([this]() {
+                // A one-shot MCP emoji must not leave the Home page on its final
+                // frame. Restore the animation belonging to the current device
+                // state, including TTS speaking and upload listening.
+                one_shot_emotion_active_ = false;
+                switch (DeviceStatus::GetState()) {
+                    case kDeviceStateListening:
+                        SetEmotion("聆听");
+                        break;
+                    case kDeviceStateSpeaking:
+                        SetEmotion("说话");
+                        break;
+                    case kDeviceStateIdle:
+                        SetEmotion("待机");
+                        break;
+                    default:
+                        if (!current_emotion_.empty()) {
+                            SetEmotion(current_emotion_.c_str());
+                        }
+                        break;
+                }
+            });
+        };
+        animation_player_->PlayOnce(animation, kOneShotEmotionDurationMs, std::move(complete));
         if (emoji_label_ != nullptr) {
             lv_obj_add_flag(emoji_label_, LV_OBJ_FLAG_HIDDEN);
         }
