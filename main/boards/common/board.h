@@ -9,6 +9,7 @@
 #include <functional>
 #include <network_interface.h>
 #include <driver/gpio.h>
+#include <memory>
 
 #include "services/service_led.h"
 #include "backlight.h"
@@ -50,6 +51,7 @@ void* create_board();
 class AudioCodec;
 class Display;
 class McpServer;
+class LvglImage;
 class Board {
 private:
     Board(const Board&) = delete; // 禁用拷贝构造函数
@@ -89,6 +91,10 @@ public:
     virtual Camera* GetCamera();
 #if CONFIG_LSPLATFORM
     virtual ImageFetcher* GetImageFetcher();
+    virtual std::unique_ptr<LvglImage> GetProvisioningQRCode(std::string& message) {
+        (void)message;
+        return nullptr;
+    }
 #endif // CONFIG_LSPLATFORM
     virtual NetworkInterface* GetNetwork() = 0;
     virtual void StartNetwork() = 0;

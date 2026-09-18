@@ -53,6 +53,9 @@ public:
     virtual const char* GetNetworkStateIcon() override;
     virtual void SetPowerSaveLevel(PowerSaveLevel level) override;
     virtual bool EnterNetworkConfigMode() override;
+#if CONFIG_LSPLATFORM
+    std::unique_ptr<LvglImage> GetProvisioningQRCode(std::string& message) override;
+#endif
     bool ClearNetworkConfiguration() override;
     virtual AudioCodec* GetAudioCodec() override { return nullptr; }
     virtual std::string GetDeviceStatusJson() override;

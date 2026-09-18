@@ -42,6 +42,7 @@ set(SOURCES "audio/audio_codec.cc"
             "xiaoling/session/session_voice.cc"
             "mcp/mcp_server.cc"
             "system/system_info.cc"
+            "system/system_reset.cc"
             "application.cc"
             "application_button.cc"
             "ota/ota.cc"
@@ -66,6 +67,7 @@ file(GLOB UI_SOURCES
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/core/*.cc"
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/models/*.cc"
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/screens/home/*.cc"
+     "${CMAKE_CURRENT_SOURCE_DIR}/ui/screens/qrcode/*.cc"
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/events/*.cc")
 list(APPEND SOURCES ${UI_SOURCES})
 
@@ -77,7 +79,7 @@ list(APPEND SOURCES ${SHELL_CMD_SOURCES})
 set(INCLUDE_DIRS "." "button" "ui/display" "ui/display/backend" "ui/display/panels"
                  "ui/themes" "ui/tools/font" "ui/tools/image" "audio"
                  "player" "player/core" "player/engine" "player/channels" "player/resource" "xiaoling" "xiaoling/session" "xiaoling/conn" "mcp"
-                 "ui" "ui/core" "ui/models" "ui/screens/home" "system" "resource" "shell" "ota")
+                  "ui" "ui/core" "ui/models" "ui/screens/home" "ui/screens/qrcode" "system" "resource" "shell" "ota")
 
 # Add board common files
 file(GLOB BOARD_COMMON_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/boards/common/*.cc)

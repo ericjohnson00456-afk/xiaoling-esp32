@@ -3,7 +3,9 @@
 
 #include "ui/i18n/lang_config.h"
 #include "status_model.h"
+#include "duplex_model.h"
 #include "ui/core/ui_manager.h"
+#include "ui/core/ui_page_ids.h"
 
 #include "display.h"
 #include "voice_model.h"
@@ -210,6 +212,30 @@ void OnPowerSaveModeChanged(void*, esp_event_base_t, int32_t, void* event_data) 
     });
 }
 
+void OnDuplexModeChanged(void*, esp_event_base_t, int32_t, void* event_data) {
+    const auto event = *static_cast<const UiEvents::DuplexModeEvent*>(event_data);
+    if (event.mode < static_cast<int32_t>(DuplexMode::kSimplex) ||
+        event.mode > static_cast<int32_t>(DuplexMode::kFullDuplex)) {
+        ESP_LOGW(TAG, "Ignoring invalid duplex mode event: %ld", static_cast<long>(event.mode));
+        return;
+    }
+    UiManager::GetInstance().Dispatch([mode = static_cast<DuplexMode>(event.mode)]() {
+        DuplexModel::GetInstance().SetMode(mode);
+    });
+}
+
+void OnQrCodeRequested(void*, esp_event_base_t, int32_t, void*) {
+    UiManager::GetInstance().Dispatch([]() {
+        UiManager::GetInstance().NavigateTo(UI_PAGE_QRCODE);
+    });
+}
+
+void OnHomeRequested(void*, esp_event_base_t, int32_t, void*) {
+    UiManager::GetInstance().Dispatch([]() {
+        UiManager::GetInstance().NavigateHome();
+    });
+}
+
 }  // namespace
 
 namespace UiEventHandler {
@@ -290,6 +316,24 @@ esp_err_t Initialize() {
     ret = esp_event_handler_register(UI_EVENT, UiEvents::kPowerSaveModeChanged, &OnPowerSaveModeChanged, nullptr);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to register power save mode handler: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ret = esp_event_handler_register(UI_EVENT, UiEvents::kDuplexModeChanged, &OnDuplexModeChanged, nullptr);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register duplex mode handler: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ret = esp_event_handler_register(UI_EVENT, UiEvents::kQrCodeRequested, &OnQrCodeRequested, nullptr);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register QR code handler: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ret = esp_event_handler_register(UI_EVENT, UiEvents::kHomeRequested, &OnHomeRequested, nullptr);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register home handler: %s", esp_err_to_name(ret));
         return ret;
     }
 

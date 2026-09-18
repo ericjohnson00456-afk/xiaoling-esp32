@@ -7,6 +7,7 @@
 #include "ui/display/display_factory.h"
 #include "ui/core/ui_manager.h"
 #include "ui/core/ui_page_ids.h"
+#include "ui/screens/qrcode/qrcode_presenter.h"
 #include "wifi_model.h"
 #include "events/ui_event_handler.h"
 
@@ -73,6 +74,7 @@ bool Initialize() {
 #endif
 
     if (ui.RegisterScreen(&HomePresenter::Screen()) != 0 ||
+        ui.RegisterScreen(&QrCodePresenter::Screen()) != 0 ||
         ui.SetDefaultScreen(UI_PAGE_HOME) != 0) {
         return false;
     }

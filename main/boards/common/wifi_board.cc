@@ -32,6 +32,20 @@ extern const char xl_ble_prov_png_start[] asm("_binary_xl_ble_prov_png_start");
 extern const char xl_ble_prov_png_end[] asm("_binary_xl_ble_prov_png_end");
 #endif
 
+#if CONFIG_LSPLATFORM
+std::unique_ptr<LvglImage> WifiBoard::GetProvisioningQRCode(std::string& message) {
+#ifdef CONFIG_PROV_MODE_BLE
+    message = "扫码或搜索“小聆AI”小程序\n选择ESP32 - 蓝牙配网";
+    return std::make_unique<LvglRawImage>(
+        (void*)xl_ble_prov_png_start,
+        (size_t)(xl_ble_prov_png_end - xl_ble_prov_png_start));
+#else
+    message.clear();
+    return nullptr;
+#endif
+}
+#endif
+
 static const char *TAG = "WifiBoard";
 
 // Connection timeout in seconds

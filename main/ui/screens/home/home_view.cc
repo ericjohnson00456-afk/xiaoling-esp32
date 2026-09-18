@@ -1,6 +1,7 @@
 #include "home_view.h"
 
 #include "display.h"
+#include "xiaoling/session/session_core.h"
 
 HomeView::HomeView(Display* display) : display_(display) {
 }
@@ -44,5 +45,11 @@ void HomeView::SetStatus(const std::string& status) {
 void HomeView::SetTime(const std::string& time) {
     if (display_ != nullptr && !time.empty()) {
         display_->SetClockText(time.c_str());
+    }
+}
+
+void HomeView::SetDuplexMode(DuplexMode mode) {
+    if (display_ != nullptr) {
+        display_->SetDuplexMode(mode);
     }
 }

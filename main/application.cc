@@ -13,6 +13,8 @@
 #include "ui/core/ui_app.h"
 #include "ui/core/ui_manager.h"
 #include "ui/events/ui_events.h"
+#include "duplex_model.h"
+#include "qrcode_model.h"
 #include "voice_model.h"
 #include "xiaoling/xiaoling_events.h"
 #include "wifi_model.h"
@@ -145,7 +147,7 @@ void Application::Initialize() {
     if (!UiApp::Initialize()) {
         ESP_LOGE(TAG, "Home 页面初始化失败");
     }
-    board.GetDisplay()->SetDuplexMode(session_controller_.policy().mode);
+    UiEvents::PostDuplexMode(static_cast<int32_t>(session_controller_.policy().mode));
 #ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
     // 语音播放初始化前建立 ROMFS tone 索引，播放器随后可按 tone_id 读取资源。
     ToneModel::GetInstance().Initialize(Assets::GetInstance().ToneStore(), "/");
@@ -254,6 +256,7 @@ void Application::Initialize() {
             }
             case NetworkEvent::Disconnected:
                 network_connected_ = false;
+                QrCodeModel::GetInstance().ClearRoleConfigUrl();
                 xEventGroupSetBits(event_group_, MAIN_EVENT_NETWORK_DISCONNECTED);
                 break;
             case NetworkEvent::WifiConfigModeEnter:
@@ -811,6 +814,7 @@ void Application::InitializeXiaolingConn() {
             }
 
             if (strcmp(sub->valuestring, "setting") == 0) {
+                QrCodeModel::GetInstance().HandleSettingMessage(data);
 #if CONFIG_LSPLATFORM_BANNERS
                 // 设置推送里的 theme.frontend.banner 由 BannerModel 解析并发布给 UI
                 BannerModel::GetInstance().HandleSettingMessage(data);
@@ -1474,7 +1478,7 @@ void Application::SetAecMode(AecMode mode) {
         listening_mode_ = session_controller_.policy().mode == DuplexMode::kFullDuplex
                               ? kListeningModeRealtime
                               : kListeningModeAutoStop;
-        Board::GetInstance().GetDisplay()->SetDuplexMode(session_controller_.policy().mode);
+        UiEvents::PostDuplexMode(static_cast<int32_t>(session_controller_.policy().mode));
 
         // If the AEC mode is changed, close the audio channel
         if (xiaoling_conn_ && xiaoling_conn_->IsConnected()) {
@@ -1507,7 +1511,7 @@ void Application::SetDuplexMode(DuplexMode mode) {
         }
 
         session_controller_.SetMode(mode);
-        Board::GetInstance().GetDisplay()->SetDuplexMode(mode);
+        UiEvents::PostDuplexMode(static_cast<int32_t>(mode));
         listening_mode_ = mode == DuplexMode::kFullDuplex
                               ? kListeningModeRealtime
                               : kListeningModeAutoStop;

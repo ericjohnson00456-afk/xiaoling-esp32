@@ -51,6 +51,9 @@ constexpr int32_t kLocalizedTextChanged = 9;
 constexpr int32_t kWifiConfigHintChanged = 10;
 constexpr int32_t kPowerSaveModeChanged = 11;
 constexpr int32_t kVoicePromptChanged = 12;
+constexpr int32_t kDuplexModeChanged = 13;
+constexpr int32_t kQrCodeRequested = 14;
+constexpr int32_t kHomeRequested = 15;
 
 struct StatusEvent {
     Status status;
@@ -109,6 +112,10 @@ struct VoicePromptEvent {
     char text[128];
 };
 
+struct DuplexModeEvent {
+    int32_t mode;
+};
+
 esp_err_t PostStatus(Status status, int32_t value = 0, std::string_view detail = {});
 esp_err_t PostStatusText(std::string_view text);
 esp_err_t PostNotification(Notification notification, int32_t duration_ms = 3000,
@@ -125,6 +132,9 @@ esp_err_t PostLocalizedText(TextKey key);
 esp_err_t PostWifiConfigHint(std::string_view ssid, std::string_view url);
 esp_err_t PostPowerSaveMode(bool enabled);
 esp_err_t PostVoicePrompt(std::string_view text);
+esp_err_t PostDuplexMode(int32_t mode);
+esp_err_t PostQrCodeRequested();
+esp_err_t PostHomeRequested();
 
 }  // namespace UiEvents
 

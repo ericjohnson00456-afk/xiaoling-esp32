@@ -66,6 +66,19 @@ esp_err_t PostVoicePrompt(std::string_view text) {
     return esp_event_post(UI_EVENT, kVoicePromptChanged, &event, sizeof(event), portMAX_DELAY);
 }
 
+esp_err_t PostDuplexMode(int32_t mode) {
+    DuplexModeEvent event{.mode = mode};
+    return esp_event_post(UI_EVENT, kDuplexModeChanged, &event, sizeof(event), portMAX_DELAY);
+}
+
+esp_err_t PostQrCodeRequested() {
+    return esp_event_post(UI_EVENT, kQrCodeRequested, nullptr, 0, portMAX_DELAY);
+}
+
+esp_err_t PostHomeRequested() {
+    return esp_event_post(UI_EVENT, kHomeRequested, nullptr, 0, portMAX_DELAY);
+}
+
 esp_err_t PostEmotion(std::string_view emotion) {
     EmotionEvent event{.emotion = {}};
     const size_t length = std::min(emotion.size(), sizeof(event.emotion) - 1);

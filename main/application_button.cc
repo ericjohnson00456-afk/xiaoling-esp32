@@ -1,12 +1,18 @@
 #include "application.h"
 
 #include "boards/common/board.h"
-#include "boards/common/system_reset.h"
+#include "system/system_reset.h"
+#include "ui/core/ui_manager.h"
+#include "ui/core/ui_page_ids.h"
+#include "ui/events/ui_events.h"
+#include "ui/models/qrcode_model.h"
 
 #include <esp_log.h>
 
 namespace {
 constexpr char kTag[] = "ApplicationButton";
+constexpr uint16_t kProvisioningToneId = 70;
+constexpr uint16_t kDeviceConfigToneId = 104;
 }
 
 void Application::OnButtonEvent(void* arg, esp_event_base_t event_base,
@@ -25,13 +31,27 @@ void Application::OnButtonEvent(void* arg, esp_event_base_t event_base,
 void Application::HandleButtonEvent(int32_t event_id, uint8_t click_count) {
     switch (event_id) {
         case ButtonEvents::kShortPress1:
-            HandleBoardInput({BoardEvents::Input::PrimaryClick, 0, false});
+            if (UiManager::GetInstance().lvgl_display() != nullptr &&
+                UiManager::GetInstance().TopScreenId() != UI_PAGE_HOME) {
+                UiEvents::PostHomeRequested();
+                break;
+            }
+            if (GetDeviceState() == kDeviceStateStarting &&
+                Board::GetInstance().EnterNetworkConfigMode()) {
+                return;
+            }
+            ToggleChatState();
             break;
         case ButtonEvents::kShortPress2:
-        case ButtonEvents::kShortPress4:
-            // Reserved for future button actions.
             break;
         case ButtonEvents::kShortPress3: {
+            const bool has_role_config_qrcode =
+                QrCodeModel::GetInstance().Snapshot().role_config_image != nullptr;
+            UiEvents::PostQrCodeRequested();
+            PlayTone(has_role_config_qrcode ? kDeviceConfigToneId : kProvisioningToneId);
+            break;
+        }
+        case ButtonEvents::kShortPress4:{
             auto mode = GetDuplexMode();
             DuplexMode next = mode == DuplexMode::kSimplex ? DuplexMode::kHalfDuplex :
                               mode == DuplexMode::kHalfDuplex ? DuplexMode::kFullDuplex :
@@ -99,6 +119,6 @@ void Application::FactoryResetTask() {
     while (session_id != 0 && audio_player_.IsPlaying()) {
         vTaskDelay(pdMS_TO_TICKS(50));
     }
-    SystemReset::FactoryReset();
+    SystemReset::ResetToFactory();
     vTaskDelete(nullptr);
 }

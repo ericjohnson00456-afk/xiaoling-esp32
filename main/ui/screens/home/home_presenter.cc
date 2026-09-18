@@ -1,6 +1,7 @@
 #include "home_presenter.h"
 
 #include "banner_model.h"
+#include "duplex_model.h"
 #include "display.h"
 #include "home_view.h"
 #include "status_model.h"
@@ -132,6 +133,15 @@ void HomePresenter::SubscribeModels() {
         });
     });
 
+    duplex_subscription_ = DuplexModel::GetInstance().Subscribe([](const DuplexModelState& state) {
+        UiManager::GetInstance().Dispatch([state]() {
+            auto& home = HomePresenter::GetInstance();
+            if (home.view_ != nullptr) {
+                home.view_->SetDuplexMode(state.mode);
+            }
+        });
+    });
+
 }
 
 void HomePresenter::UnsubscribeModels() {
@@ -139,10 +149,12 @@ void HomePresenter::UnsubscribeModels() {
     BannerModel::GetInstance().Unsubscribe(banner_subscription_);
     WifiModel::GetInstance().Unsubscribe(wifi_subscription_);
     StatusModel::GetInstance().Unsubscribe(status_subscription_);
+    DuplexModel::GetInstance().Unsubscribe(duplex_subscription_);
     voice_subscription_ = 0;
     banner_subscription_ = 0;
     wifi_subscription_ = 0;
     status_subscription_ = 0;
+    duplex_subscription_ = 0;
 }
 
 void HomePresenter::SetBanners(std::vector<std::string> texts, uint32_t interval_ms) {

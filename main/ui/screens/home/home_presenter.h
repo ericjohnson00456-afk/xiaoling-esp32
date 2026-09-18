@@ -47,6 +47,7 @@ private:
     uint32_t banner_subscription_ = 0;
     uint32_t wifi_subscription_ = 0;
     uint32_t status_subscription_ = 0;
+    uint32_t duplex_subscription_ = 0;
     std::string last_emotion_;
     uint32_t last_voice_text_revision_ = 0;
 };
