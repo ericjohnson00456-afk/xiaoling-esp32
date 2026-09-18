@@ -775,6 +775,9 @@ void Application::InitializeXiaolingConn() {
     xiaoling_conn_->OnDisconnected([this, &board]() {
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
         Schedule([this]() {
+            if (GetDeviceState() == kDeviceStateWifiConfiguring) {
+                return;
+            }
             UiEvents::PostChatMessage("system", "");
             if (audio_player_.IsWakeupPending()) {
                 CancelWakeup();

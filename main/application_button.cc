@@ -92,6 +92,7 @@ void Application::ClearNetworkConfiguration() {
     } else if (state == kDeviceStateAudioTesting) {
         audio_service_.EnableAudioTesting(false);
     }
+    SetDeviceState(kDeviceStateWifiConfiguring);
     ResetXiaolingConn();
 }
 
