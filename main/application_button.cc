@@ -17,33 +17,14 @@ constexpr uint16_t kProvisioningToneId = 70;
 constexpr uint16_t kDeviceConfigToneId = 104;
 }
 
-void Application::InitializeButtonEvents() {
-    ESP_ERROR_CHECK(esp_event_handler_register(
-        BOARD_EVENT, BoardEvents::kButton, &Application::OnBoardButtonEvent, this));
+void Application::HandleButtonClick(uint8_t click_count) {
+    Schedule([this, click_count]() {
+        ProcessButtonClick(click_count);
+    });
 }
 
-void Application::OnBoardButtonEvent(void* arg, esp_event_base_t event_base,
-                                     int32_t event_id, void* event_data) {
-    (void)event_base;
-    (void)event_id;
-    auto* app = static_cast<Application*>(arg);
-    if (app == nullptr || event_data == nullptr) {
-        return;
-    }
-    const auto event = *static_cast<const BoardEvents::ButtonEvent*>(event_data);
-    app->Schedule([app, event]() { app->HandleButtonEvent(event); });
-}
-
-void Application::HandleButtonEvent(const BoardEvents::ButtonEvent& event) {
-    if (event.button != BoardEvents::ButtonId::Primary) {
-        return;
-    }
-
-    if (event.gesture == BoardEvents::ButtonGesture::LongPress) {
-        return;
-    }
-
-    switch (event.click_count) {
+void Application::ProcessButtonClick(uint8_t click_count) {
+    switch (click_count) {
         case 1:
             if (UiManager::GetInstance().lvgl_display() != nullptr &&
                 UiManager::GetInstance().TopScreenId() != UI_PAGE_HOME) {
@@ -57,6 +38,11 @@ void Application::HandleButtonEvent(const BoardEvents::ButtonEvent& event) {
             ToggleChatState();
             break;
         case 2:
+#if CONFIG_USE_DEVICE_AEC
+            if (GetDeviceState() == kDeviceStateIdle) {
+                SetAecMode(GetAecMode() == kAecOff ? kAecOnDeviceSide : kAecOff);
+            }
+#endif
             break;
         case 3: {
             auto& qrcode_presenter = QrCodePresenter::GetInstance();
@@ -81,8 +67,8 @@ void Application::HandleButtonEvent(const BoardEvents::ButtonEvent& event) {
             ClearNetworkConfiguration();
             break;
         default:
-            if (event.click_count >= 8) {
-            StartFactoryReset();
+            if (click_count >= 8) {
+                StartFactoryReset();
             }
             break;
     }
@@ -116,7 +102,6 @@ void Application::StartFactoryReset() {
         return;
     }
     ESP_LOGW(kTag, "Detected 8 or more clicks; factory reset requested");
-    // NVS and OTA metadata are erased only after the prompt; reboot follows.
     if (xTaskCreate([](void* arg) {
             static_cast<Application*>(arg)->FactoryResetTask();
         }, "factory_reset", 4096, this, 5, nullptr) != pdPASS) {
@@ -128,7 +113,6 @@ void Application::StartFactoryReset() {
 void Application::FactoryResetTask() {
     audio_player_.Stop(PlaybackEndReason::kCancelled);
     const auto session_id = audio_player_.PlayTone(103);
-    // Playback is asynchronous. Bound the initial wait in case the tone is absent.
     for (int i = 0; session_id != 0 && i < 50 && !audio_player_.IsPlaying(); ++i) {
         vTaskDelay(pdMS_TO_TICKS(20));
     }

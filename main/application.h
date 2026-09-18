@@ -19,7 +19,6 @@
 #include "player/audio_player.h"
 #include "xiaoling/session/session_core.h"
 #include "system/device_status.h"
-#include "boards/common/board_events.h"
 #include "system/watchdog.h"
 
 // Main event bits
@@ -109,6 +108,10 @@ public:
      */
     void StopListening();
 
+    // Thread-safe entry point for board button callbacks. The click business
+    // logic is implemented in application_button.cc and runs on the main task.
+    void HandleButtonClick(uint8_t click_count);
+
     void Reboot();
     void WakeWordInvoke(const std::string& wake_word);
     bool UpgradeFirmware(const std::string& url, const std::string& version = "");
@@ -178,25 +181,10 @@ private:
     void HandleNetworkDisconnectedEvent();
     void HandleActivationDoneEvent();
     void HandleWakeWordDetectedEvent();
-    // Translate board hardware input events into application actions. Board
-    // implementations never include Application or call these methods.
-    void HandleBoardInput(const BoardEvents::InputEvent& event);
-    void HandleBoardWifiConfigHint(const BoardEvents::WifiConfigHintEvent& event);
-    void HandleBoardWakeWord(const BoardEvents::WakeWordEvent& event);
-    void HandleBoardSystemMessage(const BoardEvents::SystemMessageEvent& event);
-    void HandleBoardEmotion(const BoardEvents::EmotionEvent& event);
-    void HandleBoardLocalizedText(const BoardEvents::LocalizedTextEvent& event);
-    void HandleButtonEvent(const BoardEvents::ButtonEvent& event);
-    void InitializeButtonEvents();
+    void ProcessButtonClick(uint8_t click_count);
     void ClearNetworkConfiguration();
-    // 恢复出厂设置：播提示音、擦除全部 NVS，等提示音播完后复位
     void StartFactoryReset();
     void FactoryResetTask();
-    static void OnBoardInputEvent(void* arg, esp_event_base_t event_base,
-                                  int32_t event_id, void* event_data);
-    static void OnBoardButtonEvent(void* arg, esp_event_base_t event_base,
-                                   int32_t event_id, void* event_data);
-
     // Activation task (runs in background)
     void ActivationTask();
 

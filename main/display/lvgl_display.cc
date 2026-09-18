@@ -1,4 +1,4 @@
-#include "boards/common/board_events.h"
+#include "application.h"
 #include <esp_log.h>
 #include <esp_err.h>
 #include <string>
@@ -131,7 +131,7 @@ void LvglDisplay::UpdateStatusBar(bool update_all) {
 
 #ifndef CONFIG_USE_XIAOLING_MESSAGE_STYLE
     // 非小聆界面仍由 Display 自行更新时间；小聆 Home 页暂不显示时钟。
-    if (BoardEvents::GetRuntimeState() == kDeviceStateIdle) {
+    if (Application::GetInstance().GetDeviceState() == kDeviceStateIdle) {
         if (last_status_update_time_ + std::chrono::seconds(10) < std::chrono::system_clock::now()) {
             // Set status to clock "HH:MM"
             time_t now = time(NULL);
@@ -177,7 +177,7 @@ void LvglDisplay::UpdateStatusBar(bool update_all) {
             if (strcmp(icon, FONT_AWESOME_BATTERY_EMPTY) == 0 && discharging) {
                 if (lv_obj_has_flag(low_battery_popup_, LV_OBJ_FLAG_HIDDEN)) { // Show if low battery popup is hidden
                     lv_obj_remove_flag(low_battery_popup_, LV_OBJ_FLAG_HIDDEN);
-                    BoardEvents::PostInput(BoardEvents::Input::PlayToneRequested, 95);
+                    Application::GetInstance().PlayTone(95);
                 }
             } else {
                 // Hide the low battery popup when the battery is not empty
@@ -193,7 +193,7 @@ void LvglDisplay::UpdateStatusBar(bool update_all) {
     static int seconds_counter = 0;
     if (update_all || seconds_counter++ % 10 == 0) {
         // Don't read 4G network status during firmware upgrade to avoid occupying UART resources
-        auto device_state = BoardEvents::GetRuntimeState();
+        auto device_state = Application::GetInstance().GetDeviceState();
         static const std::vector<DeviceState> allowed_states = {
             kDeviceStateIdle,
             kDeviceStateStarting,

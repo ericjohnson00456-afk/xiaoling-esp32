@@ -2,6 +2,7 @@
 
 #include <button_gpio.h>
 #include <esp_log.h>
+#include <utility>
 
 #define TAG "Button"
 
@@ -112,7 +113,7 @@ void Button::OnMultipleClick(std::function<void()> callback, uint8_t click_count
     if (button_handle_ == nullptr) {
         return;
     }
-    on_multiple_click_ = callback;
+    on_multiple_click_[click_count] = std::move(callback);
     button_event_args_t event_args = {
         .multiple_clicks = {
             .clicks = click_count
@@ -120,8 +121,10 @@ void Button::OnMultipleClick(std::function<void()> callback, uint8_t click_count
     };
     iot_button_register_cb(button_handle_, BUTTON_MULTIPLE_CLICK, &event_args, [](void* handle, void* usr_data) {
         Button* button = static_cast<Button*>(usr_data);
-        if (button->on_multiple_click_) {
-            button->on_multiple_click_();
+        const auto click_count = iot_button_get_repeat(static_cast<button_handle_t>(handle));
+        const auto callback = button->on_multiple_click_.find(click_count);
+        if (callback != button->on_multiple_click_.end() && callback->second) {
+            callback->second();
         }
     }, this);
 }

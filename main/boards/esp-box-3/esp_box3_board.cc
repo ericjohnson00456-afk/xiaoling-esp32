@@ -70,23 +70,24 @@ private:
     }
 
     void InitializeButtons() {
-        boot_button_.OnClick([this]() {
-            auto& app = Application::GetInstance();
-            if (app.GetDeviceState() == kDeviceStateStarting) {
-                EnterWifiConfigMode();
-                return;
-            }
-            app.ToggleChatState();
+        boot_button_.OnClick([]() {
+            Application::GetInstance().HandleButtonClick(1);
         });
-
-#if CONFIG_USE_DEVICE_AEC
         boot_button_.OnDoubleClick([]() {
-            auto& app = Application::GetInstance();
-            if (app.GetDeviceState() == kDeviceStateIdle) {
-                app.SetAecMode(app.GetAecMode() == kAecOff ? kAecOnDeviceSide : kAecOff);
-            }
+            Application::GetInstance().HandleButtonClick(2);
         });
-#endif
+        boot_button_.OnMultipleClick([]() {
+            Application::GetInstance().HandleButtonClick(3);
+        }, 3);
+        boot_button_.OnMultipleClick([]() {
+            Application::GetInstance().HandleButtonClick(4);
+        }, 4);
+        boot_button_.OnMultipleClick([]() {
+            Application::GetInstance().HandleButtonClick(5);
+        }, 5);
+        boot_button_.OnMultipleClick([]() {
+            Application::GetInstance().HandleButtonClick(8);
+        }, 8);
     }
 
     void InitializeIli9341Display() {

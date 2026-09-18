@@ -27,8 +27,7 @@ enum DeviceState {
 };
 
 // 设备状态的唯一数据源：校验状态转移、通知订阅者。
-// application 是唯一写者；LED/显示/板卡通过 GetState() 或
-// BoardEvents::GetRuntimeState() 只读。
+// application 是唯一写者；LED、显示和板卡通过 GetState() 只读。
 class DeviceStatus final {
 public:
     // 订阅者也是进程级单例；保持到固件进程结束，避免静态析构顺序问题。

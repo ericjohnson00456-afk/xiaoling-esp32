@@ -7,6 +7,7 @@
 #include <button_adc.h>
 #include <button_gpio.h>
 #include <functional>
+#include <unordered_map>
 
 class Button {
 public:
@@ -31,7 +32,7 @@ protected:
     std::function<void()> on_long_press_;
     std::function<void()> on_click_;
     std::function<void()> on_double_click_;
-    std::function<void()> on_multiple_click_;
+    std::unordered_map<uint8_t, std::function<void()>> on_multiple_click_;
 };
 
 #if CONFIG_SOC_ADC_SUPPORTED

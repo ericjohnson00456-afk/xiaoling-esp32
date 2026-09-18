@@ -98,13 +98,6 @@ bool Application::SetDeviceState(DeviceState state) {
 void Application::Initialize() {
     auto& board = Board::GetInstance();
 
-    // Board input is delivered through the default esp_event loop.  This
-    // keeps button callbacks in the board layer free from application/UI
-    // dependencies and also gives us one place to apply device-state rules.
-    ESP_ERROR_CHECK(esp_event_handler_register(
-        BOARD_EVENT, ESP_EVENT_ANY_ID, &Application::OnBoardInputEvent, this));
-    InitializeButtonEvents();
-
     SetDeviceState(kDeviceStateStarting);
 
     // UIApp owns display binding and page initialization; Application only
@@ -273,145 +266,6 @@ void Application::Initialize() {
     // Serial debug shell (independent module, failure is non-fatal)
     if (!SerialShell::GetInstance().Initialize()) {
         ESP_LOGW(TAG, "Serial shell initialization failed");
-    }
-}
-
-void Application::OnBoardInputEvent(void* arg, esp_event_base_t event_base,
-                                    int32_t event_id, void* event_data) {
-    (void)event_base;
-    (void)event_id;
-    auto* app = static_cast<Application*>(arg);
-    if (app == nullptr || event_data == nullptr) {
-        return;
-    }
-    if (event_id == BoardEvents::kButton) {
-        return;
-    }
-    if (event_id == BoardEvents::kInput) {
-        const auto event = *static_cast<const BoardEvents::InputEvent*>(event_data);
-        app->Schedule([app, event]() { app->HandleBoardInput(event); });
-    } else if (event_id == BoardEvents::kWifiConfigHint) {
-        const auto event = *static_cast<const BoardEvents::WifiConfigHintEvent*>(event_data);
-        app->Schedule([app, event]() { app->HandleBoardWifiConfigHint(event); });
-    } else if (event_id == BoardEvents::kWakeWordDetected) {
-        const auto event = *static_cast<const BoardEvents::WakeWordEvent*>(event_data);
-        app->Schedule([app, event]() { app->HandleBoardWakeWord(event); });
-    } else if (event_id == BoardEvents::kSystemMessage) {
-        const auto event = *static_cast<const BoardEvents::SystemMessageEvent*>(event_data);
-        app->Schedule([app, event]() { app->HandleBoardSystemMessage(event); });
-    } else if (event_id == BoardEvents::kEmotion) {
-        const auto event = *static_cast<const BoardEvents::EmotionEvent*>(event_data);
-        app->Schedule([app, event]() { app->HandleBoardEmotion(event); });
-    } else if (event_id == BoardEvents::kLocalizedText) {
-        const auto event = *static_cast<const BoardEvents::LocalizedTextEvent*>(event_data);
-        app->Schedule([app, event]() { app->HandleBoardLocalizedText(event); });
-    }
-}
-
-void Application::HandleBoardWifiConfigHint(const BoardEvents::WifiConfigHintEvent& event) {
-    UiEvents::PostWifiConfigHint(event.ssid, event.url);
-    PlayTone(70);
-}
-
-void Application::HandleBoardWakeWord(const BoardEvents::WakeWordEvent& event) {
-    WakeWordInvoke(event.wake_word);
-}
-
-void Application::HandleBoardSystemMessage(const BoardEvents::SystemMessageEvent& event) {
-    UiEvents::PostChatMessage(event.role, event.content);
-}
-
-void Application::HandleBoardEmotion(const BoardEvents::EmotionEvent& event) {
-    UiEvents::PostEmotion(event.emotion);
-}
-
-void Application::HandleBoardLocalizedText(const BoardEvents::LocalizedTextEvent& event) {
-    const auto key = event.key == BoardEvents::LocalizedText::Error
-                         ? UiEvents::TextKey::Error
-                         : UiEvents::TextKey::PleaseWait;
-    UiEvents::PostLocalizedText(key);
-}
-
-void Application::HandleBoardInput(const BoardEvents::InputEvent& event) {
-    auto& board = Board::GetInstance();
-    switch (event.input) {
-        case BoardEvents::Input::PrimaryClick:
-            if (GetDeviceState() == kDeviceStateStarting && board.EnterNetworkConfigMode()) {
-                return;
-            }
-            ToggleChatState();
-            break;
-        case BoardEvents::Input::PrimaryDoubleClick:
-            if (GetDeviceState() == kDeviceStateStarting ||
-                GetDeviceState() == kDeviceStateWifiConfiguring) {
-                board.SwitchNetworkType();
-            }
-            break;
-        case BoardEvents::Input::TouchDown:
-            StartListening();
-            break;
-        case BoardEvents::Input::TouchUp:
-            StopListening();
-            break;
-        case BoardEvents::Input::VolumeUp:
-        case BoardEvents::Input::VolumeDown:
-            UiEvents::PostVolume(event.value);
-            break;
-        case BoardEvents::Input::VolumeUpLongPress:
-            UiEvents::PostVolumeMax();
-            break;
-        case BoardEvents::Input::VolumeDownLongPress:
-            UiEvents::PostVolumeMuted();
-            break;
-        case BoardEvents::Input::PowerSaveOn:
-            UiEvents::PostPowerSaveMode(true);
-            break;
-        case BoardEvents::Input::PowerSaveOff:
-            UiEvents::PostPowerSaveMode(false);
-            break;
-        case BoardEvents::Input::StatusBarRefresh:
-            UiEvents::PostStatusBarUpdate(event.value != 0);
-            break;
-        case BoardEvents::Input::NetworkSwitchTo4G:
-            UiEvents::PostNotification(UiEvents::Notification::SwitchTo4G);
-            break;
-        case BoardEvents::Input::NetworkSwitchToWifi:
-            UiEvents::PostNotification(UiEvents::Notification::SwitchToWifi);
-            break;
-        case BoardEvents::Input::RebootRequested:
-            vTaskDelay(pdMS_TO_TICKS(1000));
-            Reboot();
-            break;
-        case BoardEvents::Input::WifiConfigNotification:
-            UiEvents::PostNotification(UiEvents::Notification::EnteringWifiConfigMode);
-            break;
-        case BoardEvents::Input::EnterWifiConfigState:
-            SetDeviceState(kDeviceStateWifiConfiguring);
-            break;
-        case BoardEvents::Input::EnterIdleState:
-            SetDeviceState(kDeviceStateIdle);
-            break;
-        case BoardEvents::Input::ResetProtocolRequested:
-            ResetXiaolingConn();
-            break;
-        case BoardEvents::Input::AecToggle:
-            SetAecMode(aec_mode_ == kAecOff ? kAecOnDeviceSide : kAecOff);
-            break;
-        case BoardEvents::Input::AecSet:
-            SetAecMode(static_cast<AecMode>(event.value));
-            break;
-        case BoardEvents::Input::PlayToneRequested:
-            PlayTone(static_cast<uint16_t>(event.value));
-            break;
-        case BoardEvents::Input::VolumeChanged:
-            UiEvents::PostVolume(event.value, event.percent);
-            break;
-        case BoardEvents::Input::VolumeMax:
-            UiEvents::PostVolumeMax();
-            break;
-        case BoardEvents::Input::VolumeMuted:
-            UiEvents::PostVolumeMuted();
-            break;
     }
 }
 
@@ -1048,7 +902,7 @@ void Application::HandleWakeWordDetectedEvent() {
 
 void Application::PublishWifiIcon() {
     std::string icon;
-    if (BoardEvents::GetRuntimeState() == kDeviceStateWifiConfiguring) {
+    if (GetDeviceState() == kDeviceStateWifiConfiguring) {
         icon = FONT_AWESOME_WIFI_SLASH;
     } else if (const char* network_icon = Board::GetInstance().GetNetworkStateIcon();
                network_icon != nullptr) {
