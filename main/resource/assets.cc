@@ -4,17 +4,132 @@
 #include "application.h"
 #include "lvgl_theme.h"
 #include "display/lcd_display.h"
+#include "audio/wake_words/micro_wake_word/config.h"
 
 #include <esp_log.h>
 #include <esp_timer.h>
+#include <mbedtls/md5.h>
 #include <cbin_font.h>
 
 #include <algorithm>
+#include <cstring>
 #include <memory>
 #include <new>
 #include <vector>
+#include <array>
 
 #define TAG "Assets"
+
+namespace {
+
+bool HasSuffix(const std::string& value, const char* suffix) {
+    const size_t suffix_size = std::strlen(suffix);
+    return value.size() >= suffix_size &&
+           value.compare(value.size() - suffix_size, suffix_size, suffix) == 0;
+}
+
+std::string ReplaceJsonSuffixWithModel(const std::string& descriptor_path) {
+    if (!HasSuffix(descriptor_path, ".json")) {
+        return {};
+    }
+    return descriptor_path.substr(0, descriptor_path.size() - 5) + ".tflite";
+}
+
+bool ParseMicroWakeWordConfig(const cJSON* descriptor, MicroWakeWordConfig& config) {
+    const cJSON* micro = cJSON_GetObjectItemCaseSensitive(descriptor, "micro");
+    if (micro == nullptr) {
+        return true;
+    }
+    if (!cJSON_IsObject(micro)) {
+        ESP_LOGW(TAG, "Ignoring invalid wake-word micro configuration");
+        return true;
+    }
+
+    const cJSON* cutoff = cJSON_GetObjectItemCaseSensitive(micro, "probability_cutoff");
+    if (cJSON_IsNumber(cutoff) && cutoff->valuedouble > 0.0 && cutoff->valuedouble <= 1.0) {
+        config.probability_cutoff = static_cast<float>(cutoff->valuedouble);
+    }
+
+    const cJSON* sliding = cJSON_GetObjectItemCaseSensitive(micro, "sliding_window_size");
+    if (cJSON_IsNumber(sliding) && sliding->valuedouble >= 1.0 &&
+        sliding->valuedouble <= 64.0) {
+        config.sliding_window_size = static_cast<size_t>(sliding->valuedouble);
+    }
+
+    const cJSON* step = cJSON_GetObjectItemCaseSensitive(micro, "feature_step_size");
+    if (cJSON_IsNumber(step) && step->valuedouble >= 1.0 && step->valuedouble <= 100.0) {
+        config.feature_step_size = static_cast<uint8_t>(step->valuedouble);
+    }
+
+    const cJSON* arena = cJSON_GetObjectItemCaseSensitive(micro, "tensor_arena_size");
+    if (cJSON_IsNumber(arena) && arena->valuedouble >= 16.0 * 1024.0 &&
+        arena->valuedouble <= 1024.0 * 1024.0) {
+        config.tensor_arena_size = static_cast<size_t>(arena->valuedouble);
+    }
+    return true;
+}
+
+bool LoadWakeWordPair(AssetStore& wake_assets, const std::string& descriptor_path) {
+    void* descriptor_data = nullptr;
+    size_t descriptor_size = 0;
+    if (!wake_assets.GetAssetData(descriptor_path, descriptor_data, descriptor_size)) {
+        return false;
+    }
+
+    cJSON* descriptor = cJSON_ParseWithLength(
+        static_cast<char*>(descriptor_data), descriptor_size);
+    if (descriptor == nullptr) {
+        ESP_LOGW(TAG, "Invalid wake-word descriptor: %s", descriptor_path.c_str());
+        return false;
+    }
+
+    const cJSON* wake_word = cJSON_GetObjectItemCaseSensitive(descriptor, "wake_word");
+    if (!cJSON_IsString(wake_word) || wake_word->valuestring == nullptr) {
+        ESP_LOGW(TAG, "Wake-word descriptor has no wake_word: %s", descriptor_path.c_str());
+        cJSON_Delete(descriptor);
+        return false;
+    }
+
+    MicroWakeWordConfig config;
+    config.wake_word = wake_word->valuestring;
+    ParseMicroWakeWordConfig(descriptor, config);
+    std::string model_path = ReplaceJsonSuffixWithModel(descriptor_path);
+    void* model_data = nullptr;
+    size_t model_size = 0;
+    bool model_found = !model_path.empty() &&
+                       wake_assets.GetAssetData(model_path, model_data, model_size);
+
+    // Keep compatibility with descriptors whose model field points to a
+    // differently named file, while preferring the same-stem pair.
+    if (!model_found) {
+        const cJSON* model = cJSON_GetObjectItemCaseSensitive(descriptor, "model");
+        if (cJSON_IsString(model) && model->valuestring != nullptr) {
+            model_path = model->valuestring;
+            if (model_path.empty() || model_path.front() != '/') {
+                const size_t slash = descriptor_path.find_last_of('/');
+                model_path = descriptor_path.substr(0, slash + 1) + model_path;
+            }
+            model_found = wake_assets.GetAssetData(model_path, model_data, model_size);
+        }
+    }
+
+    if (model_found && model_data != nullptr && model_size != 0) {
+        Application::GetInstance().GetAudioService().SetMicroWakeWordModel(
+            model_data, model_size, config.wake_word, config);
+        ESP_LOGI(TAG, "Loaded MWW model from %s (%s, cutoff=%.3f, window=%u, step=%u, arena=%u)",
+                 model_path.c_str(), config.wake_word.c_str(), config.probability_cutoff,
+                 static_cast<unsigned>(config.sliding_window_size),
+                 static_cast<unsigned>(config.feature_step_size),
+                 static_cast<unsigned>(config.tensor_arena_size));
+        cJSON_Delete(descriptor);
+        return true;
+    }
+
+    cJSON_Delete(descriptor);
+    return false;
+}
+
+}  // namespace
 
 bool Assets::Apply() {
     void* ptr = nullptr;
@@ -59,20 +174,42 @@ bool Assets::Apply() {
         }
     } else {
         auto& wake_assets = WakeWordStore();
-        std::string model_path;
-        std::string wake_word;
-        if (wake_assets.GetAssetData("/index.json", ptr, size)) {
+        std::vector<std::string> wake_files;
+        bool loaded = false;
+        if (wake_assets.ListAssetFiles("/", wake_files)) {
+            std::sort(wake_files.begin(), wake_files.end());
+            for (const auto& path : wake_files) {
+                if (HasSuffix(path, ".json") && LoadWakeWordPair(wake_assets, path)) {
+                    loaded = true;
+                    break;
+                }
+            }
+        }
+
+        // Compatibility with the previous split-resource manifest format.
+        if (!loaded && wake_assets.GetAssetData("/index.json", ptr, size)) {
             cJSON* wake_index = cJSON_ParseWithLength(static_cast<char*>(ptr), size);
             const cJSON* model = wake_index ? cJSON_GetObjectItem(wake_index, "model") : nullptr;
             const cJSON* name = wake_index ? cJSON_GetObjectItem(wake_index, "wake_word") : nullptr;
-            if (cJSON_IsString(model)) model_path = "/" + std::string(model->valuestring);
-            if (cJSON_IsString(name)) wake_word = name->valuestring;
+            if (cJSON_IsString(model) && cJSON_IsString(name)) {
+                std::string model_path = model->valuestring;
+                if (model_path.empty() || model_path.front() != '/') {
+                    model_path = "/" + model_path;
+                }
+                if (wake_assets.GetAssetData(model_path, ptr, size) && ptr != nullptr && size != 0) {
+                    MicroWakeWordConfig config;
+                    config.wake_word = name->valuestring;
+                    if (wake_index != nullptr) {
+                        ParseMicroWakeWordConfig(wake_index, config);
+                    }
+                    Application::GetInstance().GetAudioService().SetMicroWakeWordModel(
+                        ptr, size, config.wake_word, config);
+                    loaded = true;
+                }
+            }
             cJSON_Delete(wake_index);
         }
-        if (!model_path.empty() && wake_assets.GetAssetData(model_path, ptr, size) && ptr != nullptr && size != 0) {
-            Application::GetInstance().GetAudioService().SetMicroWakeWordModel(ptr, size, wake_word);
-            ESP_LOGI(TAG, "Loaded MWW model from wake_word partition: %s (%s)", model_path.c_str(), wake_word.c_str());
-        } else {
+        if (!loaded) {
             ESP_LOGE(TAG, "The wake_word resource manifest or MWW model is missing");
         }
     }
@@ -277,6 +414,60 @@ bool Assets::Download(std::string url,
 
 bool Assets::DownloadResource(Resource resource, std::string url,
                               std::function<void(int progress, size_t speed)> progress_callback) {
+    return DownloadResource(resource, url, 0, {}, std::move(progress_callback));
+}
+
+bool Assets::VerifyResource(Resource resource, size_t expected_size,
+                            const std::array<uint8_t, 16>& expected_md5) {
+    AssetStore* target = this;
+    switch (resource) {
+        case Resource::Respak: target = this; break;
+        case Resource::Tone: target = &tone_store_; break;
+        case Resource::Emoji: target = &emoji_store_; break;
+        case Resource::WakeWord: target = &wake_word_store_; break;
+    }
+    if (target != this && !target->partition_valid()) {
+        target->Mount();
+    }
+    const esp_partition_t* partition = target->partition();
+    if (partition == nullptr || expected_size == 0 || expected_size > partition->size) {
+        ESP_LOGE(TAG, "Invalid resource partition or expected size: %u",
+                 static_cast<unsigned>(expected_size));
+        return false;
+    }
+
+    constexpr size_t kBufferSize = 4096;
+    std::unique_ptr<uint8_t[]> buffer(new (std::nothrow) uint8_t[kBufferSize]);
+    if (!buffer) {
+        return false;
+    }
+
+    mbedtls_md5_context md5;
+    mbedtls_md5_init(&md5);
+    mbedtls_md5_starts(&md5);
+    size_t offset = 0;
+    bool success = true;
+    while (offset < expected_size) {
+        const size_t chunk = std::min(kBufferSize, expected_size - offset);
+        if (esp_partition_read(partition, offset, buffer.get(), chunk) != ESP_OK) {
+            success = false;
+            break;
+        }
+        mbedtls_md5_update(&md5, buffer.get(), chunk);
+        offset += chunk;
+    }
+    std::array<uint8_t, 16> actual{};
+    mbedtls_md5_finish(&md5, actual.data());
+    mbedtls_md5_free(&md5);
+    success = success && actual == expected_md5;
+    ESP_LOGI(TAG, "Resource %s (%u bytes)", success ? "is current" : "needs update",
+             static_cast<unsigned>(expected_size));
+    return success;
+}
+
+bool Assets::DownloadResource(Resource resource, const std::string& url, size_t expected_size,
+                              const std::array<uint8_t, 16>& expected_md5,
+                              std::function<void(int progress, size_t speed)> progress_callback) {
     AssetStore* target = this;
     switch (resource) {
         case Resource::Respak: target = this; break;
@@ -289,7 +480,7 @@ bool Assets::DownloadResource(Resource resource, std::string url,
     }
     // Never write a tone/emoji/wake-word URL into the legacy respak/assets
     // partition when a split partition has not been flashed yet.
-    if (target != this && !target->partition_valid()) {
+    if (target != this && target->partition() == nullptr) {
         ESP_LOGE(TAG, "Split resource partition is unavailable");
         return false;
     }
@@ -307,7 +498,8 @@ bool Assets::DownloadResource(Resource resource, std::string url,
     }
     const size_t content_length = http->GetBodyLength();
     if (content_length == 0 || target->partition() == nullptr ||
-        content_length > target->partition()->size) {
+        content_length > target->partition()->size ||
+        (expected_size != 0 && content_length != expected_size)) {
         ESP_LOGE(TAG, "Invalid resource size: %u", static_cast<unsigned>(content_length));
         http->Close();
         target->Mount();
@@ -322,17 +514,38 @@ bool Assets::DownloadResource(Resource resource, std::string url,
     if (esp_partition_erase_range(target->partition(), 0, erase_size) != ESP_OK) {
         http->Close(); target->Mount(); return false;
     }
+    mbedtls_md5_context md5;
+    mbedtls_md5_init(&md5);
+    mbedtls_md5_starts(&md5);
     size_t written = 0;
+    size_t recent_read = 0;
+    int64_t last_report_time = esp_timer_get_time();
     while (written < content_length) {
         int ret = http->Read(buffer.get(), std::min(kBufferSize, content_length - written));
         if (ret <= 0 || esp_partition_write(target->partition(), written, buffer.get(), ret) != ESP_OK) {
             ESP_LOGE(TAG, "Resource download/write failed at %u", static_cast<unsigned>(written));
+            mbedtls_md5_free(&md5);
             http->Close(); target->Mount(); return false;
         }
+        mbedtls_md5_update(&md5, reinterpret_cast<const uint8_t*>(buffer.get()), ret);
         written += static_cast<size_t>(ret);
-        if (progress_callback) progress_callback(static_cast<int>(written * 100 / content_length), ret);
+        recent_read += static_cast<size_t>(ret);
+        const int64_t now = esp_timer_get_time();
+        if (progress_callback && (now - last_report_time >= 1000000 || written == content_length)) {
+            progress_callback(static_cast<int>(written * 100 / content_length), recent_read);
+            last_report_time = now;
+            recent_read = 0;
+        }
     }
     http->Close();
+    std::array<uint8_t, 16> actual{};
+    mbedtls_md5_finish(&md5, actual.data());
+    mbedtls_md5_free(&md5);
+    if (expected_size != 0 && actual != expected_md5) {
+        ESP_LOGE(TAG, "Downloaded resource MD5 mismatch");
+        target->Mount();
+        return false;
+    }
     if (!target->Mount()) return false;
     return true;
 }

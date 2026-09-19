@@ -22,6 +22,7 @@
 #include "opus_encoder/opus_wb_encoder.h"
 #include "processors/audio_debugger.h"
 #include "wake_word.h"
+#include "wake_words/micro_wake_word/config.h"
 #include "xiaoling/xiaoling_types.h"
 
 
@@ -123,7 +124,8 @@ public:
     void ResetDecoder();
 #if CONFIG_USE_MICRO_WAKE_WORD
     void SetMicroWakeWordModel(const void* model_data, size_t model_size,
-                               const std::string& wake_word = {});
+                               const std::string& wake_word = {},
+                               const MicroWakeWordConfig& config = {});
 #else // !CONFIG_USE_MICRO_WAKE_WORD
     void SetModelsList(srmodel_list_t* models_list);
 #endif // CONFIG_USE_MICRO_WAKE_WORD

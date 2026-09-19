@@ -1,4 +1,4 @@
-#include "system.h"
+#include "reboot.h"
 
 #include <cstdio>
 
@@ -16,7 +16,7 @@ int HandleRebootCommand(int, char**) {
 
 }  // namespace
 
-esp_err_t RegisterSystemCommands() {
+esp_err_t RegisterRebootCommand() {
     const esp_console_cmd_t command = {
         .command = "reboot",
         .help = "Restart the device",

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
 #include <functional>
 #include <string>
 
@@ -62,6 +63,7 @@ void SetLocalizedText(TextKey key);
 void ShowWifiConfigHint(std::string ssid, std::string url);
 void SetPowerSaveMode(bool enabled);
 void SetDuplexMode(DuplexMode mode);
+void ShowUpgradeProgress(std::string target, int progress, size_t speed = 0);
 void NavigateToQrCode();
 void NavigateHome();
 

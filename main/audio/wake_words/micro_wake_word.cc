@@ -14,7 +14,9 @@
 
 #define TAG "MicroWakeWord"
 
-MicroWakeWord::MicroWakeWord(const void* model_data, size_t model_size) : model_data_(model_data), model_size_(model_size) {
+MicroWakeWord::MicroWakeWord(const void* model_data, size_t model_size,
+                             const MicroWakeWordConfig& config)
+    : model_data_(model_data), model_size_(model_size), config_(config) {
     // Initialize ring buffer
     ring_buffer_size_ = BUFFER_SIZE;
     ring_buffer_.resize(ring_buffer_size_);
@@ -42,6 +44,7 @@ bool MicroWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list) {
 
     // Configure audio frontend
     frontend_config_.window.size_ms = FEATURE_DURATION_MS;
+    features_step_size_ = config_.feature_step_size;
     frontend_config_.window.step_size_ms = features_step_size_;
     frontend_config_.filterbank.num_channels = PREPROCESSOR_FEATURE_SIZE;
     frontend_config_.filterbank.lower_band_limit = 125.0;
@@ -79,10 +82,10 @@ bool MicroWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list) {
 
     auto model = std::make_unique<micro_wake_word::WakeWordModel>(
         (const uint8_t *)model_data_,
-        (float)MICRO_WAKE_WORD_MODEL_PROBABILITY_CUTOFF / 100.0f,
-        5,
-        kMicroWakeWordModelWakeWord,
-        128 * 1024);
+        config_.probability_cutoff,
+        config_.sliding_window_size,
+        config_.wake_word.empty() ? kMicroWakeWordModelWakeWord : config_.wake_word,
+        config_.tensor_arena_size);
 
     wake_word_models_.push_back(std::move(model));
 
@@ -491,4 +494,3 @@ size_t MicroWakeWord::GetRingBufferAvailable() {
         return ring_buffer_size_ - ring_buffer_read_pos_ + ring_buffer_write_pos_;
     }
 }
-

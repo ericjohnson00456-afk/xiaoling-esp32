@@ -1,7 +1,9 @@
 #include "serial_shell.h"
 
-#include "cmd/kv.h"
-#include "cmd/system.h"
+#include "cmd/kv/kv_user.h"
+#include "cmd/device.h"
+#include "cmd/reboot.h"
+#include "cmd/wifi.h"
 
 #include <cstdio>
 #include <fcntl.h>
@@ -76,7 +78,13 @@ bool SerialShell::Initialize() {
         ret = RegisterKvCommands();
     }
     if (ret == ESP_OK) {
-        ret = RegisterSystemCommands();
+        ret = RegisterRebootCommand();
+    }
+    if (ret == ESP_OK) {
+        ret = RegisterDeviceCommands();
+    }
+    if (ret == ESP_OK) {
+        ret = RegisterWifiCommands();
     }
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to register shell commands: %s", esp_err_to_name(ret));

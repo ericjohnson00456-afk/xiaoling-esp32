@@ -1,4 +1,4 @@
-#include "kv.h"
+#include "kv_user.h"
 
 #include "settings.h"
 
@@ -23,8 +23,11 @@ void PrintUsage() {
         "  kv show [namespace]\n"
         "  kv clean\n"
         "  kv del <namespace> <key>\n"
+        "  kv set <string|int|bool> <namespace>.<key> <value>\n"
+        "  kv get <string|int|bool> <namespace>.<key>\n"
         "  kv set <string|int|bool> <namespace> <key> <value>\n"
         "  kv get <string|int|bool> <namespace> <key>\n"
+        "  kv ota <show|get|set|help> ...\n"
         "  kv help\n");
 }
 
@@ -190,8 +193,99 @@ int HandleDelete(int argc, char** argv) {
 }
 
 int HandleSet(int argc, char** argv) {
-    if (argc != 5 || !IsType(argv[1]) || !IsValidNvsName(argv[2]) ||
-        !IsValidNvsName(argv[3])) {
+    if ((argc != 4 && argc != 5) || !IsType(argv[1])) {
+        PrintUsage();
+        return 1;
+    }
+
+    // Accept the compact form: kv set int user.disable_tone_update 1.
+    if (argc == 4 && (std::strcmp(argv[1], "int") == 0 ||
+                      std::strcmp(argv[1], "int32") == 0)) {
+        const char* separator = std::strchr(argv[2], '.');
+        if (separator != nullptr && separator != argv[2] && separator[1] != '\0') {
+            const std::string namespace_name(argv[2], separator - argv[2]);
+            const char* key = separator + 1;
+            if (namespace_name == KvUser::kNamespace && std::strcmp(key, "device_mode") == 0) {
+                int32_t value = 0;
+                if (!ParseInt32(argv[3], value)) {
+                    std::printf("invalid int value: %s\n", argv[3]);
+                    return 1;
+                }
+                KvUser::SetDeviceMode(value);
+                std::printf("flash set %s=%ld success\n", KvUser::kDeviceMode,
+                             static_cast<long>(value));
+                return 0;
+            }
+            if (namespace_name == KvUser::kNamespace &&
+                (std::strcmp(argv[2], KvUser::kDisableAppUpdate) == 0 ||
+                 std::strcmp(argv[2], KvUser::kDisableWakewordUpdate) == 0 ||
+                 std::strcmp(argv[2], KvUser::kDisableToneUpdate) == 0 ||
+                 std::strcmp(argv[2], KvUser::kDisableEmojiUpdate) == 0)) {
+                KvOta::UpdateType type;
+                if (std::strcmp(key, "disable_app_update") == 0) type = KvOta::UpdateType::App;
+                else if (std::strcmp(key, "disable_wakeword_update") == 0) type = KvOta::UpdateType::WakeWord;
+                else if (std::strcmp(key, "disable_tone_update") == 0) type = KvOta::UpdateType::Tone;
+                else type = KvOta::UpdateType::Emoji;
+                int32_t value = 0;
+                if (!ParseInt32(argv[3], value)) {
+                    std::printf("invalid int value: %s\n", argv[3]);
+                    return 1;
+                }
+                KvOta::SetDisabled(type, value);
+                std::printf("flash set %s=%ld success\n", KvOta::LogicalKey(type),
+                             static_cast<long>(value));
+                return 0;
+            }
+        }
+        PrintUsage();
+        return 1;
+    }
+
+    if (argc != 5 || !IsValidNvsName(argv[2])) {
+        PrintUsage();
+        return 1;
+    }
+
+    if (std::strcmp(argv[1], "int") == 0 &&
+        std::strcmp(argv[2], KvUser::kNamespace) == 0) {
+        if (std::strcmp(argv[3], "device_mode") == 0) {
+            int32_t value = 0;
+            if (!ParseInt32(argv[4], value)) {
+                std::printf("invalid int value: %s\n", argv[4]);
+                return 1;
+            }
+            KvUser::SetDeviceMode(value);
+            std::printf("flash set %s/%s success\n", argv[2], argv[3]);
+            return 0;
+        }
+        KvOta::UpdateType type;
+        const std::string logical_key = std::string(KvUser::kNamespace) + "." + argv[3];
+        if (logical_key == KvOta::LogicalKey(KvOta::UpdateType::App) ||
+            logical_key == KvOta::LogicalKey(KvOta::UpdateType::WakeWord) ||
+            logical_key == KvOta::LogicalKey(KvOta::UpdateType::Tone) ||
+            logical_key == KvOta::LogicalKey(KvOta::UpdateType::Emoji)) {
+            int32_t value = 0;
+            char* end = nullptr;
+            errno = 0;
+            const long parsed = std::strtol(argv[4], &end, 10);
+            if (errno != 0 || end == argv[4] || *end != '\0' ||
+                parsed < std::numeric_limits<int32_t>::min() ||
+                parsed > std::numeric_limits<int32_t>::max()) {
+                std::printf("invalid int value: %s\n", argv[4]);
+                return 1;
+            }
+            value = static_cast<int32_t>(parsed);
+            if (logical_key == KvOta::LogicalKey(KvOta::UpdateType::App)) type = KvOta::UpdateType::App;
+            else if (logical_key == KvOta::LogicalKey(KvOta::UpdateType::WakeWord)) type = KvOta::UpdateType::WakeWord;
+            else if (logical_key == KvOta::LogicalKey(KvOta::UpdateType::Tone)) type = KvOta::UpdateType::Tone;
+            else type = KvOta::UpdateType::Emoji;
+            KvOta::SetDisabled(type, value);
+            std::printf("flash set %s/%s success\n", argv[2], argv[3]);
+            return 0;
+        }
+    }
+
+    if (!IsValidNvsName(argv[3])) {
         PrintUsage();
         return 1;
     }
@@ -227,8 +321,68 @@ int HandleSet(int argc, char** argv) {
 }
 
 int HandleGet(int argc, char** argv) {
-    if (argc != 4 || !IsType(argv[1]) || !IsValidNvsName(argv[2]) ||
-        !IsValidNvsName(argv[3])) {
+    if ((argc != 3 && argc != 4) || !IsType(argv[1])) {
+        PrintUsage();
+        return 1;
+    }
+
+    // Accept the compact form: kv get int user.disable_tone_update.
+    if (argc == 3 && (std::strcmp(argv[1], "int") == 0 ||
+                      std::strcmp(argv[1], "int32") == 0)) {
+        const char* separator = std::strchr(argv[2], '.');
+        if (separator != nullptr && separator != argv[2] && separator[1] != '\0' &&
+            std::string(argv[2], separator - argv[2]) == "user") {
+            const std::string logical_key = argv[2];
+            const KvOta::UpdateType types[] = {KvOta::UpdateType::App,
+                                                KvOta::UpdateType::WakeWord,
+                                                KvOta::UpdateType::Tone,
+                                                KvOta::UpdateType::Emoji};
+            for (const auto type : types) {
+                if (logical_key == KvOta::LogicalKey(type)) {
+                    std::printf("flash get %s: %ld\n", logical_key.c_str(),
+                                 static_cast<long>(KvOta::GetValue(type)));
+                    return 0;
+                }
+            }
+            if (logical_key == KvUser::kDeviceMode) {
+                std::printf("flash get %s: %ld\n", logical_key.c_str(),
+                            static_cast<long>(KvUser::GetDeviceMode()));
+                return 0;
+            }
+        }
+        PrintUsage();
+        return 1;
+    }
+
+    if (argc != 4 || !IsValidNvsName(argv[2])) {
+        PrintUsage();
+        return 1;
+    }
+
+    if ((std::strcmp(argv[1], "int") == 0 || std::strcmp(argv[1], "int32") == 0) &&
+        std::strcmp(argv[2], "user") == 0) {
+        const std::string logical_key = std::string("user.") + argv[3];
+        if (logical_key == KvUser::kDeviceMode) {
+            std::printf("flash get %s/%s: %ld\n", argv[2], argv[3],
+                        static_cast<long>(KvUser::GetDeviceMode()));
+            return 0;
+        }
+        const KvOta::UpdateType types[] = {KvOta::UpdateType::App,
+                                            KvOta::UpdateType::WakeWord,
+                                            KvOta::UpdateType::Tone,
+                                            KvOta::UpdateType::Emoji};
+        for (const auto type : types) {
+            if (logical_key == KvOta::LogicalKey(type)) {
+                // The OTA module owns the physical key mapping; expose its
+                // value through the dedicated command for this legacy form.
+                std::printf("flash get %s/%s: %d\n", argv[2], argv[3],
+                            KvOta::IsDisabled(type) ? 1 : 0);
+                return 0;
+            }
+        }
+    }
+
+    if (!IsValidNvsName(argv[3])) {
         PrintUsage();
         return 1;
     }
@@ -273,6 +427,9 @@ int HandleKvCommand(int argc, char** argv) {
     if (std::strcmp(argv[1], "get") == 0) {
         return HandleGet(argc - 1, argv + 1);
     }
+    if (std::strcmp(argv[1], "ota") == 0) {
+        return KvOta::HandleKvOtaCommand(argc - 1, argv + 1);
+    }
 
     PrintUsage();
     return 1;
@@ -282,7 +439,7 @@ esp_err_t RegisterKvCommand(const char* name, const char* help) {
     const esp_console_cmd_t command = {
         .command = name,
         .help = help,
-        .hint = "<show|clean|del|set|get|help> ...",
+        .hint = "<show|clean|del|set|get|ota|help> ...",
         .func = HandleKvCommand,
         .argtable = nullptr,
         .func_w_context = nullptr,
@@ -292,6 +449,20 @@ esp_err_t RegisterKvCommand(const char* name, const char* help) {
 }
 
 }  // namespace
+
+namespace KvUser {
+
+int32_t GetDeviceMode() {
+    Settings settings(KvUser::kNamespace, false);
+    return settings.GetInt("device_mode", 0);
+}
+
+void SetDeviceMode(int32_t value) {
+    Settings settings(KvUser::kNamespace, true);
+    settings.SetInt("device_mode", value);
+}
+
+}  // namespace KvUser
 
 esp_err_t RegisterKvCommands() {
     return RegisterKvCommand("kv", "Read and write NVS key-value settings");

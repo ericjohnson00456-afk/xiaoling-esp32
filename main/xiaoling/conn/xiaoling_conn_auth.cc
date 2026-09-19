@@ -98,7 +98,7 @@ bool XiaolingConn::EnsureAuthenticated() {
 }
 
 bool XiaolingConn::Authenticate(const std::string& extra_code) {
-    const std::string url = XiaolingConfig::kTokenUrl;
+    const std::string url = XiaolingConfig::GetTokenUrl();
     const auto product_id = SystemInfo::GetProductId();
     const auto device_id = SystemInfo::GetCloudDeviceId();
     const auto secret_id = SystemInfo::GetSecretId();

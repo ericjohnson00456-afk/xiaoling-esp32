@@ -4,6 +4,7 @@
 #include "display/display.h"
 #include "ui/i18n/lang_config.h"
 #include "system/system_info.h"
+#include "shell/cmd/kv/kv_user.h"
 #include "settings.h"
 #include "application.h"
 
@@ -29,15 +30,31 @@
 
 extern const char xl_ble_prov_png_start[] asm("_binary_xl_ble_prov_png_start");
 extern const char xl_ble_prov_png_end[] asm("_binary_xl_ble_prov_png_end");
+extern const char xl_ble_prov_staging_png_start[] asm("_binary_xl_ble_prov_staging_png_start");
+extern const char xl_ble_prov_staging_png_end[] asm("_binary_xl_ble_prov_staging_png_end");
+
+void GetProvisioningImage(const char*& start, const char*& end) {
+    if (KvUser::GetDeviceMode() == 1) {
+        start = xl_ble_prov_staging_png_start;
+        end = xl_ble_prov_staging_png_end;
+    } else {
+        // Integration currently reuses the production provisioning QR code.
+        start = xl_ble_prov_png_start;
+        end = xl_ble_prov_png_end;
+    }
+}
 #endif
 
 #if CONFIG_LSPLATFORM
 std::unique_ptr<LvglImage> WifiBoard::GetProvisioningQRCode(std::string& message) {
 #ifdef CONFIG_PROV_MODE_BLE
     message = Lang::Strings::BLUFI_CONFIG_INSTRUCTIONS;
+    const char* image_start = nullptr;
+    const char* image_end = nullptr;
+    GetProvisioningImage(image_start, image_end);
     return std::make_unique<LvglRawImage>(
-        (void*)xl_ble_prov_png_start,
-        (size_t)(xl_ble_prov_png_end - xl_ble_prov_png_start));
+        (void*)image_start,
+        (size_t)(image_end - image_start));
 #else
     message.clear();
     return nullptr;
@@ -214,8 +231,11 @@ void WifiBoard::StartWifiConfigMode() {
 
     // 配网提示界面与提示音由应用层资源提供
     Assets::GetInstance().Apply();
-    auto qrcode = std::make_unique<LvglRawImage>((void *)xl_ble_prov_png_start,
-                                                 (size_t)(xl_ble_prov_png_end - xl_ble_prov_png_start));
+    const char* image_start = nullptr;
+    const char* image_end = nullptr;
+    GetProvisioningImage(image_start, image_end);
+    auto qrcode = std::make_unique<LvglRawImage>((void *)image_start,
+                                                 (size_t)(image_end - image_start));
     auto display = Board::GetInstance().GetDisplay();
     display->ShowActivation(std::move(qrcode), Lang::Strings::BLUFI_CONFIG_INSTRUCTIONS);
     // 配网提示音由应用层根据当前语言从 ROMFS 加载。

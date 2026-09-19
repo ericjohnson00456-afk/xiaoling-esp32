@@ -111,7 +111,7 @@ std::string XiaolingConn::BuildWebSocketUrl() const {
         return {};
     }
 
-    std::string base_url = XiaolingConfig::kWebSocketUrl;
+    std::string base_url = XiaolingConfig::GetWebSocketUrl();
     while (!base_url.empty() && base_url.back() == '/') {
         base_url.pop_back();
     }

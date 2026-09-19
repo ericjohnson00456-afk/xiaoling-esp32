@@ -7,12 +7,14 @@
 #include "ui/i18n/lang_config.h"
 #include "ui/screens/home/home_presenter.h"
 #include "ui/screens/qrcode/qrcode_presenter.h"
+#include "ui/screens/upgrade/upgrade_presenter.h"
 #include "ui/ui_manager.h"
 #include "ui/ui_page_ids.h"
 
 #include <esp_log.h>
 
 #include <string>
+#include <cstdio>
 #include <optional>
 #include <utility>
 
@@ -165,6 +167,7 @@ bool Initialize() {
 
     if (ui.RegisterScreen(&HomePresenter::Screen()) != 0 ||
         ui.RegisterScreen(&QrCodePresenter::Screen()) != 0 ||
+        ui.RegisterScreen(&UpgradePresenter::Screen()) != 0 ||
         ui.SetDefaultScreen(UI_PAGE_HOME) != 0) {
         return false;
     }
@@ -338,6 +341,23 @@ void SetPowerSaveMode(bool enabled) {
 void SetDuplexMode(DuplexMode mode) {
     UiManager::GetInstance().Dispatch([mode]() {
         HomePresenter::GetInstance().SetDuplexMode(mode);
+    });
+}
+
+void ShowUpgradeProgress(std::string target, int progress, size_t speed) {
+    UiManager::GetInstance().Dispatch([target = std::move(target), progress, speed]() mutable {
+        auto& manager = UiManager::GetInstance();
+        if (manager.lvgl_display() != nullptr) {
+            auto& presenter = UpgradePresenter::GetInstance();
+            presenter.SetProgress(std::move(target), progress, speed);
+            if (manager.TopScreenId() != UI_PAGE_UPGRADE) {
+                manager.NavigateTo(UI_PAGE_UPGRADE);
+            }
+        } else if (auto* display = manager.display(); display != nullptr) {
+            char text[80];
+            std::snprintf(text, sizeof(text), "%s %d%%", target.c_str(), progress);
+            display->SetChatMessage("system", text);
+        }
     });
 }
 

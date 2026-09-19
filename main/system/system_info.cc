@@ -1,5 +1,6 @@
 #include "system_info.h"
 #include "xiaoling/conn/xiaoling_config.h"
+#include "shell/settings.h"
 
 #include <freertos/task.h>
 #include <esp_log.h>
@@ -57,6 +58,11 @@ std::string SystemInfo::GetUserAgent() {
 
 #ifdef CONFIG_LSPLATFORM
 std::string SystemInfo::GetProductId() {
+    Settings settings("user", false);
+    const std::string stored = settings.GetString("pid");
+    if (!stored.empty()) {
+        return stored;
+    }
 #if defined(CONFIG_LSPLATFORM_PRODUCT_ID_BUILTIN)
     return std::string(CONFIG_LSPLATFORM_BUILTIN_PRODUCT_ID);
 #elif defined(CONFIG_LSPLATFORM_PRODUCT_ID_CUSTOM)
@@ -65,6 +71,11 @@ std::string SystemInfo::GetProductId() {
 }
 
 std::string SystemInfo::GetSecretId() {
+    Settings settings("user", false);
+    const std::string stored = settings.GetString("sid");
+    if (!stored.empty()) {
+        return stored;
+    }
     return std::string(CONFIG_LSCHAT_SECRET_ID);
 }
 

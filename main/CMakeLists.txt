@@ -64,18 +64,19 @@ file(GLOB UI_SOURCES
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/*.cc"
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/compat/*.cc"
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/screens/home/*.cc"
-     "${CMAKE_CURRENT_SOURCE_DIR}/ui/screens/qrcode/*.cc")
+     "${CMAKE_CURRENT_SOURCE_DIR}/ui/screens/qrcode/*.cc"
+     "${CMAKE_CURRENT_SOURCE_DIR}/ui/screens/upgrade/*.cc")
 list(APPEND SOURCES ${UI_SOURCES})
 
 # Shell commands are split by function under shell/cmd.
-file(GLOB SHELL_CMD_SOURCES
+file(GLOB_RECURSE SHELL_CMD_SOURCES
      "${CMAKE_CURRENT_SOURCE_DIR}/shell/cmd/*.cc")
 list(APPEND SOURCES ${SHELL_CMD_SOURCES})
 
 set(INCLUDE_DIRS "."
                  "ui/themes" "ui/utils/font" "ui/utils/image" "ui/utils/emoji" "audio"
                  "player" "player/core" "player/engine" "player/channels" "player/resource" "xiaoling" "xiaoling/session" "xiaoling/conn" "mcp"
-                  "ui" "ui/compat" "ui/screens" "ui/screens/home" "ui/screens/qrcode"
+                  "ui" "ui/compat" "ui/screens" "ui/screens/home" "ui/screens/qrcode" "ui/screens/upgrade"
                   "system" "resource" "shell" "ota")
 
 # Add board common files
@@ -94,7 +95,9 @@ if(CONFIG_PROV_MODE_BLE OR CONFIG_USE_ESP_BLUFI_WIFI_PROVISIONING)
     list(APPEND SOURCES "boards/common/blufi.cpp")
 endif()
 if(CONFIG_PROV_MODE_BLE)
-    set(BLUFI_ASSETS ${CMAKE_CURRENT_SOURCE_DIR}/resource/assets/provisioning/xl_ble_prov.png)
+    set(BLUFI_ASSETS
+        ${CMAKE_CURRENT_SOURCE_DIR}/resource/assets/provisioning/xl_ble_prov.png
+        ${CMAKE_CURRENT_SOURCE_DIR}/resource/assets/provisioning/xl_ble_prov_staging.png)
 endif()
 
 idf_build_get_property(build_components BUILD_COMPONENTS)
@@ -961,6 +964,14 @@ function(build_split_resources)
 
     string(REPLACE "basic" "common" BUILTIN_FONT_FILE "${BUILTIN_TEXT_FONT}.bin")
     set(BUILTIN_FONT_PATH "${XIAOZHI_FONTS_PATH}/cbin/${BUILTIN_FONT_FILE}")
+    set(SPLIT_WAKE_WORD_DESCRIPTOR
+        "${CMAKE_CURRENT_SOURCE_DIR}/audio/wake_words/micro_wake_word/models/${MWW_MODEL_FILE}")
+    string(REGEX REPLACE "\\.tflite$" ".json" SPLIT_WAKE_WORD_DESCRIPTOR
+                         "${SPLIT_WAKE_WORD_DESCRIPTOR}")
+    set(SPLIT_WAKE_WORD_DESCRIPTOR_DEPENDS)
+    if(EXISTS "${SPLIT_WAKE_WORD_DESCRIPTOR}")
+        list(APPEND SPLIT_WAKE_WORD_DESCRIPTOR_DEPENDS "${SPLIT_WAKE_WORD_DESCRIPTOR}")
+    endif()
 
     file(GLOB_RECURSE SPLIT_RESOURCE_FILES
          "${CMAKE_CURRENT_SOURCE_DIR}/resource/assets/*")
@@ -974,6 +985,7 @@ function(build_split_resources)
                 --wake-word-name "${MWW_MODEL_WAKE_WORD}"
         DEPENDS ${PROJECT_DIR}/scripts/build_split_resources.py
                 ${PROJECT_DIR}/scripts/romfs.py ${SPLIT_RESOURCE_FILES}
+                ${SPLIT_WAKE_WORD_DESCRIPTOR_DEPENDS}
         COMMENT "Building split respak/tone/emoji resource images"
         VERBATIM)
     add_custom_target(generated_split_resources ALL

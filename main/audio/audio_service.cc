@@ -998,11 +998,12 @@ void AudioService::CheckAndUpdateAudioPowerState() {
 
 #if CONFIG_USE_MICRO_WAKE_WORD
 void AudioService::SetMicroWakeWordModel(const void* model_data, size_t model_size,
-                                         const std::string& wake_word) {
+                                         const std::string& wake_word,
+                                         const MicroWakeWordConfig& config) {
     static srmodel_list_t models_list = {.num = 0};
     models_list_ = &models_list;
 
-    wake_word_ = std::make_unique<MicroWakeWord>(model_data, model_size);
+    wake_word_ = std::make_unique<MicroWakeWord>(model_data, model_size, config);
     wake_word_name_ = wake_word;
     wake_word_->OnWakeWordDetected([this](const std::string& wake_word) {
         // The callback runs under MicroWakeWord's model lock, so Stop() would

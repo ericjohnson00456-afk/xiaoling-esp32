@@ -3,6 +3,7 @@
 
 #include "wake_word.h"
 #include "audio_codec.h"
+#include "micro_wake_word/config.h"
 #include "micro_wake_word/streaming_model.h"
 #include "micro_wake_word/preprocessor_settings.h"
 
@@ -22,7 +23,8 @@
 
 class MicroWakeWord : public WakeWord {
 public:
-    MicroWakeWord(const void* model_data, size_t model_size);
+    MicroWakeWord(const void* model_data, size_t model_size,
+                  const MicroWakeWordConfig& config = {});
     ~MicroWakeWord();
 
     bool Initialize(AudioCodec* codec, srmodel_list_t* models_list) override;
@@ -40,6 +42,7 @@ public:
 private:
     const void* model_data_;
     size_t model_size_;
+    MicroWakeWordConfig config_;
 
     // Core members
     AudioCodec* codec_ = nullptr;

@@ -16,6 +16,7 @@
 #include "ui/screens/qrcode/qrcode_presenter.h"
 #include "xiaoling/xiaoling_events.h"
 #include "player/resource/tone_model.h"
+#include "shell/cmd/kv/kv_user.h"
 #include "ui/screens/home/home_presenter.h"
 
 #ifdef CONFIG_LSPLATFORM
@@ -23,6 +24,7 @@
 #endif // CONFIG_LSPLATFORM
 
 #include <cstring>
+#include <array>
 #include <esp_log.h>
 #include <esp_system.h>
 #include <nvs_flash.h>
@@ -433,11 +435,21 @@ void Application::ActivationTask() {
         return;
     }
 
-    // Wi-Fi 和 SNTP 就绪后立即建立小聆长连接，连接由独立任务持续维护。
-    InitializeXiaolingConn();
-
-    // OTA 当前只确认运行固件有效并视为最新版本，后续能力统一在 ota/ 中扩展。
+    auto& board = Board::GetInstance();
     ota_ = std::make_unique<Ota>();
+    int battery_level = 0;
+    bool charging = false;
+    bool discharging = false;
+    if (board.GetBatteryLevel(battery_level, charging, discharging) &&
+        discharging && battery_level < 10) {
+        ESP_LOGW(TAG, "Skip OTA on battery at %d%%", battery_level);
+        PlayOtaTone(93);
+        InitializeXiaolingConn();
+        xEventGroupSetBits(event_group_, MAIN_EVENT_ACTIVATION_DONE);
+        return;
+    }
+
+    // 只有 SNTP 完成后才请求 OTA；WebSocket 必须等 APP 和资源检查结束后再建立。
     if (!CheckNewVersion()) {
         ESP_LOGE(TAG, "OTA 启动检查失败，停止连接小聆");
         last_error_message_ = Lang::Strings::SERVER_NOT_CONNECTED;
@@ -445,15 +457,29 @@ void Application::ActivationTask() {
         return;
     }
 
-    CheckAssetsVersion();
+    const esp_err_t resource_check = ota_->CheckResources();
+    if (resource_check != ESP_OK && resource_check != ESP_ERR_NOT_FOUND) {
+        ESP_LOGE(TAG, "Resource OTA metadata check failed; postpone Xiaoling WebSocket connection");
+        last_error_message_ = Lang::Strings::SERVER_NOT_CONNECTED;
+        xEventGroupSetBits(event_group_, MAIN_EVENT_ERROR);
+        return;
+    }
+    if (!CheckAssetsVersion()) {
+        ESP_LOGE(TAG, "Resource OTA failed, postpone Xiaoling WebSocket connection");
+        last_error_message_ = Lang::Strings::DOWNLOAD_ASSETS_FAILED;
+        xEventGroupSetBits(event_group_, MAIN_EVENT_ERROR);
+        return;
+    }
+
+    InitializeXiaolingConn();
 
     // 通知主循环启动流程已完成。
     xEventGroupSetBits(event_group_, MAIN_EVENT_ACTIVATION_DONE);
 }
 
-void Application::CheckAssetsVersion() {
+bool Application::CheckAssetsVersion() {
     if (assets_version_checked_) {
-        return;
+        return true;
     }
     assets_version_checked_ = true;
 
@@ -461,7 +487,7 @@ void Application::CheckAssetsVersion() {
     auto& assets = Assets::GetInstance();
     if (!assets.partition_valid()) {
         ESP_LOGW(TAG, "Resource partitions are unavailable for board %s", BOARD_NAME);
-        return;
+        return true;
     }
 
     Settings settings("assets", true);
@@ -470,20 +496,41 @@ void Application::CheckAssetsVersion() {
         const char* key;
         const char* alias_key;
         const char* label;
+        const Ota::ResourceInfo* remote;
     };
     const PendingResource pending[] = {
-        {Assets::Resource::Respak, "respak_url", "download_url", "respak"},
-        {Assets::Resource::Tone, "tone_url", nullptr, "tone"},
-        {Assets::Resource::Emoji, "emoji_url", nullptr, "emoji"},
-        {Assets::Resource::WakeWord, "wake_word_url", "wakeword_url", "wake_word"},
+        {Assets::Resource::Respak, "respak_url", "download_url", "respak", nullptr},
+        {Assets::Resource::Tone, "tone_url", nullptr, "tone", &ota_->GetToneResource()},
+        {Assets::Resource::Emoji, "emoji_url", nullptr, "emoji", &ota_->GetEmojiResource()},
+        {Assets::Resource::WakeWord, "wake_word_url", "wakeword_url", "wake_word", &ota_->GetWakeWordResource()},
     };
 
     bool downloaded = false;
     bool failed = false;
+    bool resource_tone_played = false;
     for (const auto& item : pending) {
+        if ((item.resource == Assets::Resource::WakeWord &&
+             KvOta::IsDisabled(KvOta::UpdateType::WakeWord)) ||
+            (item.resource == Assets::Resource::Tone &&
+             KvOta::IsDisabled(KvOta::UpdateType::Tone)) ||
+            (item.resource == Assets::Resource::Emoji &&
+             KvOta::IsDisabled(KvOta::UpdateType::Emoji))) {
+            ESP_LOGI(TAG, "Skipping %s OTA: disabled by user KV", item.label);
+            continue;
+        }
         std::string url = settings.GetString(item.key);
         if (url.empty() && item.alias_key != nullptr) {
             url = settings.GetString(item.alias_key);
+        }
+        size_t expected_size = 0;
+        std::array<uint8_t, 16> expected_md5{};
+        if (item.remote != nullptr && item.remote->available) {
+            url = item.remote->url;
+            expected_size = item.remote->size;
+            expected_md5 = item.remote->md5;
+            if (assets.VerifyResource(item.resource, expected_size, expected_md5)) {
+                continue;
+            }
         }
         if (url.empty()) {
             continue;
@@ -493,15 +540,15 @@ void Application::CheckAssetsVersion() {
 
         ESP_LOGI(TAG, "Downloading %s resource from %s", item.label, url.c_str());
         SetDeviceState(kDeviceStateUpgrading);
+        if (!resource_tone_played) {
+            PlayOtaTone(89);
+            resource_tone_played = true;
+        }
+        UiApp::ShowUpgradeProgress(item.label, 0);
         board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
-        const bool success = assets.DownloadResource(item.resource, std::move(url),
-            [](int progress, size_t speed) {
-                std::thread([progress, speed]() {
-                    char buffer[48];
-                    snprintf(buffer, sizeof(buffer), "%d%% %uKB/s", progress,
-                             static_cast<unsigned>(speed / 1024));
-                    UiApp::SetChatMessage("system", buffer);
-                }).detach();
+        const bool success = assets.DownloadResource(item.resource, url, expected_size, expected_md5,
+            [label = std::string(item.label)](int progress, size_t speed) {
+                UiApp::ShowUpgradeProgress(label, progress, speed);
             });
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
         if (!success) {
@@ -513,18 +560,24 @@ void Application::CheckAssetsVersion() {
     }
 
     if (failed && !downloaded) {
+        PlayOtaTone(92);
         Alert(Lang::Strings::ERROR, Lang::Strings::DOWNLOAD_ASSETS_FAILED,
-              "circle_xmark", 94);
+              "circle_xmark", "");
         SetDeviceState(kDeviceStateActivating);
-        return;
+        return false;
     }
     if (downloaded) {
         // Tone/emoji/wake-word models may still be referenced by running tasks;
         // reboot after the transaction so every consumer remaps a new image.
+        if (failed) {
+            PlayOtaTone(92);
+        } else {
+            PlayOtaTone(90);
+        }
         UiApp::SetChatMessage("system", Lang::Strings::PLEASE_WAIT);
         vTaskDelay(pdMS_TO_TICKS(500));
         Reboot();
-        return;
+        return true;
     }
 
     assets.Apply();
@@ -534,12 +587,29 @@ void Application::CheckAssetsVersion() {
 #endif
     UiApp::SetChatMessage("system", "");
     UiApp::SetEmotion("microchip_ai");
+    return true;
 }
 
 bool Application::CheckNewVersion() {
     UiApp::SetStatus(UiApp::Status::CheckingNewVersion);
     if (ota_ == nullptr || ota_->CheckVersion() != ESP_OK) {
         return false;
+    }
+    Settings ota_settings("ota", true);
+    const bool app_update_succeeded = ota_settings.GetBool("app_update_pending_success", false);
+    if (app_update_succeeded) {
+        ota_settings.EraseKey("app_update_pending_success");
+        PlayOtaTone(88);
+    }
+    if (!KvOta::IsDisabled(KvOta::UpdateType::App) && ota_->HasNewVersion()) {
+        ESP_LOGI(TAG, "APP OTA available: %s", ota_->GetFirmwareVersion().c_str());
+        if (UpgradeFirmware(ota_->GetFirmwareUrl(), ota_->GetFirmwareVersion())) {
+            return false;  // Reboot is issued by UpgradeFirmware on success.
+        }
+        ESP_LOGW(TAG, "APP OTA failed; continuing with the current firmware");
+    }
+    if (KvOta::IsDisabled(KvOta::UpdateType::App) && ota_->HasNewVersion()) {
+        ESP_LOGI(TAG, "Skipping APP OTA: disabled by user KV");
     }
     ota_->MarkCurrentVersionValid();
     return true;
@@ -1188,24 +1258,24 @@ bool Application::UpgradeFirmware(const std::string& url, const std::string& ver
     }
     ESP_LOGI(TAG, "Starting firmware upgrade from URL: %s", upgrade_url.c_str());
 
-    Alert(Lang::Strings::OTA_UPGRADE, Lang::Strings::UPGRADING, "download", "upgrade");
-    vTaskDelay(pdMS_TO_TICKS(3000));
+    UiApp::SetStatusText(Lang::Strings::OTA_UPGRADE);
+    UiApp::SetEmotion("download");
+    UiApp::SetChatMessage("system", Lang::Strings::UPGRADING);
+    PlayOtaTone(86);
+    PlayOtaTone(87);
 
     SetDeviceState(kDeviceStateUpgrading);
 
     std::string message = std::string(Lang::Strings::NEW_VERSION) + version_info;
     UiApp::SetChatMessage("system", message);
+    UiApp::ShowUpgradeProgress("APP", 0);
 
     board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
     audio_service_.Stop();
     vTaskDelay(pdMS_TO_TICKS(1000));
 
     bool upgrade_success = Ota::Upgrade(upgrade_url, [](int progress, size_t speed) {
-        std::thread([progress, speed]() {
-            char buffer[32];
-            snprintf(buffer, sizeof(buffer), "%d%% %uKB/s", progress, speed / 1024);
-            UiApp::SetChatMessage("system", buffer);
-        }).detach();
+        UiApp::ShowUpgradeProgress("APP", progress, speed);
     });
 
     if (!upgrade_success) {
@@ -1213,12 +1283,15 @@ bool Application::UpgradeFirmware(const std::string& url, const std::string& ver
         ESP_LOGE(TAG, "Firmware upgrade failed, restarting audio service and continuing operation...");
         audio_service_.Start(); // Restart audio service
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER); // Restore power save level
-        Alert(Lang::Strings::ERROR, Lang::Strings::UPGRADE_FAILED, "circle_xmark", 94);
+        PlayOtaTone(92);
+        Alert(Lang::Strings::ERROR, Lang::Strings::UPGRADE_FAILED, "circle_xmark", "");
         vTaskDelay(pdMS_TO_TICKS(3000));
         return false;
     } else {
         // Upgrade success, reboot immediately
         ESP_LOGI(TAG, "Firmware upgrade successful, rebooting...");
+        Settings ota_settings("ota", true);
+        ota_settings.SetBool("app_update_pending_success", true);
         UiApp::SetChatMessage("system", Lang::Strings::UPGRADE_SUCCESSFUL_REBOOTING);
         vTaskDelay(pdMS_TO_TICKS(1000)); // Brief pause to show message
         Reboot();
@@ -1384,6 +1457,26 @@ void Application::PlayLocalizedTone(const char* name) {
 void Application::PlayTone(uint16_t tone_id) {
     if (audio_player_.PlayTone(tone_id) == 0) {
         ESP_LOGW(TAG, "ROMFS tone 播放失败: id=%u", static_cast<unsigned>(tone_id));
+    }
+}
+
+void Application::PlayOtaTone(uint16_t tone_id, uint8_t repeat_count) {
+    for (uint8_t repeat = 0; repeat < repeat_count; ++repeat) {
+        if (audio_player_.PlayTone(tone_id) == 0) {
+            ESP_LOGW(TAG, "OTA tone playback failed: id=%u", static_cast<unsigned>(tone_id));
+            return;
+        }
+
+        const TickType_t start = xTaskGetTickCount();
+        bool started = false;
+        while (xTaskGetTickCount() - start < pdMS_TO_TICKS(15000)) {
+            if (audio_player_.IsPlaying()) {
+                started = true;
+            } else if (started) {
+                break;
+            }
+            vTaskDelay(pdMS_TO_TICKS(20));
+        }
     }
 }
 

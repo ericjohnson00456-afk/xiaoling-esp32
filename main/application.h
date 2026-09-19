@@ -134,6 +134,10 @@ public:
      */
     void ResetXiaolingConn();
 
+    // Clear saved Wi-Fi credentials and enter the board's provisioning mode.
+    // This is also the behavior used by the five-click button shortcut.
+    void ClearNetworkConfiguration();
+
 private:
     Application();
     ~Application();
@@ -182,14 +186,13 @@ private:
     void HandleActivationDoneEvent();
     void HandleWakeWordDetectedEvent();
     void ProcessButtonClick(uint8_t click_count);
-    void ClearNetworkConfiguration();
     void StartFactoryReset();
     void FactoryResetTask();
     // Activation task (runs in background)
     void ActivationTask();
 
     // Helper methods
-    void CheckAssetsVersion();
+    bool CheckAssetsVersion();
     bool CheckNewVersion();
     void InitializeXiaolingConn();
     // 唤醒入口的连接检查：WS 就绪返回 true；否则按网络状态播报 085/064 提示音。
@@ -201,6 +204,7 @@ private:
     void BeginWakeup(ListeningMode mode);
     void CancelWakeup();
     void PublishWifiIcon();
+    void PlayOtaTone(uint16_t tone_id, uint8_t repeat_count = 1);
 
     // State change handler called by state machine
     void OnStateChanged(DeviceState old_state, DeviceState new_state);

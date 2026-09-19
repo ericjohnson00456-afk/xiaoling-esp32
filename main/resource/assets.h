@@ -5,6 +5,7 @@
 
 #include <string>
 #include <functional>
+#include <array>
 
 #include <cJSON.h>
 #include <model_path.h>
@@ -26,6 +27,11 @@ public:
     // expected to contain a complete ROMFS image for that resource.
     bool DownloadResource(Resource resource, std::string url,
                           std::function<void(int progress, size_t speed)> progress_callback);
+    bool DownloadResource(Resource resource, const std::string& url, size_t expected_size,
+                          const std::array<uint8_t, 16>& expected_md5,
+                          std::function<void(int progress, size_t speed)> progress_callback);
+    bool VerifyResource(Resource resource, size_t expected_size,
+                        const std::array<uint8_t, 16>& expected_md5);
     bool Apply();
     AssetStore& RespakStore() { return *this; }
     AssetStore& ToneStore();

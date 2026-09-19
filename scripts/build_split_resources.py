@@ -76,10 +76,32 @@ def main() -> int:
             if model.is_file():
                 shutil.copy2(model, wake / model.name)
         if args.wake_word_file and args.wake_word_name:
-            (wake / "index.json").write_text(json.dumps({
+            manifest = {
                 "model": Path(args.wake_word_file).name,
                 "wake_word": args.wake_word_name,
-            }, ensure_ascii=False), encoding="utf-8")
+            }
+            model_descriptor = Path(args.wake_word_file).with_suffix(".json")
+            if model_descriptor.is_file():
+                try:
+                    descriptor = json.loads(model_descriptor.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError) as exc:
+                    raise RuntimeError(
+                        f"Invalid wake-word descriptor {model_descriptor}: {exc}"
+                    ) from exc
+                if not isinstance(descriptor, dict):
+                    raise RuntimeError(
+                        f"Wake-word descriptor must contain a JSON object: {model_descriptor}"
+                    )
+                manifest = descriptor
+                # The selected build configuration remains authoritative for
+                # the file and wake-word fields consumed by the firmware.
+                manifest["model"] = model.name
+                manifest["wake_word"] = args.wake_word_name
+            descriptor_path = wake / model_descriptor.name
+            descriptor_path.write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
 
         package(respak, output / "respak.bin", "respak")
         if any(tone.iterdir()):

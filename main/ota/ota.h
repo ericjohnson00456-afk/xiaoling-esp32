@@ -2,17 +2,31 @@
 #define _OTA_H
 
 #include <functional>
+#include <array>
+#include <cstddef>
+#include <cstdint>
 #include <string>
+#include <vector>
 
 #include <esp_err.h>
 #include "board.h"
 
 class Ota {
 public:
+    struct ResourceInfo {
+        bool available = false;
+        size_t size = 0;
+        std::array<uint8_t, 16> md5{};
+        std::string url;
+        std::string wake_word;
+    };
+
     Ota();
     ~Ota();
 
     esp_err_t CheckVersion();
+    // Fetches the independently managed wake-word, tone and emoji packages.
+    esp_err_t CheckResources();
     esp_err_t Activate();
     bool HasActivationChallenge() { return has_activation_challenge_; }
     bool HasNewVersion() { return has_new_version_; }
@@ -26,6 +40,9 @@ public:
     const std::string& GetFirmwareUrl() const { return firmware_url_; }
     const std::string& GetActivationMessage() const { return activation_message_; }
     const std::string& GetActivationCode() const { return activation_code_; }
+    const ResourceInfo& GetWakeWordResource() const { return wake_word_resource_; }
+    const ResourceInfo& GetToneResource() const { return tone_resource_; }
+    const ResourceInfo& GetEmojiResource() const { return emoji_resource_; }
     std::string GetCheckVersionUrl();
 #ifdef CONFIG_LSPLATFORM
     bool HasACtivationQRCode() { return has_activation_qrcode_; }
@@ -44,6 +61,9 @@ private:
     std::string firmware_url_;
     std::string activation_challenge_;
     std::string serial_number_;
+    ResourceInfo wake_word_resource_;
+    ResourceInfo tone_resource_;
+    ResourceInfo emoji_resource_;
     int activation_timeout_ms_ = 30000;
 #ifdef CONFIG_LSPLATFORM
     bool has_activation_qrcode_ = false;
