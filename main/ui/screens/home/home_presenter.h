@@ -35,6 +35,7 @@ public:
     void SetStatus(std::string status);
     void SetTime(std::string time);
     void SetDuplexMode(DuplexMode mode);
+    void SetDuplexVisible(bool visible);
 #ifdef CONFIG_LSPLATFORM
     void SetImage(std::unique_ptr<LvglImage> image);
     void ClearImage();
@@ -75,6 +76,7 @@ private:
     std::string status_text_;
     std::string time_text_;
     DuplexMode duplex_mode_ = DuplexMode::kHalfDuplex;
+    bool duplex_visible_ = false;
 #ifdef CONFIG_LSPLATFORM
     std::shared_ptr<LvglImage> image_;
 #endif

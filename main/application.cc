@@ -54,10 +54,18 @@ Application::Application() {
 #else
     aec_mode_ = kAecOff;
 #endif
-    session_controller_.SetMode(aec_mode_ == kAecOnDeviceSide
-                                   ? DuplexMode::kFullDuplex
-                                   : DuplexMode::kHalfDuplex);
-    listening_mode_ = aec_mode_ == kAecOnDeviceSide
+    const int32_t saved_int_mode = KvUser::GetIntMode();
+    const DuplexMode initial_mode = saved_int_mode == 0
+                                        ? DuplexMode::kFullDuplex
+                                        : saved_int_mode == 1
+                                            ? DuplexMode::kHalfDuplex
+                                            : saved_int_mode == 2
+                                                ? DuplexMode::kSimplex
+                                                : (aec_mode_ == kAecOnDeviceSide
+                                                       ? DuplexMode::kFullDuplex
+                                                       : DuplexMode::kHalfDuplex);
+    session_controller_.SetMode(initial_mode);
+    listening_mode_ = initial_mode == DuplexMode::kFullDuplex
                           ? kListeningModeRealtime
                           : kListeningModeAutoStop;
 
@@ -638,6 +646,7 @@ void Application::InitializeXiaolingConn() {
     xiaoling_conn_->OnConnected([this, codec, &board]() {
         DismissAlert();
         board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
+        UiApp::SetDuplexVisible(true);
         if (xiaoling_conn_->server_sample_rate() != codec->output_sample_rate()) {
             ESP_LOGW(TAG, "服务端采样率 %d 与设备输出采样率 %d 不一致",
                      xiaoling_conn_->server_sample_rate(), codec->output_sample_rate());
@@ -670,6 +679,7 @@ void Application::InitializeXiaolingConn() {
 
     xiaoling_conn_->OnDisconnected([this, &board]() {
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
+        UiApp::SetDuplexVisible(false);
         Schedule([this]() {
             if (GetDeviceState() == kDeviceStateWifiConfiguring) {
                 return;

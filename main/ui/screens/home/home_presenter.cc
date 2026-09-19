@@ -82,7 +82,7 @@ int HomePresenter::Show(const UiNavScreen* screen, void* data) {
     presenter->SetWifiIcon(presenter->wifi_icon_);
     presenter->SetStatus(presenter->status_text_);
     presenter->SetTime(presenter->time_text_);
-    presenter->SetDuplexMode(presenter->duplex_mode_);
+    presenter->SetDuplexVisible(presenter->duplex_visible_);
 #ifdef CONFIG_LSPLATFORM
     if (presenter->image_ != nullptr) {
         presenter->view_->ShowImage(std::make_unique<SharedLvglImage>(presenter->image_));
@@ -209,8 +209,15 @@ void HomePresenter::SetTime(std::string time) {
 
 void HomePresenter::SetDuplexMode(DuplexMode mode) {
     duplex_mode_ = mode;
-    if (view_ != nullptr) {
+    if (duplex_visible_ && view_ != nullptr) {
         view_->SetDuplexMode(mode);
+    }
+}
+
+void HomePresenter::SetDuplexVisible(bool visible) {
+    duplex_visible_ = visible;
+    if (view_ != nullptr) {
+        view_->SetDuplexMode(visible ? duplex_mode_ : DuplexMode::kSimplex);
     }
 }
 

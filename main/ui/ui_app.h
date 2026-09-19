@@ -59,10 +59,13 @@ void ShowMaxVolume();
 void ShowMuted();
 // 切换主语言/英语，持久化选择并立即刷新当前状态文案。
 void ToggleLanguage();
+// Set language by user KV value: 0 Chinese, 1 English.
+void SetLanguageMode(int32_t mode);
 void SetLocalizedText(TextKey key);
 void ShowWifiConfigHint(std::string ssid, std::string url);
 void SetPowerSaveMode(bool enabled);
 void SetDuplexMode(DuplexMode mode);
+void SetDuplexVisible(bool visible);
 void ShowUpgradeProgress(std::string target, int progress, size_t speed = 0);
 void NavigateToQrCode();
 void NavigateHome();

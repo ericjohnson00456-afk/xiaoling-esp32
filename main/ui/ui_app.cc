@@ -4,6 +4,7 @@
 #include "display/display.h"
 #include "system/device_status.h"
 #include "shell/settings.h"
+#include "shell/cmd/kv/kv_user.h"
 #include "ui/i18n/lang_config.h"
 #include "ui/screens/home/home_presenter.h"
 #include "ui/screens/qrcode/qrcode_presenter.h"
@@ -134,7 +135,11 @@ void SetBannerIdleProvider(std::function<bool()> provider) {
 bool Initialize() {
     Settings settings(kUiSettingsNamespace);
     const auto saved_language = settings.GetString(kLanguageSettingsKey);
-    if (!saved_language.empty() && !Lang::SetLanguageByCode(saved_language.c_str())) {
+    const auto user_language = KvUser::GetUiLanguage();
+    if (user_language == 0 || user_language == 1) {
+        Lang::SetLanguage(user_language == 1 ? Lang::Language::English
+                                             : Lang::Language::Primary);
+    } else if (!saved_language.empty() && !Lang::SetLanguageByCode(saved_language.c_str())) {
         ESP_LOGW(kTag, "Ignoring unsupported saved language: %s", saved_language.c_str());
     }
 
@@ -287,6 +292,7 @@ void ShowMuted() {
 void ToggleLanguage() {
     UiManager::GetInstance().Dispatch([]() {
         Lang::ToggleLanguage();
+        KvUser::SetUiLanguage(Lang::GetLanguage() == Lang::Language::English ? 1 : 0);
         {
             Settings settings(kUiSettingsNamespace, true);
             settings.SetString(kLanguageSettingsKey, Lang::GetLanguageCode());
@@ -299,6 +305,27 @@ void ToggleLanguage() {
         }
         ShowNotificationOnDisplay(Lang::Strings::LANGUAGE_SWITCHED, 3000);
         ESP_LOGI(kTag, "Display language switched to %s", Lang::GetLanguageCode());
+    });
+}
+
+void SetLanguageMode(int32_t mode) {
+    if (mode != 0 && mode != 1) {
+        ESP_LOGW(kTag, "Ignoring unsupported language mode: %ld", static_cast<long>(mode));
+        return;
+    }
+    UiManager::GetInstance().Dispatch([mode]() {
+        const auto language = mode == 1 ? Lang::Language::English : Lang::Language::Primary;
+        Lang::SetLanguage(language);
+        Settings settings(kUiSettingsNamespace, true);
+        settings.SetString(kLanguageSettingsKey, Lang::GetLanguageCode());
+        if (current_localized_status.has_value()) {
+            HomePresenter::GetInstance().SetStatus(LocalizeStatus(*current_localized_status));
+        }
+        if (auto* display = UiManager::GetInstance().display(); display != nullptr) {
+            display->UpdateStatusBar(true);
+        }
+        ShowNotificationOnDisplay(Lang::Strings::LANGUAGE_SWITCHED, 3000);
+        ESP_LOGI(kTag, "Display language set to %s", Lang::GetLanguageCode());
     });
 }
 
@@ -341,6 +368,12 @@ void SetPowerSaveMode(bool enabled) {
 void SetDuplexMode(DuplexMode mode) {
     UiManager::GetInstance().Dispatch([mode]() {
         HomePresenter::GetInstance().SetDuplexMode(mode);
+    });
+}
+
+void SetDuplexVisible(bool visible) {
+    UiManager::GetInstance().Dispatch([visible]() {
+        HomePresenter::GetInstance().SetDuplexVisible(visible);
     });
 }
 

@@ -12,9 +12,15 @@ inline constexpr char kDisableWakewordUpdate[] = "user.disable_wakeword_update";
 inline constexpr char kDisableToneUpdate[] = "user.disable_tone_update";
 inline constexpr char kDisableEmojiUpdate[] = "user.disable_emoji_update";
 inline constexpr char kDeviceMode[] = "user.device_mode";
+inline constexpr char kIntMode[] = "user.int_mode";
+inline constexpr char kUiLanguage[] = "user.ui_language";
 
 int32_t GetDeviceMode();
 void SetDeviceMode(int32_t value);
+int32_t GetIntMode();
+void SetIntMode(int32_t value);
+int32_t GetUiLanguage();
+void SetUiLanguage(int32_t value);
 
 }  // namespace KvUser
 

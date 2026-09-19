@@ -1,6 +1,9 @@
 #include "kv_user.h"
 
+#include "application.h"
 #include "settings.h"
+#include "ui/ui_app.h"
+#include "xiaoling/session/session_core.h"
 
 #include <cerrno>
 #include <cstdint>
@@ -16,6 +19,13 @@
 namespace {
 
 constexpr size_t kNvsNameMaxLength = 15;
+constexpr char kRemovedNetcfgModeKey[] = "netcfg_mode";
+
+bool IsRemovedNetcfgModeKey(const char* namespace_name, const char* key) {
+    return namespace_name != nullptr && key != nullptr &&
+           std::strcmp(namespace_name, KvUser::kNamespace) == 0 &&
+           std::strcmp(key, kRemovedNetcfgModeKey) == 0;
+}
 
 void PrintUsage() {
     std::printf(
@@ -84,6 +94,66 @@ bool ValidateSettings(const Settings& settings, const char* name) {
     }
     std::printf("Namespace is unavailable: %s\n", name);
     return false;
+}
+
+enum class UserIntKey {
+    None,
+    IntMode,
+    UiLanguage,
+};
+
+UserIntKey ParseUserIntKey(const char* logical_key) {
+    if (logical_key == nullptr) return UserIntKey::None;
+    if (std::strcmp(logical_key, KvUser::kIntMode) == 0) return UserIntKey::IntMode;
+    if (std::strcmp(logical_key, KvUser::kUiLanguage) == 0) return UserIntKey::UiLanguage;
+    return UserIntKey::None;
+}
+
+bool IsValidUserIntValue(UserIntKey key, int32_t value) {
+    switch (key) {
+        case UserIntKey::IntMode:
+            return value >= 0 && value <= 2;
+        case UserIntKey::UiLanguage:
+            return value >= 0 && value <= 1;
+        case UserIntKey::None:
+            return false;
+    }
+    return false;
+}
+
+void SetUserIntValue(UserIntKey key, int32_t value) {
+    switch (key) {
+        case UserIntKey::IntMode:
+            KvUser::SetIntMode(value);
+            Application::GetInstance().SetDuplexMode(
+                value == 0 ? DuplexMode::kFullDuplex :
+                value == 1 ? DuplexMode::kHalfDuplex : DuplexMode::kSimplex);
+            break;
+        case UserIntKey::UiLanguage:
+            KvUser::SetUiLanguage(value);
+            UiApp::SetLanguageMode(value);
+            break;
+        case UserIntKey::None:
+            break;
+    }
+}
+
+int32_t GetUserIntValue(UserIntKey key) {
+    switch (key) {
+        case UserIntKey::IntMode: return KvUser::GetIntMode();
+        case UserIntKey::UiLanguage: return KvUser::GetUiLanguage();
+        case UserIntKey::None: return -1;
+    }
+    return -1;
+}
+
+const char* UserIntKeyName(UserIntKey key) {
+    switch (key) {
+        case UserIntKey::IntMode: return KvUser::kIntMode;
+        case UserIntKey::UiLanguage: return KvUser::kUiLanguage;
+        case UserIntKey::None: return "";
+    }
+    return "";
 }
 
 const char* NvsTypeName(nvs_type_t type) {
@@ -205,6 +275,10 @@ int HandleSet(int argc, char** argv) {
         if (separator != nullptr && separator != argv[2] && separator[1] != '\0') {
             const std::string namespace_name(argv[2], separator - argv[2]);
             const char* key = separator + 1;
+            if (IsRemovedNetcfgModeKey(namespace_name.c_str(), key)) {
+                std::printf("unsupported key: %s.%s\n", namespace_name.c_str(), key);
+                return 1;
+            }
             if (namespace_name == KvUser::kNamespace && std::strcmp(key, "device_mode") == 0) {
                 int32_t value = 0;
                 if (!ParseInt32(argv[3], value)) {
@@ -236,6 +310,20 @@ int HandleSet(int argc, char** argv) {
                              static_cast<long>(value));
                 return 0;
             }
+            if (namespace_name == KvUser::kNamespace) {
+                const UserIntKey user_key = ParseUserIntKey(argv[2]);
+                if (user_key != UserIntKey::None) {
+                    int32_t value = 0;
+                    if (!ParseInt32(argv[3], value) || !IsValidUserIntValue(user_key, value)) {
+                        std::printf("invalid value for %s\n", UserIntKeyName(user_key));
+                        return 1;
+                    }
+                    SetUserIntValue(user_key, value);
+                    std::printf("flash set %s=%ld success\n", UserIntKeyName(user_key),
+                                 static_cast<long>(value));
+                    return 0;
+                }
+            }
         }
         PrintUsage();
         return 1;
@@ -243,6 +331,11 @@ int HandleSet(int argc, char** argv) {
 
     if (argc != 5 || !IsValidNvsName(argv[2])) {
         PrintUsage();
+        return 1;
+    }
+
+    if (IsRemovedNetcfgModeKey(argv[2], argv[3])) {
+        std::printf("unsupported key: %s.%s\n", argv[2], argv[3]);
         return 1;
     }
 
@@ -258,8 +351,20 @@ int HandleSet(int argc, char** argv) {
             std::printf("flash set %s/%s success\n", argv[2], argv[3]);
             return 0;
         }
-        KvOta::UpdateType type;
         const std::string logical_key = std::string(KvUser::kNamespace) + "." + argv[3];
+        const UserIntKey user_key = ParseUserIntKey(logical_key.c_str());
+        if (user_key != UserIntKey::None) {
+            int32_t value = 0;
+            if (!ParseInt32(argv[4], value) || !IsValidUserIntValue(user_key, value)) {
+                std::printf("invalid value for %s\n", UserIntKeyName(user_key));
+                return 1;
+            }
+            SetUserIntValue(user_key, value);
+            std::printf("flash set %s=%ld success\n", UserIntKeyName(user_key),
+                         static_cast<long>(value));
+            return 0;
+        }
+        KvOta::UpdateType type;
         if (logical_key == KvOta::LogicalKey(KvOta::UpdateType::App) ||
             logical_key == KvOta::LogicalKey(KvOta::UpdateType::WakeWord) ||
             logical_key == KvOta::LogicalKey(KvOta::UpdateType::Tone) ||
@@ -333,6 +438,10 @@ int HandleGet(int argc, char** argv) {
         if (separator != nullptr && separator != argv[2] && separator[1] != '\0' &&
             std::string(argv[2], separator - argv[2]) == "user") {
             const std::string logical_key = argv[2];
+            if (IsRemovedNetcfgModeKey("user", logical_key.c_str() + 5)) {
+                std::printf("unsupported key: %s\n", logical_key.c_str());
+                return 1;
+            }
             const KvOta::UpdateType types[] = {KvOta::UpdateType::App,
                                                 KvOta::UpdateType::WakeWord,
                                                 KvOta::UpdateType::Tone,
@@ -349,6 +458,12 @@ int HandleGet(int argc, char** argv) {
                             static_cast<long>(KvUser::GetDeviceMode()));
                 return 0;
             }
+            const UserIntKey user_key = ParseUserIntKey(logical_key.c_str());
+            if (user_key != UserIntKey::None) {
+                std::printf("flash get %s: %ld\n", logical_key.c_str(),
+                             static_cast<long>(GetUserIntValue(user_key)));
+                return 0;
+            }
         }
         PrintUsage();
         return 1;
@@ -359,12 +474,23 @@ int HandleGet(int argc, char** argv) {
         return 1;
     }
 
+    if (IsRemovedNetcfgModeKey(argv[2], argv[3])) {
+        std::printf("unsupported key: %s.%s\n", argv[2], argv[3]);
+        return 1;
+    }
+
     if ((std::strcmp(argv[1], "int") == 0 || std::strcmp(argv[1], "int32") == 0) &&
-        std::strcmp(argv[2], "user") == 0) {
-        const std::string logical_key = std::string("user.") + argv[3];
+        std::strcmp(argv[2], KvUser::kNamespace) == 0) {
+        const std::string logical_key = std::string(KvUser::kNamespace) + "." + argv[3];
         if (logical_key == KvUser::kDeviceMode) {
             std::printf("flash get %s/%s: %ld\n", argv[2], argv[3],
                         static_cast<long>(KvUser::GetDeviceMode()));
+            return 0;
+        }
+        const UserIntKey user_key = ParseUserIntKey(logical_key.c_str());
+        if (user_key != UserIntKey::None) {
+            std::printf("flash get %s/%s: %ld\n", argv[2], argv[3],
+                        static_cast<long>(GetUserIntValue(user_key)));
             return 0;
         }
         const KvOta::UpdateType types[] = {KvOta::UpdateType::App,
@@ -460,6 +586,26 @@ int32_t GetDeviceMode() {
 void SetDeviceMode(int32_t value) {
     Settings settings(KvUser::kNamespace, true);
     settings.SetInt("device_mode", value);
+}
+
+int32_t GetIntMode() {
+    Settings settings(KvUser::kNamespace, false);
+    return settings.GetInt("int_mode", -1);
+}
+
+void SetIntMode(int32_t value) {
+    Settings settings(KvUser::kNamespace, true);
+    settings.SetInt("int_mode", value);
+}
+
+int32_t GetUiLanguage() {
+    Settings settings(KvUser::kNamespace, false);
+    return settings.GetInt("ui_language", -1);
+}
+
+void SetUiLanguage(int32_t value) {
+    Settings settings(KvUser::kNamespace, true);
+    settings.SetInt("ui_language", value);
 }
 
 }  // namespace KvUser
