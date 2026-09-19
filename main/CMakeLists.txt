@@ -81,6 +81,7 @@ set(INCLUDE_DIRS "."
 
 # Add board common files
 file(GLOB BOARD_COMMON_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/boards/common/*.cc)
+list(FILTER BOARD_COMMON_SOURCES EXCLUDE REGEX "/blufi\\.cpp$")
 list(APPEND SOURCES ${BOARD_COMMON_SOURCES})
 list(APPEND INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/boards/common)
 
@@ -90,8 +91,14 @@ if(CONFIG_IDF_TARGET_ESP32S3)
     list(APPEND INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/boards/common_esp32s3)
 endif()
 
-# BluFi（小聆 BLE 配网与上游 esp-blufi 共用 boards/common/blufi.cpp）
-if(CONFIG_PROV_MODE_BLE OR CONFIG_USE_ESP_BLUFI_WIFI_PROVISIONING)
+# BluFi：小聆 BLE 配网使用原始 Espressif 实现；通用 EspBluFi 保留类化实现。
+if(CONFIG_PROV_MODE_BLE)
+    list(APPEND SOURCES
+         "blufi/blufi_init.cc"
+         "blufi/blufi_main.cc"
+         "blufi/blufi_security.cc")
+    list(APPEND INCLUDE_DIRS "blufi" "display")
+elseif(CONFIG_USE_ESP_BLUFI_WIFI_PROVISIONING)
     list(APPEND SOURCES "boards/common/blufi.cpp")
 endif()
 if(CONFIG_PROV_MODE_BLE)

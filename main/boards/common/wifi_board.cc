@@ -20,7 +20,9 @@
 #include <ssid_manager.h>
 #include "afsk_demod.h"
 
-#if defined(CONFIG_PROV_MODE_BLE) || defined(CONFIG_USE_ESP_BLUFI_WIFI_PROVISIONING)
+#if CONFIG_PROV_MODE_BLE
+#include "blufi/blufi.h"
+#elif defined(CONFIG_USE_ESP_BLUFI_WIFI_PROVISIONING)
 #include "blufi.h"
 #endif
 
@@ -218,30 +220,10 @@ void WifiBoard::StartWifiConfigMode() {
     Application::GetInstance().SetDeviceState(kDeviceStateWifiConfiguring);
 
 #if defined(CONFIG_PROV_MODE_BLE) || defined(CONFIG_USE_ESP_BLUFI_WIFI_PROVISIONING)
-    // initialize esp-blufi protocol
-    auto &blufi = Blufi::GetInstance();
 #ifdef CONFIG_PROV_MODE_BLE
-    // 小聆小程序流程：广播名 "Xiaoling-XXXX"，WiFi 连接成功后上报 pid/did，
-    // 小程序 "done" 握手完成后重启设备
-    Blufi::Config config;
-    config.name_prefix = "Xiaoling";
-    config.report_identity = true;
-    config.restart_on_complete = true;
-    blufi.init(config);
-
-    // 配网提示界面与提示音由应用层资源提供
-    Assets::GetInstance().Apply();
-    const char* image_start = nullptr;
-    const char* image_end = nullptr;
-    GetProvisioningImage(image_start, image_end);
-    auto qrcode = std::make_unique<LvglRawImage>((void *)image_start,
-                                                 (size_t)(image_end - image_start));
-    auto display = Board::GetInstance().GetDisplay();
-    display->ShowActivation(std::move(qrcode), Lang::Strings::BLUFI_CONFIG_INSTRUCTIONS);
-    // 配网提示音由应用层根据当前语言从 ROMFS 加载。
-    Application::GetInstance().PlayTone(70);
-#else //!CONFIG_PROV_MODE_BLE
-    blufi.init();
+    blufi_start();
+#elif defined(CONFIG_USE_ESP_BLUFI_WIFI_PROVISIONING)
+    Blufi::GetInstance().init();
 #endif //CONFIG_PROV_MODE_BLE
 #endif //CONFIG_PROV_MODE_BLE || CONFIG_USE_ESP_BLUFI_WIFI_PROVISIONING
 

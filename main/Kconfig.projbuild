@@ -86,6 +86,12 @@ if LSPLATFORM
             default n
         config MBEDTLS_HARDWARE_MPI
             default n
+        # This board has PSRAM. Keep the Bluedroid environment and connection
+        # buffers out of scarce internal SRAM so BluFi can finish pairing.
+        config BT_ALLOCATION_FROM_SPIRAM_FIRST
+            default y
+        config BT_BLE_DYNAMIC_ENV_MEMORY
+            default y
     endif # PROV_MODE_BLE
 endif # LSPLATFORM
 
