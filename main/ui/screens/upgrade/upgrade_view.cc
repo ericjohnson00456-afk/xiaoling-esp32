@@ -97,6 +97,8 @@ void UpgradeView::SetProgress(const std::string& target, int progress, size_t sp
 
 void UpgradeView::SetResult(const std::string& message) {
     if (root_ == nullptr) return;
+    DisplayLockGuard lock(display_);
+    if (!lock.locked()) return;
     lv_label_set_text(target_, message.c_str());
     lv_obj_add_flag(bar_, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(percent_, LV_OBJ_FLAG_HIDDEN);
