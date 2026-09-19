@@ -343,10 +343,16 @@ static void example_event_callback(esp_blufi_cb_event_t event, esp_blufi_cb_para
         break;
     case ESP_BLUFI_EVENT_REQ_CONNECT_TO_AP:
         BLUFI_INFO("BLUFI request wifi connect to AP\n");
-        /* there is no wifi callback when the device has already connected to this wifi
-        so disconnect wifi before connection.
-        */
-        esp_wifi_disconnect();
+        /*
+         * Disconnect first only when a station connection is active. Calling
+         * esp_wifi_disconnect() while a previous attempt has already failed
+         * generates a synthetic STA_DISCONNECTED event (often reason 36),
+         * which BluFi reports as a new failure before the real connection
+         * attempt starts.
+         */
+        if (gl_sta_connected) {
+            esp_wifi_disconnect();
+        }
         example_wifi_connect();
         break;
     case ESP_BLUFI_EVENT_REQ_DISCONNECT_FROM_AP:
