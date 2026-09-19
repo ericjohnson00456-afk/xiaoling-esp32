@@ -85,8 +85,8 @@ private:
         boot_button_.OnMultipleClick([]() {
             Application::GetInstance().HandleButtonClick(5);
         }, 5);
-        boot_button_.OnMultipleClick([]() {
-            Application::GetInstance().HandleButtonClick(8);
+        boot_button_.OnMultipleClickAtLeast([](uint8_t click_count) {
+            Application::GetInstance().HandleButtonClick(click_count);
         }, 8);
     }
 

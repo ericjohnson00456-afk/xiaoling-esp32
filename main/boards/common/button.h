@@ -22,6 +22,8 @@ public:
     void OnClick(std::function<void()> callback);
     void OnDoubleClick(std::function<void()> callback);
     void OnMultipleClick(std::function<void()> callback, uint8_t click_count = 3);
+    // Invoke the callback when the click count reaches the threshold.
+    void OnMultipleClickAtLeast(std::function<void(uint8_t)> callback, uint8_t min_click_count);
 
 protected:
     gpio_num_t gpio_num_;
@@ -33,6 +35,8 @@ protected:
     std::function<void()> on_click_;
     std::function<void()> on_double_click_;
     std::unordered_map<uint8_t, std::function<void()>> on_multiple_click_;
+    std::function<void(uint8_t)> on_multiple_click_at_least_;
+    uint8_t min_multiple_click_count_ = 0;
 };
 
 #if CONFIG_SOC_ADC_SUPPORTED

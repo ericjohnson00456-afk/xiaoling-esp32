@@ -128,3 +128,18 @@ void Button::OnMultipleClick(std::function<void()> callback, uint8_t click_count
         }
     }, this);
 }
+
+void Button::OnMultipleClickAtLeast(std::function<void(uint8_t)> callback, uint8_t min_click_count) {
+    if (button_handle_ == nullptr || min_click_count == 0) {
+        return;
+    }
+    on_multiple_click_at_least_ = std::move(callback);
+    min_multiple_click_count_ = min_click_count;
+    iot_button_register_cb(button_handle_, BUTTON_PRESS_REPEAT_DONE, nullptr, [](void* handle, void* usr_data) {
+        Button* button = static_cast<Button*>(usr_data);
+        const auto click_count = iot_button_get_repeat(static_cast<button_handle_t>(handle));
+        if (click_count >= button->min_multiple_click_count_ && button->on_multiple_click_at_least_) {
+            button->on_multiple_click_at_least_(click_count);
+        }
+    }, this);
+}
