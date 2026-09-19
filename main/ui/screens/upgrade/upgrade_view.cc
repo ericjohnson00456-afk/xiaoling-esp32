@@ -81,6 +81,8 @@ void UpgradeView::Hide() { if (root_ != nullptr) lv_obj_add_flag(root_, LV_OBJ_F
 
 void UpgradeView::SetProgress(const std::string& target, int progress, size_t speed) {
     if (root_ == nullptr) return;
+    DisplayLockGuard lock(display_);
+    if (!lock.locked()) return;
     const int bounded = std::max(0, std::min(100, progress));
     char text[48];
     lv_label_set_text(target_, target.c_str());

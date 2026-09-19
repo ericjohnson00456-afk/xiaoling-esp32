@@ -26,6 +26,7 @@ const UiNavScreen& UpgradePresenter::Screen() {
 
 int UpgradePresenter::Open(const UiNavScreen*, void** data) {
     auto& presenter = GetInstance();
+    presenter.result_visible_ = false;
     presenter.view_ = std::make_unique<UpgradeView>(UiManager::GetInstance().display());
     *data = &presenter;
     return 0;

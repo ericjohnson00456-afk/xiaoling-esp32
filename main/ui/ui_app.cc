@@ -378,15 +378,21 @@ void SetDuplexVisible(bool visible) {
 }
 
 void ShowUpgradeProgress(std::string target, int progress, size_t speed) {
+    auto& manager = UiManager::GetInstance();
+    if (manager.lvgl_display() != nullptr) {
+        // Progress callbacks originate in the OTA task (priority 2). Apply
+        // them immediately under the LVGL lock instead of queueing behind the
+        // application task, otherwise the progress page can visibly freeze.
+        auto& presenter = UpgradePresenter::GetInstance();
+        presenter.SetProgress(std::move(target), progress, speed);
+        if (manager.TopScreenId() != UI_PAGE_UPGRADE) {
+            manager.NavigateTo(UI_PAGE_UPGRADE);
+        }
+        return;
+    }
+
     UiManager::GetInstance().Dispatch([target = std::move(target), progress, speed]() mutable {
-        auto& manager = UiManager::GetInstance();
-        if (manager.lvgl_display() != nullptr) {
-            auto& presenter = UpgradePresenter::GetInstance();
-            presenter.SetProgress(std::move(target), progress, speed);
-            if (manager.TopScreenId() != UI_PAGE_UPGRADE) {
-                manager.NavigateTo(UI_PAGE_UPGRADE);
-            }
-        } else if (auto* display = manager.display(); display != nullptr) {
+        if (auto* display = UiManager::GetInstance().display(); display != nullptr) {
             char text[80];
             std::snprintf(text, sizeof(text), "%s %d%%", target.c_str(), progress);
             display->SetChatMessage("system", text);

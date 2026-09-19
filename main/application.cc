@@ -849,6 +849,11 @@ void Application::ShowActivationCode(const std::string& code, const std::string&
         digit_sound{'9', "9"}
     }};
 
+    const std::string activation_title = message.empty() ? Lang::Strings::ACTIVATION : message;
+    const std::string activation_text = code.empty()
+        ? activation_title
+        : activation_title + "\n" + Lang::Strings::ACTIVATION_CODE + code;
+
 #ifdef CONFIG_LSPLATFORM
     ESP_LOGI(TAG, "Showing activation code: %s, QR url: %s", code.c_str(), qrcode.c_str());
     if (!qrcode.empty()) {
@@ -859,7 +864,7 @@ void Application::ShowActivationCode(const std::string& code, const std::string&
             ESP_LOGE(TAG, "Failed to fetch QR code image");
             return;
         }
-        QrCodePresenter::GetInstance().SetCustomQrCode(std::move(image), message + code);
+        QrCodePresenter::GetInstance().SetCustomQrCode(std::move(image), activation_text);
         UiManager::GetInstance().NavigateTo(UI_PAGE_QRCODE);
     } else {
         ESP_LOGW(TAG, "QR code URL is empty, skipping image download");
@@ -868,7 +873,7 @@ void Application::ShowActivationCode(const std::string& code, const std::string&
     PlayTone(71);
 #else // !CONFIG_LSPLATFORM
     // This sentence uses 9KB of SRAM, so we need to wait for it to finish
-    Alert(Lang::Strings::ACTIVATION, message.c_str(), "link", "activation");
+    Alert(Lang::Strings::ACTIVATION, activation_text.c_str(), "link", "activation");
 #endif // CONFIG_LSPLATFORM
     for (const auto& digit : code) {
         auto it = std::find_if(digit_sounds.begin(), digit_sounds.end(),

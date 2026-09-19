@@ -18,6 +18,7 @@ enum class Language {
 namespace PrimaryStrings {
 inline constexpr const char* ACCESS_VIA_BROWSER = "，浏览器访问 ";
 inline constexpr const char* ACTIVATION = "激活设备";
+inline constexpr const char* ACTIVATION_CODE = "激活码：";
 inline constexpr const char* BATTERY_CHARGING = "正在充电";
 inline constexpr const char* BATTERY_FULL = "电量已满";
 inline constexpr const char* BATTERY_LOW = "电量不足";
@@ -84,6 +85,7 @@ inline constexpr const char* WIFI_CONFIG_MODE = "配网模式";
 namespace EnglishStrings {
 inline constexpr const char* ACCESS_VIA_BROWSER = " Config URL: ";
 inline constexpr const char* ACTIVATION = "Activation";
+inline constexpr const char* ACTIVATION_CODE = "Activation code: ";
 inline constexpr const char* BATTERY_CHARGING = "Charging";
 inline constexpr const char* BATTERY_FULL = "Battery full";
 inline constexpr const char* BATTERY_LOW = "Low battery";
@@ -154,6 +156,7 @@ inline const char* CODE = "zh-CN";
 namespace Strings {
 inline const char* ACCESS_VIA_BROWSER = PrimaryStrings::ACCESS_VIA_BROWSER;
 inline const char* ACTIVATION = PrimaryStrings::ACTIVATION;
+inline const char* ACTIVATION_CODE = PrimaryStrings::ACTIVATION_CODE;
 inline const char* BATTERY_CHARGING = PrimaryStrings::BATTERY_CHARGING;
 inline const char* BATTERY_FULL = PrimaryStrings::BATTERY_FULL;
 inline const char* BATTERY_LOW = PrimaryStrings::BATTERY_LOW;
@@ -230,6 +233,7 @@ inline void SetLanguage(Language language) {
     CODE = language == Language::English ? "en-US" : "zh-CN";
     Strings::ACCESS_VIA_BROWSER = language == Language::English ? EnglishStrings::ACCESS_VIA_BROWSER : PrimaryStrings::ACCESS_VIA_BROWSER;
     Strings::ACTIVATION = language == Language::English ? EnglishStrings::ACTIVATION : PrimaryStrings::ACTIVATION;
+    Strings::ACTIVATION_CODE = language == Language::English ? EnglishStrings::ACTIVATION_CODE : PrimaryStrings::ACTIVATION_CODE;
     Strings::BATTERY_CHARGING = language == Language::English ? EnglishStrings::BATTERY_CHARGING : PrimaryStrings::BATTERY_CHARGING;
     Strings::BATTERY_FULL = language == Language::English ? EnglishStrings::BATTERY_FULL : PrimaryStrings::BATTERY_FULL;
     Strings::BATTERY_LOW = language == Language::English ? EnglishStrings::BATTERY_LOW : PrimaryStrings::BATTERY_LOW;
