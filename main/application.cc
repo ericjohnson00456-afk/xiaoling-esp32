@@ -563,6 +563,7 @@ bool Application::CheckAssetsVersion() {
     bool downloaded = false;
     bool failed = false;
     bool resource_tone_played = false;
+    bool tone_downloaded = false;
     for (const auto& item : pending) {
         if ((item.resource == Assets::Resource::WakeWord &&
              KvOta::IsDisabled(KvOta::UpdateType::WakeWord)) ||
@@ -612,6 +613,9 @@ bool Application::CheckAssetsVersion() {
             continue;
         }
         downloaded = true;
+        if (item.resource == Assets::Resource::Tone) {
+            tone_downloaded = true;
+        }
     }
 
     if (failed && !downloaded) {
@@ -622,6 +626,12 @@ bool Application::CheckAssetsVersion() {
         return false;
     }
     if (downloaded) {
+#ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
+        if (tone_downloaded &&
+            !ToneModel::GetInstance().Initialize(assets.ToneStore(), "/")) {
+            ESP_LOGW(TAG, "Failed to reload tone model after tone update");
+        }
+#endif
         // Tone/emoji/wake-word models may still be referenced by running tasks;
         // reboot after the transaction so every consumer remaps a new image.
         if (failed) {
