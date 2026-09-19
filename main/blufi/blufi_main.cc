@@ -79,6 +79,21 @@ char ble_name[24];
 extern const char xl_ble_prov_png_start[] asm("_binary_xl_ble_prov_png_start");
 extern const char xl_ble_prov_png_end[]   asm("_binary_xl_ble_prov_png_end");
 
+static void blufi_wait_for_completion_task(void*)
+{
+    while (!provstate || !authstate) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+
+    BLUFI_INFO("BLUFI config done");
+    BLUFI_INFO("Restarting...");
+    esp_restart();
+
+    // esp_restart() does not return, but keep the task well-formed for
+    // targets where the reset request is deferred or rejected.
+    vTaskDelete(nullptr);
+}
+
 esp_err_t report_id()
 {
     std::string pid = SystemInfo::GetProductId();
@@ -506,16 +521,12 @@ void blufi_start(void)
     // 配网提示音由应用层根据当前语言从 ROMFS 加载。
     application.PlayTone(70);
 
-    while (!provstate || !authstate) {
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
-    }
-
-    BLUFI_INFO("BLUFI config done");
-
-    BLUFI_INFO("Restarting...");
-    esp_restart();
-
-    while (1) {
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
+    // The application starts BluFi from Application::Initialize(), before its
+    // main event loop begins consuming UI tasks. Waiting here would therefore
+    // prevent the queued QR-code navigation from ever being rendered. Keep
+    // completion monitoring in a separate task so the UI and BLE stack can run
+    // concurrently.
+    if (xTaskCreate(blufi_wait_for_completion_task, "blufi_wait", 2048, nullptr, 2, nullptr) != pdPASS) {
+        BLUFI_ERROR("Failed to create BluFi completion task");
     }
 }

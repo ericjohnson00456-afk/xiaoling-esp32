@@ -7,6 +7,7 @@
 #include "ui/ui_app.h"
 #include "ui/i18n/lang_config.h"
 #include "ui/utils/image/lvgl_image.h"
+#include "system/device_status.h"
 #include "qrcode_view.h"
 
 #include <utility>
@@ -73,7 +74,13 @@ int QrCodePresenter::Show(const UiNavScreen* screen, void* data) {
         return -1;
     }
     presenter->view_->Show();
-    presenter->StartTimeoutTimer();
+    // The provisioning QR must remain available until the user completes
+    // BluFi setup. Other QR-code screens keep their normal auto-dismissal.
+    if (DeviceStatus::GetState() == kDeviceStateWifiConfiguring) {
+        presenter->DestroyTimeoutTimer();
+    } else {
+        presenter->StartTimeoutTimer();
+    }
     presenter->Refresh();
     return 0;
 }
