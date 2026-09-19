@@ -2,6 +2,8 @@
 #include "system/system_info.h"
 #include "settings.h"
 #include "ui/i18n/lang_config.h"
+#include "xiaoling/conn/xiaoling_config.h"
+#include "base64_codec.h"
 
 #include <cJSON.h>
 #include <esp_log.h>
@@ -22,6 +24,54 @@
 #include <cctype>
 
 #define TAG "Ota"
+
+// The device configuration endpoint is only used by LSPlatform builds.
+#ifdef CONFIG_LSPLATFORM
+namespace {
+
+std::string BuildResourceConfigParam() {
+    cJSON* params = cJSON_CreateObject();
+    if (params == nullptr) {
+        return {};
+    }
+
+    cJSON* firmware_info = cJSON_CreateObject();
+    if (firmware_info == nullptr) {
+        cJSON_Delete(params);
+        return {};
+    }
+
+    cJSON_AddStringToObject(firmware_info, "type", "arcs-mini");
+    cJSON_AddStringToObject(firmware_info, "version", esp_app_get_description()->version);
+    cJSON_AddItemToObject(params, "firmware_info", firmware_info);
+
+    char* params_json = cJSON_PrintUnformatted(params);
+    cJSON_Delete(params);
+    if (params_json == nullptr) {
+        return {};
+    }
+
+    const std::string encoded = Base64Codec::Encode(params_json);
+    cJSON_free(params_json);
+    return encoded;
+}
+
+std::string BuildResourceConfigUrl() {
+    std::string url = std::string("http://") + XiaolingConfig::GetHost() +
+                      "/external/device/configurations?product_id=" +
+                      SystemInfo::GetProductId() + "&device_id=" +
+                      SystemInfo::GetCloudDeviceId();
+    const auto param = BuildResourceConfigParam();
+    if (!param.empty()) {
+        url += "&param=" + param;
+    } else {
+        ESP_LOGW(TAG, "Failed to build resource config param; requesting without param");
+    }
+    return url;
+}
+
+}  // namespace
+#endif // CONFIG_LSPLATFORM
 
 
 Ota::Ota() {
@@ -100,24 +150,73 @@ esp_err_t Ota::CheckVersion() {
     }
     std::string request = board.GetSystemInfoJson();
     const std::string method = request.empty() ? "GET" : "POST";
+    ESP_LOGI(TAG, "Firmware OTA request: method=%s url=%s body=%s",
+             method.c_str(), url.c_str(), request.empty() ? "<empty>" : request.c_str());
     http->SetContent(std::move(request));
     if (!http->Open(method, url)) {
-        ESP_LOGE(TAG, "Failed to open OTA check request");
+        ESP_LOGE(TAG, "Firmware OTA request failed to open: url=%s", url.c_str());
         return ESP_FAIL;
     }
     const int status = http->GetStatusCode();
+    const std::string body = http->ReadAll();
+    ESP_LOGI(TAG, "Firmware OTA response: status=%d body=%s", status,
+             body.empty() ? "<empty>" : body.c_str());
     if (status != 200) {
         ESP_LOGE(TAG, "OTA check returned HTTP %d", status);
         http->Close();
         return ESP_FAIL;
     }
-    const std::string body = http->ReadAll();
     http->Close();
 
     cJSON* root = cJSON_Parse(body.c_str());
     if (root == nullptr) {
         ESP_LOGE(TAG, "Invalid OTA check response");
         return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    // The provisioning flow uses the activation payload returned by the same
+    // endpoint as the OTA metadata. Keep parsing it even for LSPlatform
+    // devices; the app binding QR code is shown after Wi-Fi provisioning.
+    has_activation_code_ = false;
+    has_activation_challenge_ = false;
+    activation_message_.clear();
+    activation_code_.clear();
+    activation_challenge_.clear();
+#ifdef CONFIG_LSPLATFORM
+    has_activation_qrcode_ = false;
+    activation_qrcode_.clear();
+#endif
+
+    const auto* activation = cJSON_GetObjectItemCaseSensitive(root, "activation");
+    if (cJSON_IsObject(activation)) {
+        const auto* message = cJSON_GetObjectItemCaseSensitive(activation, "message");
+        if (cJSON_IsString(message) && message->valuestring != nullptr) {
+            activation_message_ = message->valuestring;
+        }
+
+        const auto* code = cJSON_GetObjectItemCaseSensitive(activation, "code");
+        if (cJSON_IsString(code) && code->valuestring != nullptr) {
+            activation_code_ = code->valuestring;
+            has_activation_code_ = !activation_code_.empty();
+        }
+
+        const auto* challenge = cJSON_GetObjectItemCaseSensitive(activation, "challenge");
+        if (cJSON_IsString(challenge) && challenge->valuestring != nullptr) {
+            activation_challenge_ = challenge->valuestring;
+            has_activation_challenge_ = !activation_challenge_.empty();
+        }
+
+        const auto* timeout_ms = cJSON_GetObjectItemCaseSensitive(activation, "timeout_ms");
+        if (cJSON_IsNumber(timeout_ms) && timeout_ms->valueint > 0) {
+            activation_timeout_ms_ = timeout_ms->valueint;
+        }
+#ifdef CONFIG_LSPLATFORM
+        const auto* qrcode = cJSON_GetObjectItemCaseSensitive(activation, "qrcode");
+        if (cJSON_IsString(qrcode) && qrcode->valuestring != nullptr) {
+            activation_qrcode_ = qrcode->valuestring;
+            has_activation_qrcode_ = !activation_qrcode_.empty();
+        }
+#endif
     }
 
     auto* firmware = cJSON_GetObjectItemCaseSensitive(root, "firmware");
@@ -211,8 +310,7 @@ esp_err_t Ota::CheckResources() {
     std::string url = settings.GetString("resource_ota_url");
 #ifdef CONFIG_LSPLATFORM
     if (url.empty()) {
-        url = "https://api.listenai.com/external/device/configurations?product_id=" +
-              SystemInfo::GetProductId() + "&device_id=" + SystemInfo::GetCloudDeviceId();
+        url = BuildResourceConfigUrl();
     }
 #endif
     if (url.empty()) {
@@ -220,15 +318,28 @@ esp_err_t Ota::CheckResources() {
     }
 
     auto http = SetupHttp();
-    if (http == nullptr || !http->Open("GET", url) || http->GetStatusCode() != 200) {
-        if (http != nullptr) http->Close();
-        ESP_LOGW(TAG, "Resource OTA check failed: %s", url.c_str());
+    if (http == nullptr) {
+        ESP_LOGE(TAG, "Resource OTA request could not create HTTP client: url=%s", url.c_str());
         return ESP_FAIL;
     }
+    ESP_LOGI(TAG, "Resource OTA request: method=GET url=%s body=<empty>", url.c_str());
+    if (!http->Open("GET", url)) {
+        ESP_LOGE(TAG, "Resource OTA request failed to open: url=%s", url.c_str());
+        http->Close();
+        return ESP_FAIL;
+    }
+    const int status = http->GetStatusCode();
     const std::string body = http->ReadAll();
+    ESP_LOGI(TAG, "Resource OTA response: status=%d body=%s", status,
+             body.empty() ? "<empty>" : body.c_str());
     http->Close();
+    if (status != 200) {
+        ESP_LOGW(TAG, "Resource OTA check returned HTTP %d: url=%s", status, url.c_str());
+        return ESP_FAIL;
+    }
     cJSON* root = cJSON_Parse(body.c_str());
     if (root == nullptr) {
+        ESP_LOGE(TAG, "Resource OTA response is not valid JSON");
         return ESP_ERR_INVALID_RESPONSE;
     }
     ParseResources(root, wake_word_resource_, tone_resource_, emoji_resource_);

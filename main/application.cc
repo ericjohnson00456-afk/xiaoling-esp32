@@ -126,6 +126,9 @@ void Application::Initialize() {
     if (!UiApp::Initialize()) {
         ESP_LOGE(TAG, "Home 页面初始化失败");
     }
+    // Show the provisioning gear until the network and activation checks are
+    // complete. The protocol loading step switches to the AI icon before WS.
+    UiApp::SetEmotion("gear");
     PublishWifiIcon();
     UiApp::SetDuplexMode(session_controller_.policy().mode);
 #ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
@@ -465,6 +468,50 @@ void Application::ActivationTask() {
         return;
     }
 
+    // Wi-Fi provisioning and device binding are two separate steps. The
+    // activation data is returned by the OTA endpoint after AP/BluFi
+    // provisioning, so keep the QR/code visible until the server confirms it.
+    if (ota_->HasActivationCode() || ota_->HasActivationChallenge()) {
+        if (ota_->HasActivationCode()) {
+#ifdef CONFIG_LSPLATFORM
+            ShowActivationCode(ota_->GetActivationCode(), ota_->GetActivationMessage(),
+                               ota_->GetActivationQRCode());
+#else
+            ShowActivationCode(ota_->GetActivationCode(), ota_->GetActivationMessage());
+#endif
+        }
+
+        if (ota_->HasActivationChallenge()) {
+            constexpr int kActivationAttempts = 10;
+            bool activated = false;
+            for (int attempt = 0; attempt < kActivationAttempts; ++attempt) {
+                if (GetDeviceState() != kDeviceStateActivating) {
+                    break;
+                }
+
+                ESP_LOGI(TAG, "Waiting for device binding: %d/%d",
+                         attempt + 1, kActivationAttempts);
+                const esp_err_t result = ota_->Activate();
+                if (result == ESP_OK) {
+                    activated = true;
+                    break;
+                }
+
+                // HTTP 202 means the user has not completed binding yet.
+                // Retry at a short interval while leaving the QR code visible.
+                const int delay_ms = result == ESP_ERR_TIMEOUT ? 3000 : 10000;
+                vTaskDelay(pdMS_TO_TICKS(delay_ms));
+            }
+
+            if (activated) {
+                ESP_LOGI(TAG, "Device binding successful");
+                Board::GetInstance().GetDisplay()->DismissActivation();
+            } else {
+                ESP_LOGW(TAG, "Device binding did not complete during startup");
+            }
+        }
+    }
+
     const esp_err_t resource_check = ota_->CheckResources();
     if (resource_check != ESP_OK && resource_check != ESP_ERR_NOT_FOUND) {
         ESP_LOGE(TAG, "Resource OTA metadata check failed; postpone Xiaoling WebSocket connection");
@@ -748,6 +795,7 @@ void Application::InitializeXiaolingConn() {
         }
     });
 
+    UiApp::SetEmotion("microchip_ai");
     if (xiaoling_conn_->Start()) {
         ESP_LOGI(TAG, "小聆连接和语音模块已就绪");
     } else {

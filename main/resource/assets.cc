@@ -491,12 +491,27 @@ bool Assets::DownloadResource(Resource resource, const std::string& url, size_t 
         return false;
     }
     auto http = network->CreateHttp(0);
-    if (http == nullptr || !http->Open("GET", url) || http->GetStatusCode() != 200) {
-        ESP_LOGE(TAG, "Failed to open resource URL: %s", url.c_str());
+    if (http == nullptr) {
+        ESP_LOGE(TAG, "Resource download request could not create HTTP client: url=%s", url.c_str());
         target->Mount();
         return false;
     }
+    ESP_LOGI(TAG, "Resource download request: method=GET url=%s body=<binary/empty>", url.c_str());
+    if (!http->Open("GET", url)) {
+        ESP_LOGE(TAG, "Resource download request failed to open: url=%s", url.c_str());
+        target->Mount();
+        return false;
+    }
+    const int status = http->GetStatusCode();
     const size_t content_length = http->GetBodyLength();
+    ESP_LOGI(TAG, "Resource download response: status=%d content_length=%u url=%s",
+             status, static_cast<unsigned>(content_length), url.c_str());
+    if (status != 200) {
+        ESP_LOGE(TAG, "Resource download returned HTTP %d: url=%s", status, url.c_str());
+        http->Close();
+        target->Mount();
+        return false;
+    }
     if (content_length == 0 || target->partition() == nullptr ||
         content_length > target->partition()->size ||
         (expected_size != 0 && content_length != expected_size)) {
