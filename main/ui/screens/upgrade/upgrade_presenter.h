@@ -27,4 +27,5 @@ private:
     std::string target_;
     int progress_ = 0;
     size_t speed_ = 0;
+    bool result_visible_ = false;
 };

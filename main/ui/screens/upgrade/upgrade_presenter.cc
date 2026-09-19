@@ -54,6 +54,9 @@ int UpgradePresenter::Close(const UiNavScreen*, void* data) {
 }
 
 void UpgradePresenter::SetProgress(std::string target, int progress, size_t speed) {
+    if (result_visible_) {
+        return;
+    }
     target_ = std::move(target);
     progress_ = progress;
     speed_ = speed;
@@ -61,6 +64,7 @@ void UpgradePresenter::SetProgress(std::string target, int progress, size_t spee
 }
 
 void UpgradePresenter::SetResult(std::string message) {
+    result_visible_ = true;
     target_ = std::move(message);
     progress_ = 100;
     speed_ = 0;
