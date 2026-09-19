@@ -52,6 +52,7 @@ if LSPLATFORM
         config LSCHAT_SECRET_ID
             string "自建应用 Product Secret"
             default ""
+            depends on LSPLATFORM_PRODUCT_ID_CUSTOM
             help
                 用于获取 lschat token 的自建应用 Product Secret。生产固件应改由安全存储提供。
     endmenu
