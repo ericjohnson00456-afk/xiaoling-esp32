@@ -14,6 +14,7 @@ public:
     void Show();
     void Hide();
     void SetProgress(const std::string& target, int progress, size_t speed);
+    void SetResult(const std::string& message);
 
 private:
     void CreateUi();

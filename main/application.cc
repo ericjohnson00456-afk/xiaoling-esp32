@@ -551,13 +551,18 @@ bool Application::CheckAssetsVersion() {
         const char* key;
         const char* alias_key;
         const char* label;
+        const char* updating_text;
         const Ota::ResourceInfo* remote;
     };
     const PendingResource pending[] = {
-        {Assets::Resource::Respak, "respak_url", "download_url", "respak", nullptr},
-        {Assets::Resource::Tone, "tone_url", nullptr, "tone", &ota_->GetToneResource()},
-        {Assets::Resource::Emoji, "emoji_url", nullptr, "emoji", &ota_->GetEmojiResource()},
-        {Assets::Resource::WakeWord, "wake_word_url", "wakeword_url", "wake_word", &ota_->GetWakeWordResource()},
+        {Assets::Resource::Respak, "respak_url", "download_url", "respak",
+         Lang::Strings::UPDATING_RESPAK_RESOURCE, nullptr},
+        {Assets::Resource::Tone, "tone_url", nullptr, "tone",
+         Lang::Strings::UPDATING_TONE_RESOURCE, &ota_->GetToneResource()},
+        {Assets::Resource::Emoji, "emoji_url", nullptr, "emoji",
+         Lang::Strings::UPDATING_EMOJI_RESOURCE, &ota_->GetEmojiResource()},
+        {Assets::Resource::WakeWord, "wake_word_url", "wakeword_url", "wake_word",
+         Lang::Strings::UPDATING_WAKE_WORD_RESOURCE, &ota_->GetWakeWordResource()},
     };
 
     bool downloaded = false;
@@ -600,10 +605,10 @@ bool Application::CheckAssetsVersion() {
             PlayOtaTone(89);
             resource_tone_played = true;
         }
-        UiApp::ShowUpgradeProgress(item.label, 0);
+        UiApp::ShowUpgradeProgress(item.updating_text, 0);
         board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
         const bool success = assets.DownloadResource(item.resource, url, expected_size, expected_md5,
-            [label = std::string(item.label)](int progress, size_t speed) {
+            [label = std::string(item.updating_text)](int progress, size_t speed) {
                 UiApp::ShowUpgradeProgress(label, progress, speed);
             });
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
@@ -620,6 +625,9 @@ bool Application::CheckAssetsVersion() {
 
     if (failed && !downloaded) {
         PlayOtaTone(92);
+        UiApp::ShowUpgradeResult(Lang::Strings::RESOURCE_UPDATE_FAILED);
+        vTaskDelay(pdMS_TO_TICKS(3000));
+        UiApp::NavigateHome();
         Alert(Lang::Strings::ERROR, Lang::Strings::DOWNLOAD_ASSETS_FAILED,
               "circle_xmark", "");
         SetDeviceState(kDeviceStateActivating);
@@ -636,11 +644,12 @@ bool Application::CheckAssetsVersion() {
         // reboot after the transaction so every consumer remaps a new image.
         if (failed) {
             PlayOtaTone(92);
+            UiApp::ShowUpgradeResult(Lang::Strings::RESOURCE_UPDATE_FAILED);
         } else {
             PlayOtaTone(90);
+            UiApp::ShowUpgradeResult(Lang::Strings::RESOURCE_UPDATE_SUCCESSFUL);
         }
-        UiApp::SetChatMessage("system", Lang::Strings::PLEASE_WAIT);
-        vTaskDelay(pdMS_TO_TICKS(500));
+        vTaskDelay(pdMS_TO_TICKS(3000));
         Reboot();
         return true;
     }

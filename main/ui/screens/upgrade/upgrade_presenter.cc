@@ -59,3 +59,10 @@ void UpgradePresenter::SetProgress(std::string target, int progress, size_t spee
     speed_ = speed;
     if (view_ != nullptr) view_->SetProgress(target_, progress_, speed_);
 }
+
+void UpgradePresenter::SetResult(std::string message) {
+    target_ = std::move(message);
+    progress_ = 100;
+    speed_ = 0;
+    if (view_ != nullptr) view_->SetResult(target_);
+}

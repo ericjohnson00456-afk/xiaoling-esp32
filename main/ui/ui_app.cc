@@ -394,6 +394,21 @@ void ShowUpgradeProgress(std::string target, int progress, size_t speed) {
     });
 }
 
+void ShowUpgradeResult(std::string message) {
+    UiManager::GetInstance().Dispatch([message = std::move(message)]() mutable {
+        auto& manager = UiManager::GetInstance();
+        if (manager.lvgl_display() != nullptr) {
+            auto& presenter = UpgradePresenter::GetInstance();
+            if (manager.TopScreenId() != UI_PAGE_UPGRADE) {
+                manager.NavigateTo(UI_PAGE_UPGRADE);
+            }
+            presenter.SetResult(std::move(message));
+        } else if (auto* display = manager.display(); display != nullptr) {
+            display->SetChatMessage("system", message.c_str());
+        }
+    });
+}
+
 void NavigateToQrCode() {
     UiManager::GetInstance().Dispatch([]() {
         UiManager::GetInstance().NavigateTo(UI_PAGE_QRCODE);

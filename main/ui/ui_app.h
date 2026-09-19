@@ -67,6 +67,7 @@ void SetPowerSaveMode(bool enabled);
 void SetDuplexMode(DuplexMode mode);
 void SetDuplexVisible(bool visible);
 void ShowUpgradeProgress(std::string target, int progress, size_t speed = 0);
+void ShowUpgradeResult(std::string message);
 void NavigateToQrCode();
 void NavigateHome();
 

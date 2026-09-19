@@ -14,6 +14,7 @@ public:
     static const UiNavScreen& Screen();
 
     void SetProgress(std::string target, int progress, size_t speed);
+    void SetResult(std::string message);
 
 private:
     static int Open(const UiNavScreen*, void** data);
