@@ -397,11 +397,59 @@ void AudioService::AudioOutputTask() {
             break;
         }
 
+        /* Network TTS is bursty at startup. Wait for a bounded amount of PCM
+           before opening the speaker so the first response does not underrun
+           while the HTTP and decoder tasks are catching up. A finished stream
+           releases this gate for short clips with fewer than four blocks. */
+        while (!service_stopped_ && !audio_playback_queue_.empty() &&
+               audio_playback_queue_.front()->type == kAudioTaskTypePlayerToPlaybackQueue &&
+               audio_playback_queue_.size() < PLAYER_PREBUFFER_TASKS &&
+               !player_playback_finished_ &&
+               !player_prebuffer_release_logged_) {
+            if (!player_prebuffer_wait_logged_) {
+                player_prebuffer_wait_logged_ = true;
+                ESP_LOGI(TAG, "播放器预缓冲等待: queue=%u/%u",
+                         static_cast<unsigned>(audio_playback_queue_.size()),
+                         static_cast<unsigned>(PLAYER_PREBUFFER_TASKS));
+            }
+            audio_queue_cv_.wait(lock);
+        }
+        if (service_stopped_) {
+            break;
+        }
+        if (audio_playback_queue_.empty()) {
+            continue;
+        }
+        if (player_prebuffer_wait_logged_ && !player_prebuffer_release_logged_) {
+            player_prebuffer_release_logged_ = true;
+            ESP_LOGI(TAG, "播放器预缓冲释放: queue=%u, stream_finished=%d",
+                     static_cast<unsigned>(audio_playback_queue_.size()),
+                     player_playback_finished_ ? 1 : 0);
+        }
+
         auto task = std::move(audio_playback_queue_.front());
         audio_playback_queue_.pop_front();
+        const size_t queue_size_after_pop = audio_playback_queue_.size();
         audio_output_busy_ = true;
         audio_queue_cv_.notify_all();
         lock.unlock();
+
+        bool player_output_started = false;
+        if (task->type == kAudioTaskTypePlayerToPlaybackQueue) {
+            const uint32_t now_ms = esp_log_timestamp();
+            const uint32_t previous_end_ms = player_output_last_end_ms_.load();
+            if (previous_end_ms != 0) {
+                const uint32_t gap_ms = now_ms - previous_end_ms;
+                if (gap_ms >= 80) {
+                    const uint32_t underruns = player_output_underruns_.fetch_add(1) + 1;
+                    ESP_LOGW(TAG, "播放器输出出现间隙: gap=%lums, underruns=%lu, queue_before=%u",
+                             static_cast<unsigned long>(gap_ms),
+                             static_cast<unsigned long>(underruns),
+                             static_cast<unsigned>(queue_size_after_pop));
+                }
+            }
+            player_output_started = player_output_chunks_.fetch_add(1) == 0;
+        }
 
         if (!codec_->output_enabled()) {
             esp_timer_stop(audio_power_timer_);
@@ -409,11 +457,20 @@ void AudioService::AudioOutputTask() {
             codec_->EnableOutput(true);
         }
         codec_->OutputData(task->pcm);
+        if (player_output_started && callbacks_.on_player_output_started) {
+            ESP_LOGI(TAG, "播放器首个 PCM 已交给 codec: samples=%u",
+                     static_cast<unsigned>(task->pcm.size()));
+            callbacks_.on_player_output_started();
+        }
 
         lock.lock();
         audio_output_busy_ = false;
         audio_queue_cv_.notify_all();
         lock.unlock();
+
+        if (task->type == kAudioTaskTypePlayerToPlaybackQueue) {
+            player_output_last_end_ms_.store(esp_log_timestamp());
+        }
 
         /* Update the last output time */
         last_output_time_ = std::chrono::steady_clock::now();
@@ -610,7 +667,7 @@ bool AudioService::PushPcmToPlaybackQueue(const uint8_t* data, size_t size, int 
     }
 
     auto task = std::make_unique<AudioTask>();
-    task->type = kAudioTaskTypeDecodeToPlaybackQueue;
+    task->type = kAudioTaskTypePlayerToPlaybackQueue;
     task->timestamp = 0;
     task->pcm.resize(size / sizeof(int16_t));
     std::memcpy(task->pcm.data(), data, size);
@@ -632,11 +689,19 @@ bool AudioService::PushPcmToPlaybackQueue(const uint8_t* data, size_t size, int 
     }
 
     std::unique_lock<std::mutex> lock(audio_queue_mutex_);
+    const uint32_t enqueue_wait_start_ms = esp_log_timestamp();
+    const bool queue_was_full = audio_playback_queue_.size() >= MAX_PLAYER_PLAYBACK_TASKS_IN_QUEUE;
     if (wait) {
         audio_queue_cv_.wait(lock, [this]() {
-            return service_stopped_ || audio_playback_queue_.size() < MAX_PLAYBACK_TASKS_IN_QUEUE;
+            return service_stopped_ || audio_playback_queue_.size() < MAX_PLAYER_PLAYBACK_TASKS_IN_QUEUE;
         });
-    } else if (audio_playback_queue_.size() >= MAX_PLAYBACK_TASKS_IN_QUEUE) {
+        const uint32_t enqueue_wait_ms = esp_log_timestamp() - enqueue_wait_start_ms;
+        if (queue_was_full && enqueue_wait_ms >= 80) {
+            ESP_LOGI(TAG, "播放器生产受队列反压: wait=%lums, queue=%u",
+                     static_cast<unsigned long>(enqueue_wait_ms),
+                     static_cast<unsigned>(audio_playback_queue_.size()));
+        }
+    } else if (audio_playback_queue_.size() >= MAX_PLAYER_PLAYBACK_TASKS_IN_QUEUE) {
         return false;
     }
 
@@ -644,8 +709,20 @@ bool AudioService::PushPcmToPlaybackQueue(const uint8_t* data, size_t size, int 
         return false;
     }
     audio_playback_queue_.push_back(std::move(task));
+    const size_t queue_size = audio_playback_queue_.size();
+    const bool first_chunk = !player_prebuffer_wait_logged_ && queue_size == 1;
     audio_queue_cv_.notify_all();
+    if (first_chunk) {
+        ESP_LOGI(TAG, "首个播放器 PCM 入队: bytes=%u, queue=%u",
+                 static_cast<unsigned>(size), static_cast<unsigned>(queue_size));
+    }
     return true;
+}
+
+void AudioService::MarkPlayerPlaybackFinished() {
+    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    player_playback_finished_ = true;
+    audio_queue_cv_.notify_all();
 }
 
 void AudioService::ClearPlaybackQueue() {
@@ -974,9 +1051,15 @@ void AudioService::ResetDecoder() {
     opus_decoder_->ResetState();
     /* 新播放会话以干净的重采样状态开始，避免上一段音频的残留相位 */
     player_resampler_input_rate_ = 0;
+    player_output_chunks_.store(0);
+    player_output_last_end_ms_.store(0);
+    player_output_underruns_.store(0);
     timestamp_queue_.clear();
     audio_decode_queue_.clear();
     audio_playback_queue_.clear();
+    player_playback_finished_ = false;
+    player_prebuffer_wait_logged_ = false;
+    player_prebuffer_release_logged_ = false;
     audio_testing_queue_.clear();
     audio_queue_cv_.notify_all();
 }

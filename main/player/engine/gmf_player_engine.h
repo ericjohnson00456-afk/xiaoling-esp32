@@ -32,6 +32,8 @@ private:
     mutable std::mutex mutex_;
     PlaybackRequest current_request_;
     PlaybackEndReason stop_reason_ = PlaybackEndReason::kNone;
+    uint32_t playback_started_ms_ = 0;
+    uint32_t output_chunks_ = 0;
     bool initialized_ = false;
     bool playing_ = false;
 };

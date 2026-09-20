@@ -40,7 +40,14 @@
 // lschat 的 opus-wb 使用 20 ms 分包，每包包含 320 个 16 kHz 样本。
 #define OPUS_FRAME_DURATION_MS 20
 #define MAX_ENCODE_TASKS_IN_QUEUE 2
-#define MAX_PLAYBACK_TASKS_IN_QUEUE 2
+/* Keep the normal server-downlink queue small so interactive Opus playback
+ * remains responsive. Network TTS uses a separate, deeper limit below. */
+#define MAX_PLAYBACK_TASKS_IN_QUEUE 8
+/* The TTS endpoint can pause for several seconds between chunks. A decoded
+ * PCM block is about 36 ms at 16 kHz; 96 blocks provide about 3.5 s of
+ * startup buffering without making the first response feel sluggish. */
+#define MAX_PLAYER_PLAYBACK_TASKS_IN_QUEUE 160
+#define PLAYER_PREBUFFER_TASKS 96
 #define MAX_DECODE_PACKETS_IN_QUEUE (2400 / OPUS_FRAME_DURATION_MS)
 #define MAX_SEND_PACKETS_IN_QUEUE (2400 / OPUS_FRAME_DURATION_MS)
 #define MAX_PROCESSED_WAKE_FRAMES_IN_QUEUE 4
@@ -61,6 +68,8 @@ struct AudioServiceCallbacks {
     std::function<void(const std::string&)> on_wake_word_detected;
     std::function<void(bool)> on_vad_change;
     std::function<void(void)> on_audio_testing_queue_full;
+    // Called after the first streamed-player PCM block is handed to the codec.
+    std::function<void(void)> on_player_output_started;
 };
 
 
@@ -68,6 +77,7 @@ enum AudioTaskType {
     kAudioTaskTypeEncodeToSendQueue,
     kAudioTaskTypeEncodeToTestingQueue,
     kAudioTaskTypeDecodeToPlaybackQueue,
+    kAudioTaskTypePlayerToPlaybackQueue,
 };
 
 struct AudioTask {
@@ -115,6 +125,7 @@ public:
 
     bool PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> packet, bool wait = false);
     bool PushPcmToPlaybackQueue(const uint8_t* data, size_t size, int sample_rate, bool wait = true);
+    void MarkPlayerPlaybackFinished();
     void ClearPlaybackQueue();
     void WaitForPlaybackComplete();
     std::unique_ptr<AudioStreamPacket> PopPacketFromSendQueue();
@@ -178,6 +189,14 @@ private:
     std::deque<std::unique_ptr<AudioTask>> audio_encode_queue_;
     std::deque<std::unique_ptr<AudioTask>> audio_playback_queue_;
     bool audio_output_busy_ = false;
+    bool player_playback_finished_ = false;
+    bool player_prebuffer_wait_logged_ = false;
+    bool player_prebuffer_release_logged_ = false;
+    /* Diagnostics for streamed-player jitter. These are written by the
+       output task and reset when a new player session starts. */
+    std::atomic<uint32_t> player_output_chunks_{0};
+    std::atomic<uint32_t> player_output_last_end_ms_{0};
+    std::atomic<uint32_t> player_output_underruns_{0};
     // For server AEC
     std::deque<uint32_t> timestamp_queue_;
 

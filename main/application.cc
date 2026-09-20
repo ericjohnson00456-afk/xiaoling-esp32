@@ -183,8 +183,10 @@ void Application::Initialize() {
             if (event.state == PlaybackState::kPlaying) {
                 active_tts_session_id_ = event.session_id;
                 session_controller_.StartTts(event.session_id);
-                if (GetDeviceState() == kDeviceStateIdle ||
-                    GetDeviceState() == kDeviceStateListening) {
+                if (!exit_requested_.load() && tts_output_started_.exchange(false) &&
+                    (GetDeviceState() == kDeviceStateIdle ||
+                     GetDeviceState() == kDeviceStateListening)) {
+                    tts_waiting_for_playback_.store(false);
                     SetDeviceState(kDeviceStateSpeaking);
                 }
                 return;
@@ -194,15 +196,31 @@ void Application::Initialize() {
                 event.state != PlaybackState::kFailed) {
                 return;
             }
+            tts_waiting_for_playback_.store(false);
+            tts_output_started_.store(false);
             if (active_tts_session_id_ != event.session_id) {
                 return;
             }
             active_tts_session_id_ = 0;
             session_controller_.EndTts(event.session_id);
+            if (exit_requested_.load()) {
+                // Exit ends the conversation lifecycle, but the current TTS
+                // stream is allowed to drain. Only then restore wakeup.
+                ESP_LOGI(TAG, "退出请求：TTS 播放结束，恢复唤醒检测但保持待命");
+                if (GetDeviceState() != kDeviceStateIdle) {
+                    SetDeviceState(kDeviceStateIdle);
+                }
+                audio_service_.EnableWakeWordDetection(false);
+                xEventGroupClearBits(event_group_, MAIN_EVENT_WAKE_WORD_DETECTED);
+                audio_service_.EnableWakeWordDetection(true);
+                exit_requested_.store(false);
+                return;
+            }
             if (GetDeviceState() == kDeviceStateSpeaking) {
-                if (session_controller_.KeepListeningDuringTts()) {
+                if (!exit_requested_.load() && session_controller_.KeepListeningDuringTts()) {
                     SetDeviceState(kDeviceStateListening);
-                } else if (event.channel == PlaybackChannel::kTts &&
+                } else if (!exit_requested_.load() &&
+                           event.channel == PlaybackChannel::kTts &&
                            event.state == PlaybackState::kCompleted &&
                            session_controller_.policy().mode == DuplexMode::kHalfDuplex) {
                     ESP_LOGI(TAG, "半双工 TTS 播放完成，重新开始上行");
@@ -223,6 +241,21 @@ void Application::Initialize() {
     };
     callbacks.on_vad_change = [this](bool speaking) {
         xEventGroupSetBits(event_group_, MAIN_EVENT_VAD_CHANGE);
+    };
+    callbacks.on_player_output_started = [this]() {
+        if (!tts_waiting_for_playback_.load()) {
+            return;
+        }
+        tts_output_started_.store(true);
+        Schedule([this]() {
+            if (!exit_requested_.load() && active_tts_session_id_ != 0 &&
+                tts_output_started_.exchange(false) &&
+                (GetDeviceState() == kDeviceStateIdle ||
+                 GetDeviceState() == kDeviceStateListening)) {
+                tts_waiting_for_playback_.store(false);
+                SetDeviceState(kDeviceStateSpeaking);
+            }
+        });
     };
     audio_service_.SetCallbacks(callbacks);
 
@@ -1083,6 +1116,12 @@ void Application::HandleStopListeningEvent() {
 }
 
 void Application::HandleWakeWordDetectedEvent() {
+    if (exit_requested_.load() &&
+        (tts_waiting_for_playback_.load() || audio_player_.IsPlaying())) {
+        ESP_LOGI(TAG, "忽略退出期间排队的唤醒词，TTS 尚未播放完成");
+        audio_service_.EnableWakeWordDetection(false);
+        return;
+    }
     PauseWakeWordDetection();
 
     // Only accept audio wake words while the device is standing by. Wake-word
@@ -1133,6 +1172,28 @@ void Application::PublishWifiIcon() {
 
 void Application::AbortSpeaking(AbortReason reason) {
     ESP_LOGI(TAG, "Abort speaking");
+    if (reason == kAbortReasonExit) {
+        exit_requested_.store(true);
+        // The exit MCP tool ends the current uplink conversation only. TTS
+        // may already be downloading or playing, so leave the player alone.
+        iat_utterance_active_ = false;
+        audio_service_.EnableVoiceProcessing(false);
+        session_controller_.EndSession();
+        if (xiaoling_conn_) xiaoling_conn_->SendStopListening();
+        const bool tts_active = tts_waiting_for_playback_.load() ||
+                                active_tts_session_id_ != 0 ||
+                                audio_player_.IsPlaying();
+        if (tts_active) {
+            audio_service_.EnableWakeWordDetection(false);
+            ESP_LOGI(TAG, "退出请求：TTS 仍在播放，暂时屏蔽唤醒检测");
+        } else {
+            tts_output_started_.store(false);
+            exit_requested_.store(false);
+        }
+        SetDeviceState(kDeviceStateIdle);
+        ESP_LOGI(TAG, "退出请求：已停止上行，保留播放器继续播放");
+        return;
+    }
     aborted_ = true;
 
     // In half-duplex mode the exit tool can arrive while the microphone
@@ -1163,6 +1224,7 @@ void Application::BeginWakeup(ListeningMode mode) {
     if (audio_player_.IsWakeupPending() || !xiaoling_conn_) {
         return;
     }
+    exit_requested_.store(false);
     if (!SetDeviceState(kDeviceStateConnecting)) {
         return;
     }
@@ -1183,7 +1245,22 @@ void Application::BeginWakeup(ListeningMode mode) {
         }
     });
     audio_player_.SetTtsUrlCallback([this]() {
+        tts_waiting_for_playback_.store(true);
+        tts_output_started_.store(false);
+        if (exit_requested_.load()) {
+            // The MCP exit can race the URL notification. Keep the detector
+            // disabled even when the URL arrives after the exit request.
+            audio_service_.EnableWakeWordDetection(false);
+        }
         Schedule([this]() {
+            // URL arrival precedes the first decoded PCM by several seconds
+            // for streamed TTS. Show a waiting emotion until playback really
+            // starts; the kPlaying event restores the speaking emotion.
+            if (GetDeviceState() == kDeviceStateListening ||
+                GetDeviceState() == kDeviceStateSpeaking) {
+                UiApp::SetStatusText("思考中...");
+                UiApp::SetEmotion("等待");
+            }
             if (session_controller_.policy().mode == DuplexMode::kHalfDuplex &&
                 GetDeviceState() == kDeviceStateListening) {
                 ESP_LOGI(TAG, "半双工收到 TTS URL，结束当前上行会话");
@@ -1299,8 +1376,13 @@ void Application::HandleStateChangedEvent() {
         case kDeviceStateUnknown:
         case kDeviceStateIdle:
             session_controller_.EndSession();
-            UiApp::SetStatus(UiApp::Status::Standby);
-            UiApp::SetEmotion("待机");
+            if (tts_waiting_for_playback_.load() && !exit_requested_.load()) {
+                UiApp::SetStatusText("思考中...");
+                UiApp::SetEmotion("等待");
+            } else {
+                UiApp::SetStatus(UiApp::Status::Standby);
+                UiApp::SetEmotion("待机");
+            }
 #ifdef CONFIG_LSPLATFORM
             UiApp::DismissOverlays();
 #endif // CONFIG_LSPLATFORM
@@ -1310,7 +1392,13 @@ void Application::HandleStateChangedEvent() {
             } else {
                 audio_service_.EnableVoiceProcessing(false);
             }
-            audio_service_.EnableWakeWordDetection(true);
+            if (exit_requested_.load() &&
+                (tts_waiting_for_playback_.load() || audio_player_.IsPlaying())) {
+                audio_service_.EnableWakeWordDetection(false);
+                ESP_LOGI(TAG, "待命期间等待 TTS 播放完成，保持唤醒检测关闭");
+            } else {
+                audio_service_.EnableWakeWordDetection(true);
+            }
 #ifdef CONFIG_LSPLATFORM
             uplink_watchdog_.Stop();
             downlink_watchdog_.Stop();
@@ -1447,6 +1535,12 @@ bool Application::UpgradeFirmware(const std::string& url, const std::string& ver
 }
 
 void Application::WakeWordInvoke(const std::string& wake_word) {
+    if (exit_requested_.load() &&
+        (tts_waiting_for_playback_.load() || audio_player_.IsPlaying())) {
+        ESP_LOGI(TAG, "忽略退出期间的唤醒词：%s", wake_word.c_str());
+        audio_service_.EnableWakeWordDetection(false);
+        return;
+    }
     PauseWakeWordDetection();
     if (!xiaoling_conn_) {
         return;

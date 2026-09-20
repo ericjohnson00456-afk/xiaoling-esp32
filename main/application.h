@@ -157,6 +157,11 @@ private:
     AudioPlayer audio_player_;
     VoiceSessionController session_controller_;
     uint32_t active_tts_session_id_ = 0;
+    // Half-duplex ends listening before the streamed TTS produces its first
+    // PCM block. Keep the UI in the thinking state during that idle gap.
+    std::atomic_bool tts_waiting_for_playback_{false};
+    std::atomic_bool tts_output_started_{false};
+    std::atomic_bool exit_requested_{false};
     uint32_t iat_subscription_id_ = 0;
     uint32_t iat_update_subscription_id_ = 0;
     uint32_t iat_end_subscription_id_ = 0;

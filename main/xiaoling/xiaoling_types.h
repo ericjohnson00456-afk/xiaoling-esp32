@@ -14,7 +14,8 @@ struct AudioStreamPacket {
 
 enum AbortReason {
     kAbortReasonNone,
-    kAbortReasonWakeWordDetected
+    kAbortReasonWakeWordDetected,
+    kAbortReasonExit,
 };
 
 enum ListeningMode {

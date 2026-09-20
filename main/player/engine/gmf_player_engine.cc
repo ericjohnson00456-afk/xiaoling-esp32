@@ -69,6 +69,12 @@ bool GmfPlayerEngine::Initialize(AudioService* audio_service, EventCallback call
         return false;
     }
 
+    /* Keep stream diagnostics available while investigating TTS startup
+       stalls: HTTP read sizes and decoder probe decisions are otherwise only
+       emitted at debug level. */
+    esp_log_level_set("ESP_GMF_HTTP", ESP_LOG_DEBUG);
+    esp_log_level_set("ESP_GMF_ASMP_DEC", ESP_LOG_DEBUG);
+
     esp_asp_cfg_t config = {};
     config.out.cb = OutputCallback;
     config.out.user_ctx = this;
@@ -125,8 +131,13 @@ bool GmfPlayerEngine::Play(const PlaybackRequest& request) {
              static_cast<unsigned long>(request.session_id), static_cast<int>(request.channel),
              UrlHostForLog(request.source).c_str(),
              static_cast<unsigned>(request.source.size()));
+    playback_started_ms_ = esp_log_timestamp();
+    output_chunks_ = 0;
     const auto result = esp_audio_simple_player_run(handle_, request.source.c_str(), nullptr);
     if (result == ESP_GMF_ERR_OK) {
+        ESP_LOGI(TAG, "GMF run 已提交: session=%lu, elapsed=%lums",
+                 static_cast<unsigned long>(request.session_id),
+                 static_cast<unsigned long>(esp_log_timestamp() - playback_started_ms_));
         return true;
     }
 
@@ -196,6 +207,15 @@ int GmfPlayerEngine::HandleOutput(uint8_t* data, int data_size) {
     if (data_size <= 0 || audio_service_ == nullptr) {
         return ESP_FAIL;
     }
+    const uint32_t chunk_index = ++output_chunks_;
+    if (chunk_index == 1) {
+        ESP_LOGI(TAG, "首个 PCM 输出: elapsed=%lums, bytes=%d",
+                 static_cast<unsigned long>(esp_log_timestamp() - playback_started_ms_), data_size);
+    } else if ((chunk_index % 32) == 0) {
+        ESP_LOGD(TAG, "PCM 输出进度: chunks=%lu, elapsed=%lums, last_bytes=%d",
+                 static_cast<unsigned long>(chunk_index),
+                 static_cast<unsigned long>(esp_log_timestamp() - playback_started_ms_), data_size);
+    }
     /* 播放器固定输出 CONFIG_AUDIO_SIMPLE_PLAYER_RESAMPLE_DEST_RATE，
        由 AudioService 在入播放队列前重采样到 codec 实际输出采样率 */
     return audio_service_->PushPcmToPlaybackQueue(data, static_cast<size_t>(data_size),
@@ -213,7 +233,8 @@ int GmfPlayerEngine::HandleEvent(esp_asp_event_pkt_t* event) {
         event->payload_size == sizeof(esp_asp_music_info_t)) {
         esp_asp_music_info_t info = {};
         std::memcpy(&info, event->payload, sizeof(info));
-        ESP_LOGI(TAG, "MP3 解码信息: source=%d Hz/%u ch/%u bit, output=%d Hz/%d ch/%d bit",
+        ESP_LOGI(TAG, "MP3 解码信息: elapsed=%lums, source=%d Hz/%u ch/%u bit, output=%d Hz/%d ch/%d bit",
+                 static_cast<unsigned long>(esp_log_timestamp() - playback_started_ms_),
                  info.sample_rate, info.channels, info.bits,
                  CONFIG_AUDIO_SIMPLE_PLAYER_RESAMPLE_DEST_RATE,
                  CONFIG_AUDIO_SIMPLE_PLAYER_CH_CVT_DEST,
@@ -267,7 +288,12 @@ int GmfPlayerEngine::HandleEvent(esp_asp_event_pkt_t* event) {
     if (!should_emit) {
         return ESP_OK;
     }
+    ESP_LOGI(TAG, "GMF 状态事件: state=%s, elapsed=%lums, pcm_chunks=%lu",
+             esp_audio_simple_player_state_to_str(state),
+             static_cast<unsigned long>(esp_log_timestamp() - playback_started_ms_),
+             static_cast<unsigned long>(output_chunks_));
     if (state == ESP_ASP_STATE_FINISHED) {
+        audio_service_->MarkPlayerPlaybackFinished();
         // GMF 完成表示解码已结束；还要等待 AudioOutputTask 写完最后一批 PCM。
         audio_service_->WaitForPlaybackComplete();
     } else if (state == ESP_ASP_STATE_STOPPED || state == ESP_ASP_STATE_ERROR) {
