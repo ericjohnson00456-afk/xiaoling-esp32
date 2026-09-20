@@ -195,6 +195,8 @@ esp_err_t Ota::CheckVersion() {
     current_version_ = esp_app_get_description()->version;
     firmware_version_ = current_version_;
     firmware_url_.clear();
+    firmware_size_ = 0;
+    firmware_description_.clear();
     has_new_version_ = false;
 
     const std::string url = GetCheckVersionUrl();
@@ -215,6 +217,23 @@ esp_err_t Ota::CheckVersion() {
 #endif
     std::string request;
     std::string method;
+    const auto parse_firmware_details = [this](const cJSON* object) {
+        const auto* size = cJSON_GetObjectItemCaseSensitive(object, "size");
+        if (cJSON_IsNumber(size) && size->valuedouble > 0) {
+            firmware_size_ = static_cast<size_t>(size->valuedouble);
+        }
+
+        const char* description_keys[] = {"description", "release_notes", "changelog"};
+        for (const char* key : description_keys) {
+            const auto* description = cJSON_GetObjectItemCaseSensitive(object, key);
+            if (cJSON_IsString(description) && description->valuestring != nullptr &&
+                description->valuestring[0] != '\0') {
+                firmware_description_ = description->valuestring;
+                break;
+            }
+        }
+    };
+
     if (app_package_api) {
         const std::string product_id = SystemInfo::GetProductId();
         const std::string device_id = SystemInfo::GetCloudDeviceId();
@@ -363,6 +382,7 @@ esp_err_t Ota::CheckVersion() {
             } else {
                 firmware_version_ = version->valuestring;
                 firmware_url_ = download->valuestring;
+                parse_firmware_details(root);
                 const uint32_t server_version_number = static_cast<uint32_t>(version_number->valuedouble);
                 const uint32_t local_version_number = GetVersionNumber(current_version_);
                 has_new_version_ = local_version_number != 0
@@ -382,6 +402,7 @@ esp_err_t Ota::CheckVersion() {
                 version->valuestring[0] != '\0' && download->valuestring[0] != '\0') {
                 firmware_version_ = version->valuestring;
                 firmware_url_ = download->valuestring;
+                parse_firmware_details(firmware);
                 has_new_version_ = IsNewVersionAvailable(current_version_, firmware_version_);
                 auto* force = cJSON_GetObjectItemCaseSensitive(firmware, "force");
                 if (cJSON_IsNumber(force) && force->valueint == 1) {

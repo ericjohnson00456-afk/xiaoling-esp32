@@ -25,6 +25,7 @@
 
 #include <cstring>
 #include <array>
+#include <cstdio>
 #include <esp_log.h>
 #include <esp_system.h>
 #include <nvs_flash.h>
@@ -35,6 +36,24 @@
 #include <font_awesome.h>
 
 #define TAG "Application"
+
+namespace {
+
+std::string FormatFirmwareSize(size_t size) {
+    char text[32] = {};
+    if (size >= 1024U * 1024U) {
+        std::snprintf(text, sizeof(text), "%.1f MB",
+                      static_cast<double>(size) / (1024.0 * 1024.0));
+    } else if (size >= 1024U) {
+        std::snprintf(text, sizeof(text), "%u KB",
+                      static_cast<unsigned>(size / 1024U));
+    } else {
+        std::snprintf(text, sizeof(text), "%u B", static_cast<unsigned>(size));
+    }
+    return text;
+}
+
+}  // namespace
 
 
 #ifdef CONFIG_LSPLATFORM
@@ -411,7 +430,10 @@ void Application::HandleNetworkConnectedEvent() {
             app->ActivationTask();
             app->activation_task_handle_ = nullptr;
             vTaskDelete(NULL);
-        }, "activation", 4096 * 2, this, 2, &activation_task_handle_);
+        // HTTPS OTA uses a deeper TLS/HTTP call stack than the normal
+        // activation checks, so leave headroom for the user-confirmed app
+        // upgrade that runs in this task.
+        }, "activation", 4096 * 3, this, 2, &activation_task_handle_);
     }
 
     // Update the status bar immediately to show the network state
@@ -685,11 +707,44 @@ bool Application::CheckNewVersion() {
         PlayOtaTone(88);
     }
     if (!KvOta::IsDisabled(KvOta::UpdateType::App) && ota_->HasNewVersion()) {
-        ESP_LOGI(TAG, "APP OTA available: %s", ota_->GetFirmwareVersion().c_str());
-        if (UpgradeFirmware(ota_->GetFirmwareUrl(), ota_->GetFirmwareVersion())) {
-            return false;  // Reboot is issued by UpgradeFirmware on success.
+        ESP_LOGI(TAG, "APP OTA available: %s, waiting for user confirmation", ota_->GetFirmwareVersion().c_str());
+
+        const std::string description = ota_->GetFirmwareDescription().empty()
+            ? Lang::Strings::OTA_DEFAULT_NOTES
+            : ota_->GetFirmwareDescription();
+        char confirmation[768] = {};
+        if (ota_->GetFirmwareSize() != 0) {
+            std::snprintf(confirmation, sizeof(confirmation), Lang::Strings::OTA_CONFIRM_WITH_SIZE,
+                          ota_->GetFirmwareVersion().c_str(),
+                          FormatFirmwareSize(ota_->GetFirmwareSize()).c_str(),
+                          description.c_str());
+        } else {
+            std::snprintf(confirmation, sizeof(confirmation), Lang::Strings::OTA_CONFIRM,
+                          ota_->GetFirmwareVersion().c_str(), description.c_str());
         }
-        ESP_LOGW(TAG, "APP OTA failed; continuing with the current firmware");
+        UiApp::SetStatusText(Lang::Strings::OTA_UPGRADE);
+        UiApp::SetEmotion("download");
+        UiApp::SetChatMessage("system", confirmation);
+
+        ota_confirmation_decision_.store(0);
+        ota_confirmation_pending_.store(true);
+        PlayOtaTone(86, 3);
+        const EventBits_t decision_bits = xEventGroupWaitBits(
+            event_group_, MAIN_EVENT_OTA_CONFIRM_START | MAIN_EVENT_OTA_CONFIRM_SKIP,
+            pdTRUE, pdFALSE, portMAX_DELAY);
+        ota_confirmation_pending_.store(false);
+        ota_confirmation_decision_.store(0);
+
+        if ((decision_bits & MAIN_EVENT_OTA_CONFIRM_START) != 0) {
+            ESP_LOGI(TAG, "User confirmed APP OTA: %s", ota_->GetFirmwareVersion().c_str());
+            if (UpgradeFirmware(ota_->GetFirmwareUrl(), ota_->GetFirmwareVersion())) {
+                return false;
+            }
+            ESP_LOGW(TAG, "APP OTA failed; continuing with the current firmware");
+        } else {
+            ESP_LOGI(TAG, "User skipped APP OTA");
+            UiApp::SetChatMessage("system", "");
+        }
     }
     if (KvOta::IsDisabled(KvOta::UpdateType::App) && ota_->HasNewVersion()) {
         ESP_LOGI(TAG, "Skipping APP OTA: disabled by user KV");
@@ -1352,7 +1407,8 @@ bool Application::UpgradeFirmware(const std::string& url, const std::string& ver
     UiApp::SetStatusText(Lang::Strings::OTA_UPGRADE);
     UiApp::SetEmotion("download");
     UiApp::SetChatMessage("system", Lang::Strings::UPGRADING);
-    PlayOtaTone(86);
+    // The confirmation tone has just been cancelled by the button handler;
+    // start directly with the "updating" prompt instead of replaying 086.
     PlayOtaTone(87);
 
     SetDeviceState(kDeviceStateUpgrading);
@@ -1553,6 +1609,9 @@ void Application::PlayTone(uint16_t tone_id) {
 
 void Application::PlayOtaTone(uint16_t tone_id, uint8_t repeat_count) {
     for (uint8_t repeat = 0; repeat < repeat_count; ++repeat) {
+        if (ota_confirmation_pending_.load() && ota_confirmation_decision_.load() != 0) {
+            return;
+        }
         if (audio_player_.PlayTone(tone_id) == 0) {
             ESP_LOGW(TAG, "OTA tone playback failed: id=%u", static_cast<unsigned>(tone_id));
             return;
@@ -1561,6 +1620,10 @@ void Application::PlayOtaTone(uint16_t tone_id, uint8_t repeat_count) {
         const TickType_t start = xTaskGetTickCount();
         bool started = false;
         while (xTaskGetTickCount() - start < pdMS_TO_TICKS(15000)) {
+            if (ota_confirmation_pending_.load() && ota_confirmation_decision_.load() != 0) {
+                audio_player_.Stop(PlaybackEndReason::kCancelled);
+                return;
+            }
             if (audio_player_.IsPlaying()) {
                 started = true;
             } else if (started) {

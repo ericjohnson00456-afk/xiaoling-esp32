@@ -70,6 +70,9 @@ private:
     }
 
     void InitializeButtons() {
+        boot_button_.OnLongPress([]() {
+            Application::GetInstance().HandleButtonLongPress();
+        });
         boot_button_.OnClick([]() {
             Application::GetInstance().HandleButtonClick(1);
         });

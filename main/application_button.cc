@@ -23,7 +23,32 @@ void Application::HandleButtonClick(uint8_t click_count) {
     });
 }
 
+void Application::HandleButtonLongPress() {
+    Schedule([this]() {
+        ProcessButtonLongPress();
+    });
+}
+
+void Application::ProcessButtonLongPress() {
+    if (!ota_confirmation_pending_.load()) {
+        return;
+    }
+
+    ESP_LOGI(kTag, "Long press: skip pending app OTA");
+    ota_confirmation_decision_.store(-1);
+    audio_player_.Stop(PlaybackEndReason::kCancelled);
+    xEventGroupSetBits(event_group_, MAIN_EVENT_OTA_CONFIRM_SKIP);
+}
+
 void Application::ProcessButtonClick(uint8_t click_count) {
+    if (click_count == 1 && ota_confirmation_pending_.load()) {
+        ESP_LOGI(kTag, "Single click: start pending app OTA");
+        ota_confirmation_decision_.store(1);
+        audio_player_.Stop(PlaybackEndReason::kCancelled);
+        xEventGroupSetBits(event_group_, MAIN_EVENT_OTA_CONFIRM_START);
+        return;
+    }
+
     switch (click_count) {
         case 1:
             if (UiManager::GetInstance().lvgl_display() != nullptr &&

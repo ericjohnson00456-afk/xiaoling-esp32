@@ -36,6 +36,8 @@ public:
     void MarkCurrentVersionValid();
 
     const std::string& GetFirmwareVersion() const { return firmware_version_; }
+    size_t GetFirmwareSize() const { return firmware_size_; }
+    const std::string& GetFirmwareDescription() const { return firmware_description_; }
     const std::string& GetCurrentVersion() const { return current_version_; }
     const std::string& GetFirmwareUrl() const { return firmware_url_; }
     const std::string& GetActivationMessage() const { return activation_message_; }
@@ -59,6 +61,8 @@ private:
     std::string current_version_;
     std::string firmware_version_;
     std::string firmware_url_;
+    size_t firmware_size_ = 0;
+    std::string firmware_description_;
     std::string activation_challenge_;
     std::string serial_number_;
     ResourceInfo wake_word_resource_;

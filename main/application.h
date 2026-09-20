@@ -35,6 +35,8 @@
 #define MAIN_EVENT_START_LISTENING      (1 << 10)
 #define MAIN_EVENT_STOP_LISTENING       (1 << 11)
 #define MAIN_EVENT_STATE_CHANGED        (1 << 12)
+#define MAIN_EVENT_OTA_CONFIRM_START    (1 << 13)
+#define MAIN_EVENT_OTA_CONFIRM_SKIP     (1 << 14)
 
 
 enum AecMode {
@@ -111,6 +113,7 @@ public:
     // Thread-safe entry point for board button callbacks. The click business
     // logic is implemented in application_button.cc and runs on the main task.
     void HandleButtonClick(uint8_t click_count);
+    void HandleButtonLongPress();
 
     void Reboot();
     void WakeWordInvoke(const std::string& wake_word);
@@ -168,6 +171,8 @@ private:
 
     bool aborted_ = false;
     bool assets_version_checked_ = false;
+    std::atomic_bool ota_confirmation_pending_{false};
+    std::atomic_int ota_confirmation_decision_{0};
     int clock_ticks_ = 0;
     TaskHandle_t activation_task_handle_ = nullptr;
     std::atomic_bool factory_reset_started_{false};
@@ -186,6 +191,7 @@ private:
     void HandleActivationDoneEvent();
     void HandleWakeWordDetectedEvent();
     void ProcessButtonClick(uint8_t click_count);
+    void ProcessButtonLongPress();
     void StartFactoryReset();
     void FactoryResetTask();
     // Activation task (runs in background)
