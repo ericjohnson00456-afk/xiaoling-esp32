@@ -108,9 +108,15 @@ std::string XiaolingSessionVoice::BuildStartMessage(ListeningMode mode) {
     cJSON_AddStringToObject(root, "action", "start");
     cJSON_AddItemToObject(root, "params", params);
 
-    if (mode == kListeningModeRealtime) {
-        cJSON_AddStringToObject(params, "fullduplex", "1");
-    }
+    cJSON_AddStringToObject(params, "fullduplex", "1");
+    const int32_t timeout_ms = KvUser::GetFullDuplexTimeoutMs();
+    char timeout_str[12];
+    const uint32_t timeout_s = timeout_ms > 0
+                                    ? static_cast<uint32_t>(timeout_ms / 1000)
+                                    : 0;
+    std::snprintf(timeout_str, sizeof(timeout_str), "%lu",
+                  static_cast<unsigned long>(timeout_s));
+    cJSON_AddStringToObject(params, "fullduplex_timeout", timeout_str);
     cJSON_AddStringToObject(params, "data_type", "audio");
     cJSON_AddStringToObject(params, "aue", XiaolingConfig::kUplinkAudioEncoding);
 

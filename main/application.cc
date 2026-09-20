@@ -438,6 +438,22 @@ void Application::Run() {
             PublishWifiIcon();
             UiApp::UpdateStatusBar();
 
+            if (GetDeviceState() == kDeviceStateListening && listening_started_at_us_ > 0) {
+                const int32_t timeout_ms = KvUser::GetIdleExitTimeoutMs();
+                const int64_t elapsed_ms =
+                    (esp_timer_get_time() - listening_started_at_us_) / 1000;
+                if (timeout_ms > 0 && elapsed_ms >= timeout_ms) {
+                    ESP_LOGI(TAG, "录音超时(%ld ms)，退出录音回到待命状态",
+                             static_cast<long>(timeout_ms));
+                    if (xiaoling_conn_) {
+                        xiaoling_conn_->SendStopListening();
+                    }
+                    SetDeviceState(kDeviceStateIdle);
+                    listening_started_at_us_ = 0;
+                    PlayTone(72);
+                }
+            }
+
             // Print debug info every 10 seconds
             if (clock_ticks_ % 10 == 0) {
                 SystemInfo::PrintHeapStats();
@@ -1276,6 +1292,13 @@ void Application::BeginWakeup(ListeningMode mode) {
                     return;
                 }
                 iat_utterance_active_ = true;
+                if (GetDeviceState() == kDeviceStateListening) {
+                    // A valid IAT result means the user has spoken. Start a
+                    // fresh idle window so the timeout measures silence after
+                    // the utterance rather than time since wakeup.
+                    listening_started_at_us_ = esp_timer_get_time();
+                    ESP_LOGI(TAG, "收到 IAT，重置录音空闲计时");
+                }
                 if (session_controller_.policy().allow_barge_in &&
                     !audio_player_.IsWakeupPending() &&
                     GetDeviceState() == kDeviceStateSpeaking && audio_player_.IsPlaying()) {
@@ -1375,6 +1398,7 @@ void Application::HandleStateChangedEvent() {
     switch (new_state) {
         case kDeviceStateUnknown:
         case kDeviceStateIdle:
+            listening_started_at_us_ = 0;
             session_controller_.EndSession();
             if (tts_waiting_for_playback_.load() && !exit_requested_.load()) {
                 UiApp::SetStatusText("思考中...");
@@ -1412,6 +1436,7 @@ void Application::HandleStateChangedEvent() {
             UiApp::SetChatMessage("system", "");
             break;
         case kDeviceStateListening:
+            listening_started_at_us_ = esp_timer_get_time();
             session_controller_.StartListening(listening_mode_ == kListeningModeRealtime);
             UiApp::SetStatus(UiApp::Status::Listening);
             UiApp::SetEmotion("聆听");

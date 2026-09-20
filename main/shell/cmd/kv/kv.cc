@@ -100,12 +100,18 @@ enum class UserIntKey {
     None,
     IntMode,
     UiLanguage,
+    FullDuplexTimeoutMs,
+    IdleExitTimeoutMs,
 };
 
 UserIntKey ParseUserIntKey(const char* logical_key) {
     if (logical_key == nullptr) return UserIntKey::None;
     if (std::strcmp(logical_key, KvUser::kIntMode) == 0) return UserIntKey::IntMode;
     if (std::strcmp(logical_key, KvUser::kUiLanguage) == 0) return UserIntKey::UiLanguage;
+    if (std::strcmp(logical_key, KvUser::kFullDuplexTimeoutMs) == 0) {
+        return UserIntKey::FullDuplexTimeoutMs;
+    }
+    if (std::strcmp(logical_key, KvUser::kIdleExitTimeoutMs) == 0) return UserIntKey::IdleExitTimeoutMs;
     return UserIntKey::None;
 }
 
@@ -115,6 +121,10 @@ bool IsValidUserIntValue(UserIntKey key, int32_t value) {
             return value >= 0 && value <= 2;
         case UserIntKey::UiLanguage:
             return value >= 0 && value <= 1;
+        case UserIntKey::FullDuplexTimeoutMs:
+            return value >= 0;
+        case UserIntKey::IdleExitTimeoutMs:
+            return value >= 0;
         case UserIntKey::None:
             return false;
     }
@@ -133,6 +143,12 @@ void SetUserIntValue(UserIntKey key, int32_t value) {
             KvUser::SetUiLanguage(value);
             UiApp::SetLanguageMode(value);
             break;
+        case UserIntKey::FullDuplexTimeoutMs:
+            KvUser::SetFullDuplexTimeoutMs(value);
+            break;
+        case UserIntKey::IdleExitTimeoutMs:
+            KvUser::SetIdleExitTimeoutMs(value);
+            break;
         case UserIntKey::None:
             break;
     }
@@ -142,6 +158,8 @@ int32_t GetUserIntValue(UserIntKey key) {
     switch (key) {
         case UserIntKey::IntMode: return KvUser::GetIntMode();
         case UserIntKey::UiLanguage: return KvUser::GetUiLanguage();
+        case UserIntKey::FullDuplexTimeoutMs: return KvUser::GetFullDuplexTimeoutMs();
+        case UserIntKey::IdleExitTimeoutMs: return KvUser::GetIdleExitTimeoutMs();
         case UserIntKey::None: return -1;
     }
     return -1;
@@ -151,6 +169,8 @@ const char* UserIntKeyName(UserIntKey key) {
     switch (key) {
         case UserIntKey::IntMode: return KvUser::kIntMode;
         case UserIntKey::UiLanguage: return KvUser::kUiLanguage;
+        case UserIntKey::FullDuplexTimeoutMs: return KvUser::kFullDuplexTimeoutMs;
+        case UserIntKey::IdleExitTimeoutMs: return KvUser::kIdleExitTimeoutMs;
         case UserIntKey::None: return "";
     }
     return "";
@@ -606,6 +626,26 @@ int32_t GetUiLanguage() {
 void SetUiLanguage(int32_t value) {
     Settings settings(KvUser::kNamespace, true);
     settings.SetInt("ui_language", value);
+}
+
+int32_t GetFullDuplexTimeoutMs() {
+    Settings settings(KvUser::kNamespace, false);
+    return settings.GetInt("full_duplex_timeout_ms", 300000);
+}
+
+void SetFullDuplexTimeoutMs(int32_t value) {
+    Settings settings(KvUser::kNamespace, true);
+    settings.SetInt("full_duplex_timeout_ms", value);
+}
+
+int32_t GetIdleExitTimeoutMs() {
+    Settings settings(KvUser::kNamespace, false);
+    return settings.GetInt("idle_timeout", 20000);
+}
+
+void SetIdleExitTimeoutMs(int32_t value) {
+    Settings settings(KvUser::kNamespace, true);
+    settings.SetInt("idle_timeout", value);
 }
 
 }  // namespace KvUser

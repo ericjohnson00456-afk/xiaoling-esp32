@@ -3,6 +3,7 @@
 
 #include "application.h"
 #include "mcp_server.h"
+#include "shell/cmd/kv/kv_user.h"
 
 namespace {
 MCP_REGISTER_TOOL(RegisterSwitchFullDuplexV2, McpToolGroup::kCommon, 160) {
@@ -25,23 +26,28 @@ MCP_REGISTER_TOOL(RegisterSwitchFullDuplexV2, McpToolGroup::kCommon, 160) {
 
         auto &app = Application::GetInstance();
         DuplexMode duplex_mode;
+        int32_t int_mode;
         const char *mode_name = nullptr;
         if (mode == "single") {
           duplex_mode = DuplexMode::kSimplex;
+          int_mode = 2;
           mode_name = "单工";
         } else if (mode == "duplex_no_interrupt") {
           duplex_mode = DuplexMode::kHalfDuplex;
+          int_mode = 1;
           mode_name = "半双工不可打断";
         } else if (mode == "duplex") {
           if (!app.GetAudioService().SupportsAec()) {
             throw std::runtime_error("当前设备不支持全双工模式");
           }
           duplex_mode = DuplexMode::kFullDuplex;
+          int_mode = 0;
           mode_name = "全双工可打断";
         } else {
           throw std::runtime_error("不支持的交互模式: " + mode);
         }
 
+        KvUser::SetIntMode(int_mode);
         app.SetDuplexMode(duplex_mode);
         return std::string("已切换为") + mode_name;
       });
