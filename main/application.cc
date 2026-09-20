@@ -1459,9 +1459,13 @@ void Application::HandleStateChangedEvent() {
                 uplink_watchdog_.Stop();
 #endif // CONFIG_LSPLATFORM
             }
-            // URL 播放器启动前已经清理旧队列，避免状态回调误删刚解码出的 MP3 PCM。
-            if (!audio_player_.IsPlaying()) {
+            // GMF 解码结束后仍需排空 TTS PCM；此时 IsPlaying() 已可能为 false。
+            if (active_tts_session_id_ == 0 && !tts_waiting_for_playback_.load() &&
+                !audio_player_.IsPlaying()) {
                 audio_service_.ResetDecoder();
+            } else if (active_tts_session_id_ != 0 && !audio_player_.IsPlaying()) {
+                ESP_LOGI(TAG, "TTS 会话仍在排空，保留播放器 PCM 队列: session=%lu",
+                         static_cast<unsigned long>(active_tts_session_id_));
             }
             audio_service_.EnableWakeWordDetection(true);
             break;

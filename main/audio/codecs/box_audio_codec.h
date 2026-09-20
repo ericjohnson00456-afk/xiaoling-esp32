@@ -36,6 +36,9 @@ public:
     virtual void SetOutputVolume(int volume) override;
     virtual void EnableInput(bool enable) override;
     virtual void EnableOutput(bool enable) override;
+    virtual size_t OutputDmaBufferBytes() const override {
+        return AUDIO_CODEC_DMA_FRAME_NUM * 2 * sizeof(int32_t);
+    }
 };
 
 #endif // _BOX_AUDIO_CODEC_H

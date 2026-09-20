@@ -687,6 +687,7 @@ bool AudioService::PushPcmToPlaybackQueue(const uint8_t* data, size_t size, int 
             task->pcm = std::move(resampled);
         }
     }
+    const size_t pcm_bytes = task->pcm.size() * sizeof(int16_t);
 
     std::unique_lock<std::mutex> lock(audio_queue_mutex_);
     const uint32_t enqueue_wait_start_ms = esp_log_timestamp();
@@ -709,6 +710,7 @@ bool AudioService::PushPcmToPlaybackQueue(const uint8_t* data, size_t size, int 
         return false;
     }
     audio_playback_queue_.push_back(std::move(task));
+    player_pcm_bytes_ += pcm_bytes;
     const size_t queue_size = audio_playback_queue_.size();
     const bool first_chunk = !player_prebuffer_wait_logged_ && queue_size == 1;
     audio_queue_cv_.notify_all();
@@ -722,6 +724,22 @@ bool AudioService::PushPcmToPlaybackQueue(const uint8_t* data, size_t size, int 
 void AudioService::MarkPlayerPlaybackFinished() {
     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
     player_playback_finished_ = true;
+
+    /* i2s_channel_write() only submits full DMA buffers. Append silence to
+     * commit the final partial buffer; the silence is inaudible and prevents
+     * the end of a TTS response from being dropped by the I2S driver. */
+    const size_t dma_buffer_bytes = codec_ != nullptr ? codec_->OutputDmaBufferBytes() : 0;
+    const size_t remainder = dma_buffer_bytes > 0 ? player_pcm_bytes_ % dma_buffer_bytes : 0;
+    if (remainder != 0) {
+        const size_t padding_bytes = dma_buffer_bytes - remainder;
+        auto padding = std::make_unique<AudioTask>();
+        padding->type = kAudioTaskTypePlayerToPlaybackQueue;
+        padding->pcm.assign(padding_bytes / sizeof(int16_t), 0);
+        audio_playback_queue_.push_back(std::move(padding));
+        player_pcm_bytes_ += padding_bytes;
+        ESP_LOGI(TAG, "播放器末尾 DMA 对齐: padding=%u bytes",
+                 static_cast<unsigned>(padding_bytes));
+    }
     audio_queue_cv_.notify_all();
 }
 
@@ -736,6 +754,22 @@ void AudioService::WaitForPlaybackComplete() {
     audio_queue_cv_.wait(lock, [this]() {
         return service_stopped_ || (audio_playback_queue_.empty() && !audio_output_busy_);
     });
+    if (service_stopped_) {
+        return;
+    }
+
+    /* Queue completion means the final DMA buffer has been accepted, not
+     * necessarily transmitted. Wait for the configured DMA ring duration so
+     * the application cannot resume listening over the TTS tail. */
+    const int sample_rate = codec_ != nullptr ? codec_->output_sample_rate() : 0;
+    if (sample_rate > 0) {
+        const int drain_ms =
+            (AUDIO_CODEC_DMA_DESC_NUM * AUDIO_CODEC_DMA_FRAME_NUM * 1000 + sample_rate - 1) /
+            sample_rate;
+        lock.unlock();
+        vTaskDelay(pdMS_TO_TICKS(drain_ms));
+        ESP_LOGI(TAG, "播放器 DMA 排空完成: drain=%dms", drain_ms);
+    }
 }
 
 bool AudioService::PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> packet, bool wait) {
@@ -1054,6 +1088,7 @@ void AudioService::ResetDecoder() {
     player_output_chunks_.store(0);
     player_output_last_end_ms_.store(0);
     player_output_underruns_.store(0);
+    player_pcm_bytes_ = 0;
     timestamp_queue_.clear();
     audio_decode_queue_.clear();
     audio_playback_queue_.clear();

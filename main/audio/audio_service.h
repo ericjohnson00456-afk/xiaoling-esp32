@@ -192,6 +192,7 @@ private:
     bool player_playback_finished_ = false;
     bool player_prebuffer_wait_logged_ = false;
     bool player_prebuffer_release_logged_ = false;
+    size_t player_pcm_bytes_ = 0;
     /* Diagnostics for streamed-player jitter. These are written by the
        output task and reset when a new player session starts. */
     std::atomic<uint32_t> player_output_chunks_{0};
