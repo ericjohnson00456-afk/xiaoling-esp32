@@ -14,11 +14,38 @@ namespace XiaolingConfig {
 constexpr const char* kDeviceId = "";
 constexpr const char* kUplinkAudioEncoding = "opus-wb";
 
-inline const char* GetHost() {
+enum class Environment {
+    Production = 0,
+    Staging = 1,
+    Integration = 2,
+};
+
+inline Environment GetEnvironment() {
     switch (KvUser::GetDeviceMode()) {
-        case 1: return LSC_HOST_STAGING;
-        case 2: return LSC_HOST_INTEGRATION;
+        case static_cast<int32_t>(Environment::Staging):
+            return Environment::Staging;
+        case static_cast<int32_t>(Environment::Integration):
+            return Environment::Integration;
+        default:
+            return Environment::Production;
+    }
+}
+
+inline const char* GetHost() {
+    switch (GetEnvironment()) {
+        case Environment::Staging: return LSC_HOST_STAGING;
+        case Environment::Integration: return LSC_HOST_INTEGRATION;
+        case Environment::Production:
         default: return LSC_HOST;
+    }
+}
+
+inline const char* GetEnvironmentName() {
+    switch (GetEnvironment()) {
+        case Environment::Staging: return "staging";
+        case Environment::Integration: return "integration";
+        case Environment::Production:
+        default: return "production";
     }
 }
 

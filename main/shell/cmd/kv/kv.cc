@@ -281,7 +281,7 @@ int HandleSet(int argc, char** argv) {
             }
             if (namespace_name == KvUser::kNamespace && std::strcmp(key, "device_mode") == 0) {
                 int32_t value = 0;
-                if (!ParseInt32(argv[3], value)) {
+                if (!ParseInt32(argv[3], value) || value < 0 || value > 2) {
                     std::printf("invalid int value: %s\n", argv[3]);
                     return 1;
                 }
@@ -343,7 +343,7 @@ int HandleSet(int argc, char** argv) {
         std::strcmp(argv[2], KvUser::kNamespace) == 0) {
         if (std::strcmp(argv[3], "device_mode") == 0) {
             int32_t value = 0;
-            if (!ParseInt32(argv[4], value)) {
+            if (!ParseInt32(argv[4], value) || value < 0 || value > 2) {
                 std::printf("invalid int value: %s\n", argv[4]);
                 return 1;
             }

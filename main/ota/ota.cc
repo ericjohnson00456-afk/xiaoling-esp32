@@ -22,8 +22,61 @@
 #include <sstream>
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
+#include <ctime>
+
+#include <mbedtls/md5.h>
 
 #define TAG "Ota"
+
+namespace {
+
+bool IsAppPackageEndpoint(const std::string& url) {
+    return url.find("/v1/ota/packages") != std::string::npos;
+}
+
+std::string CalculateMd5Hex(const std::string& input) {
+    unsigned char digest[16] = {};
+    if (mbedtls_md5(reinterpret_cast<const unsigned char*>(input.data()), input.size(), digest) != 0) {
+        return {};
+    }
+
+    char checksum[33] = {};
+    for (size_t i = 0; i < sizeof(digest); ++i) {
+        std::snprintf(checksum + i * 2, 3, "%02x", digest[i]);
+    }
+    return checksum;
+}
+
+uint32_t GetVersionNumber(const std::string& version) {
+    const auto parts = [&version]() {
+        std::vector<uint32_t> result;
+        std::stringstream stream(version);
+        std::string segment;
+        while (std::getline(stream, segment, '.')) {
+            if (segment.empty() || !std::all_of(segment.begin(), segment.end(), [](unsigned char c) {
+                    return std::isdigit(c) != 0;
+                })) {
+                return std::vector<uint32_t>();
+            }
+            try {
+                result.push_back(static_cast<uint32_t>(std::stoul(segment)));
+            } catch (...) {
+                return std::vector<uint32_t>();
+            }
+        }
+        return result;
+    }();
+
+    if (parts.empty() || parts.size() > 3 || parts[0] > 999 ||
+        (parts.size() > 1 && parts[1] > 999) || (parts.size() > 2 && parts[2] > 999)) {
+        return 0;
+    }
+    return parts[0] * 1000000U + (parts.size() > 1 ? parts[1] * 1000U : 0U) +
+           (parts.size() > 2 ? parts[2] : 0U);
+}
+
+}  // namespace
 
 // The device configuration endpoint is only used by LSPlatform builds.
 #ifdef CONFIG_LSPLATFORM
@@ -61,6 +114,8 @@ std::string BuildResourceConfigUrl() {
                       "/external/device/configurations?product_id=" +
                       SystemInfo::GetProductId() + "&device_id=" +
                       SystemInfo::GetCloudDeviceId();
+    ESP_LOGI(TAG, "Resource OTA environment: %s host=%s",
+             XiaolingConfig::GetEnvironmentName(), XiaolingConfig::GetHost());
     const auto param = BuildResourceConfigParam();
     if (!param.empty()) {
         url += "&param=" + param;
@@ -98,7 +153,11 @@ std::string Ota::GetCheckVersionUrl() {
     Settings settings("wifi", false);
     std::string url = settings.GetString("ota_url");
     if (url.empty()) {
+#ifdef CONFIG_LSPLATFORM
+        url = std::string("https://") + XiaolingConfig::GetHost() + "/v1/ota/packages";
+#else
         url = "https://api.listenai.com/v1/xiaoling/" + SystemInfo::GetProductId() + "/ota/";
+#endif
     }
     return url;
 }
@@ -148,11 +207,44 @@ esp_err_t Ota::CheckVersion() {
     if (http == nullptr) {
         return ESP_ERR_INVALID_STATE;
     }
-    std::string request = board.GetSystemInfoJson();
-    const std::string method = request.empty() ? "GET" : "POST";
+
+#ifdef CONFIG_LSPLATFORM
+    const bool app_package_api = IsAppPackageEndpoint(url);
+#else
+    const bool app_package_api = false;
+#endif
+    std::string request;
+    std::string method;
+    if (app_package_api) {
+        const std::string product_id = SystemInfo::GetProductId();
+        const std::string device_id = SystemInfo::GetCloudDeviceId();
+        const std::string secret_id = SystemInfo::GetSecretId();
+        if (product_id.empty() || device_id.empty() || secret_id.empty()) {
+            ESP_LOGE(TAG, "App OTA package request missing product/device/secret identity");
+            return ESP_ERR_INVALID_STATE;
+        }
+
+        const std::string current_time = std::to_string(static_cast<long long>(std::time(nullptr)));
+        const std::string checksum = CalculateMd5Hex(secret_id + device_id + current_time);
+        if (checksum.empty()) {
+            ESP_LOGE(TAG, "Failed to calculate app OTA request checksum");
+            return ESP_FAIL;
+        }
+        http->SetHeader("Accept", "application/json");
+        http->SetHeader("X-ProductID", product_id);
+        http->SetHeader("X-DeviceID", device_id);
+        http->SetHeader("X-CurTime", current_time);
+        http->SetHeader("X-CheckSum", checksum);
+        method = "GET";
+    } else {
+        request = board.GetSystemInfoJson();
+        method = request.empty() ? "GET" : "POST";
+    }
     ESP_LOGI(TAG, "Firmware OTA request: method=%s url=%s body=%s",
              method.c_str(), url.c_str(), request.empty() ? "<empty>" : request.c_str());
-    http->SetContent(std::move(request));
+    if (!request.empty()) {
+        http->SetContent(std::move(request));
+    }
     if (!http->Open(method, url)) {
         ESP_LOGE(TAG, "Firmware OTA request failed to open: url=%s", url.c_str());
         return ESP_FAIL;
@@ -187,8 +279,11 @@ esp_err_t Ota::CheckVersion() {
     activation_qrcode_.clear();
 #endif
 
-    const auto* activation = cJSON_GetObjectItemCaseSensitive(root, "activation");
-    if (cJSON_IsObject(activation)) {
+    const auto parse_activation = [this](const cJSON* response) {
+        const auto* activation = cJSON_GetObjectItemCaseSensitive(response, "activation");
+        if (!cJSON_IsObject(activation)) {
+            return;
+        }
         const auto* message = cJSON_GetObjectItemCaseSensitive(activation, "message");
         if (cJSON_IsString(message) && message->valuestring != nullptr) {
             activation_message_ = message->valuestring;
@@ -217,20 +312,81 @@ esp_err_t Ota::CheckVersion() {
             has_activation_qrcode_ = !activation_qrcode_.empty();
         }
 #endif
-    }
+    };
+    parse_activation(root);
 
-    auto* firmware = cJSON_GetObjectItemCaseSensitive(root, "firmware");
-    if (cJSON_IsObject(firmware)) {
-        auto* version = cJSON_GetObjectItemCaseSensitive(firmware, "version");
-        auto* download = cJSON_GetObjectItemCaseSensitive(firmware, "url");
-        if (cJSON_IsString(version) && cJSON_IsString(download) &&
-            version->valuestring[0] != '\0' && download->valuestring[0] != '\0') {
-            firmware_version_ = version->valuestring;
-            firmware_url_ = download->valuestring;
-            has_new_version_ = IsNewVersionAvailable(current_version_, firmware_version_);
-            auto* force = cJSON_GetObjectItemCaseSensitive(firmware, "force");
-            if (cJSON_IsNumber(force) && force->valueint == 1) {
-                has_new_version_ = true;
+    // /v1/ota/packages only carries application package metadata. Keep the
+    // legacy request for provisioning activation data, which is still served
+    // by /v1/xiaoling/<product_id>/ota/.
+#ifdef CONFIG_LSPLATFORM
+    if (app_package_api && !has_activation_code_ && !has_activation_challenge_) {
+        const std::string activation_url = std::string("https://") + XiaolingConfig::GetHost() +
+                                           "/v1/xiaoling/" + SystemInfo::GetProductId() + "/ota/";
+        auto activation_http = SetupHttp();
+        if (activation_http != nullptr) {
+            std::string activation_request = board.GetSystemInfoJson();
+            const std::string activation_method = activation_request.empty() ? "GET" : "POST";
+            if (!activation_request.empty()) {
+                activation_http->SetContent(std::move(activation_request));
+            }
+            if (activation_http->Open(activation_method, activation_url)) {
+                const int activation_status = activation_http->GetStatusCode();
+                const std::string activation_body = activation_http->ReadAll();
+                activation_http->Close();
+                if (activation_status == 200) {
+                    cJSON* activation_root = cJSON_Parse(activation_body.c_str());
+                    if (activation_root != nullptr) {
+                        parse_activation(activation_root);
+                        cJSON_Delete(activation_root);
+                    }
+                } else {
+                    ESP_LOGW(TAG, "Activation metadata request returned HTTP %d", activation_status);
+                }
+            } else {
+                ESP_LOGW(TAG, "Activation metadata request failed to open");
+            }
+        }
+    }
+#endif
+
+    if (app_package_api) {
+        const auto* download = cJSON_GetObjectItemCaseSensitive(root, "url");
+        const auto* version = cJSON_GetObjectItemCaseSensitive(root, "version");
+        const auto* version_number = cJSON_GetObjectItemCaseSensitive(root, "version_number");
+        if (cJSON_IsString(download) && download->valuestring != nullptr &&
+            download->valuestring[0] != '\0') {
+            if (!cJSON_IsString(version) || version->valuestring == nullptr || version->valuestring[0] == '\0' ||
+                !cJSON_IsNumber(version_number) || version_number->valuedouble < 0 ||
+                version_number->valuedouble > static_cast<double>(UINT32_MAX) ||
+                std::strlen(download->valuestring) >= 512) {
+                ESP_LOGE(TAG, "App OTA package response is missing version/version_number");
+            } else {
+                firmware_version_ = version->valuestring;
+                firmware_url_ = download->valuestring;
+                const uint32_t server_version_number = static_cast<uint32_t>(version_number->valuedouble);
+                const uint32_t local_version_number = GetVersionNumber(current_version_);
+                has_new_version_ = local_version_number != 0
+                                        ? server_version_number > local_version_number
+                                        : IsNewVersionAvailable(current_version_, firmware_version_);
+                ESP_LOGI(TAG, "App OTA package: version=%s version_number=%u local_version_number=%u",
+                         firmware_version_.c_str(), static_cast<unsigned int>(server_version_number),
+                         static_cast<unsigned int>(local_version_number));
+            }
+        }
+    } else {
+        auto* firmware = cJSON_GetObjectItemCaseSensitive(root, "firmware");
+        if (cJSON_IsObject(firmware)) {
+            auto* version = cJSON_GetObjectItemCaseSensitive(firmware, "version");
+            auto* download = cJSON_GetObjectItemCaseSensitive(firmware, "url");
+            if (cJSON_IsString(version) && cJSON_IsString(download) &&
+                version->valuestring[0] != '\0' && download->valuestring[0] != '\0') {
+                firmware_version_ = version->valuestring;
+                firmware_url_ = download->valuestring;
+                has_new_version_ = IsNewVersionAvailable(current_version_, firmware_version_);
+                auto* force = cJSON_GetObjectItemCaseSensitive(firmware, "force");
+                if (cJSON_IsNumber(force) && force->valueint == 1) {
+                    has_new_version_ = true;
+                }
             }
         }
     }
@@ -311,6 +467,8 @@ esp_err_t Ota::CheckResources() {
 #ifdef CONFIG_LSPLATFORM
     if (url.empty()) {
         url = BuildResourceConfigUrl();
+    } else {
+        ESP_LOGI(TAG, "Resource OTA using KV override URL: %s", url.c_str());
     }
 #endif
     if (url.empty()) {
@@ -588,6 +746,12 @@ esp_err_t Ota::Activate() {
     }
 
     std::string url = GetCheckVersionUrl();
+    // The package API is dedicated to application OTA metadata. Device
+    // binding still uses the legacy product OTA endpoint.
+    if (IsAppPackageEndpoint(url)) {
+        url = std::string("https://") + XiaolingConfig::GetHost() + "/v1/xiaoling/" +
+              SystemInfo::GetProductId() + "/ota/";
+    }
     if (url.back() != '/') {
         url += "/activate";
     } else {
