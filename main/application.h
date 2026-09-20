@@ -123,7 +123,7 @@ public:
     void SetAecMode(AecMode mode);
     AecMode GetAecMode() const { return aec_mode_; }
     void PlaySound(const std::string_view& sound);
-    void PlayLocalizedTone(const char* name);
+    void PlayLocalizedAudio(const char* name);
     void PlayTone(uint16_t tone_id);
     AudioService& GetAudioService() { return audio_service_; }
     AudioPlayer& GetAudioPlayer() { return audio_player_; }
@@ -217,6 +217,7 @@ private:
     void CancelWakeup();
     void PublishWifiIcon();
     void PlayOtaTone(uint16_t tone_id, uint8_t repeat_count = 1);
+    void PlayActivationAudio(uint16_t id);
 
     // State change handler called by state machine
     void OnStateChanged(DeviceState old_state, DeviceState new_state);

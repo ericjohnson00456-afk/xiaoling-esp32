@@ -22,6 +22,28 @@ from datetime import datetime
 from romfs import pack_image
 
 
+def relocate_activation_assets(locales_path, destination_path):
+    """Move activation audio into the reserved 300-series ROMFS namespace."""
+    if not os.path.isdir(locales_path):
+        return
+    for language in os.scandir(locales_path):
+        if not language.is_dir():
+            continue
+        files = {
+            "300_activation.ogg": os.path.join(language.path, "activation.ogg"),
+        }
+        files.update({
+            f"{301 + digit}_{digit}.ogg": os.path.join(language.path, f"{digit}.ogg")
+            for digit in range(10)
+        })
+        target = os.path.join(destination_path, language.name)
+        for name, source in files.items():
+            if os.path.isfile(source):
+                os.makedirs(target, exist_ok=True)
+                shutil.copy2(source, os.path.join(target, name))
+                os.unlink(source)
+
+
 # =============================================================================
 # Pack model functions (from pack_model.py)
 # =============================================================================
@@ -786,7 +808,8 @@ def build_assets_integrated(wakenet_model_paths, multinet_model_paths, microwake
         emoji_collection = process_emoji_collection(emoji_collection_path, assets_dir) if emoji_collection_path else None
         extra_files = process_extra_files(extra_files_path, assets_dir) if extra_files_path else None
         if use_romfs and romfs_resources_path:
-            # ROMFS 只收纳动态资源目录；语言音频仍由 locales 机制单独处理。
+            # ROMFS 只收纳动态资源目录；locales 属于固件资源包，不能
+            # 跟随 tone OTA 被替换。激活音频的 300 系列编号由运行时映射。
             for entry in os.scandir(romfs_resources_path):
                 if entry.name not in ("emoji", "tone"):
                     if entry.name != "locales":
@@ -796,6 +819,8 @@ def build_assets_integrated(wakenet_model_paths, multinet_model_paths, microwake
                     shutil.copytree(entry.path, destination, dirs_exist_ok=True)
                 elif entry.is_file():
                     shutil.copy2(entry.path, destination)
+            relocate_activation_assets(os.path.join(assets_dir, "locales"),
+                                       os.path.join(assets_dir, "activation"))
         
         # Generate index.json
         generate_index_json(assets_dir, srmodels, mwwmodel, text_font, emoji_collection, extra_files, multinet_model_info)

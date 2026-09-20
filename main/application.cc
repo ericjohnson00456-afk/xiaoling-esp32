@@ -16,6 +16,7 @@
 #include "ui/screens/qrcode/qrcode_presenter.h"
 #include "xiaoling/xiaoling_events.h"
 #include "player/resource/tone_model.h"
+#include "player/resource/localized_audio.h"
 #include "shell/cmd/kv/kv_user.h"
 #include "ui/screens/home/home_presenter.h"
 
@@ -157,9 +158,11 @@ void Application::Initialize() {
     UiApp::SetEmotion("gear");
     PublishWifiIcon();
     UiApp::SetDuplexMode(session_controller_.policy().mode);
+    auto& initial_assets = Assets::GetInstance();
+    LocalizedAudio::GetInstance().Initialize(initial_assets.RespakStore());
 #ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
     // 语音播放初始化前建立 ROMFS tone 索引，播放器随后可按 tone_id 读取资源。
-    ToneModel::GetInstance().Initialize(Assets::GetInstance().ToneStore(), "/");
+    ToneModel::GetInstance().Initialize(initial_assets.ToneStore(), "/");
 #endif
 
     // Print board name/version info
@@ -735,6 +738,7 @@ bool Application::CheckAssetsVersion() {
     }
 
     assets.Apply();
+    LocalizedAudio::GetInstance().Initialize(assets.RespakStore());
 #ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
     ToneModel::GetInstance().Initialize(assets.ToneStore(), "/");
     UiApp::ReloadEmojiResources();
@@ -951,17 +955,6 @@ bool Application::EnsureXiaolingReadyForWakeup() {
 }
 
 void Application::ShowActivationCode(const std::string& code, const std::string& message, const std::string& qrcode) {
-    struct digit_sound {
-        char digit;
-        const char* sound;
-    };
-    static const std::array<digit_sound, 10> digit_sounds{{
-        digit_sound{'0', "0"}, digit_sound{'1', "1"}, digit_sound{'2', "2"},
-        digit_sound{'3', "3"}, digit_sound{'4', "4"}, digit_sound{'5', "5"},
-        digit_sound{'6', "6"}, digit_sound{'7', "7"}, digit_sound{'8', "8"},
-        digit_sound{'9', "9"}
-    }};
-
     const std::string activation_title = message.empty() ? Lang::Strings::ACTIVATION : message;
     const std::string activation_text = code.empty()
         ? activation_title
@@ -983,16 +976,15 @@ void Application::ShowActivationCode(const std::string& code, const std::string&
         ESP_LOGW(TAG, "QR code URL is empty, skipping image download");
     }
 
-    PlayTone(71);
 #else // !CONFIG_LSPLATFORM
     // This sentence uses 9KB of SRAM, so we need to wait for it to finish
-    Alert(Lang::Strings::ACTIVATION, activation_text.c_str(), "link", "activation");
+    Alert(Lang::Strings::ACTIVATION, activation_text.c_str(), "link", "");
 #endif // CONFIG_LSPLATFORM
+    PlayActivationAudio(LocalizedAudio::kActivationGuideId);
     for (const auto& digit : code) {
-        auto it = std::find_if(digit_sounds.begin(), digit_sounds.end(),
-            [digit](const digit_sound& ds) { return ds.digit == digit; });
-        if (it != digit_sounds.end()) {
-            PlayLocalizedTone(it->sound);
+        if (digit >= '0' && digit <= '9') {
+            PlayActivationAudio(static_cast<uint16_t>(
+                LocalizedAudio::kActivationDigitFirstId + digit - '0'));
         }
     }
 }
@@ -1003,7 +995,7 @@ void Application::Alert(const char* status, const char* message, const char* emo
     UiApp::SetEmotion(emotion);
     UiApp::SetChatMessage("system", message);
     if (!sound.empty()) {
-        PlayLocalizedTone(std::string(sound).c_str());
+        PlayLocalizedAudio(std::string(sound).c_str());
     }
 }
 
@@ -1710,11 +1702,21 @@ void Application::PlaySound(const std::string_view& sound) {
     audio_service_.PlaySound(sound);
 }
 
-void Application::PlayLocalizedTone(const char* name) {
+void Application::PlayLocalizedAudio(const char* name) {
     const uint8_t* data = nullptr;
     size_t size = 0;
-    if (name == nullptr || !ToneModel::GetInstance().GetLocalizedData(name, &data, &size)) {
+    if (name == nullptr || !LocalizedAudio::GetInstance().GetData(name, &data, &size)) {
         ESP_LOGW(TAG, "本地化提示音不存在: %s", name != nullptr ? name : "(null)");
+        return;
+    }
+    audio_service_.PlaySound(std::string_view(reinterpret_cast<const char*>(data), size));
+}
+
+void Application::PlayActivationAudio(uint16_t id) {
+    const uint8_t* data = nullptr;
+    size_t size = 0;
+    if (!LocalizedAudio::GetInstance().GetActivationData(id, &data, &size)) {
+        ESP_LOGW(TAG, "激活音频不存在: id=%u", static_cast<unsigned>(id));
         return;
     }
     audio_service_.PlaySound(std::string_view(reinterpret_cast<const char*>(data), size));

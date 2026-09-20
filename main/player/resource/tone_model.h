@@ -16,7 +16,6 @@ public:
 
     bool Initialize(AssetStore& assets, const std::string& directory = "/tone");
     const char* GetUrl(uint16_t tone_id) const;
-    bool GetLocalizedData(const std::string& name, const uint8_t** data, size_t* size) const;
 
     const embed_item_info_t* EmbedItems() const { return items_.data(); }
     int EmbedItemCount() const { return static_cast<int>(items_.size()); }
@@ -29,6 +28,5 @@ private:
 
     std::vector<std::string> urls_;
     std::vector<embed_item_info_t> items_;
-    AssetStore* assets_ = nullptr;
     bool initialized_ = false;
 };

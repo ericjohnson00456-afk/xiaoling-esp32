@@ -12,6 +12,24 @@ from pathlib import Path
 from romfs import pack_image
 
 
+def relocate_activation_assets(locales: Path, destination: Path) -> None:
+    """Move activation audio into the reserved 300-series ROMFS namespace."""
+    if not locales.is_dir():
+        return
+    for language in locales.iterdir():
+        if not language.is_dir():
+            continue
+        files = {"300_activation.ogg": language / "activation.ogg"}
+        files.update({f"{301 + digit}_{digit}.ogg": language / f"{digit}.ogg"
+                      for digit in range(10)})
+        target = destination / language.name
+        for name, source in files.items():
+            if source.is_file():
+                target.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, target / name)
+                source.unlink()
+
+
 def copy_tree(src: Path, dst: Path) -> None:
     if not src.is_dir():
         return
@@ -50,8 +68,10 @@ def main() -> int:
         for directory in (respak, tone, emoji, wake):
             directory.mkdir()
 
-        # Static UI resources belong to respak. Tone and emoji are intentionally
-        # excluded because they are updated through their own URLs.
+        # Static UI resources and localized activation audio belong to respak.
+        # Tone and emoji are intentionally excluded because they are updated
+        # through their own URLs. Keeping locales here makes activation audio
+        # survive tone OTA updates.
         for entry in source.iterdir():
             if entry.name in ("tone", "emoji"):
                 continue
@@ -60,6 +80,8 @@ def main() -> int:
                 shutil.copytree(entry, target, dirs_exist_ok=True)
             elif entry.is_file():
                 shutil.copy2(entry, target)
+
+        relocate_activation_assets(respak / "locales", respak / "activation")
 
         if args.font_file:
             font = Path(args.font_file)
