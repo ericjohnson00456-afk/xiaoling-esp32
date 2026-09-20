@@ -1,8 +1,9 @@
 #include "display/oled_display.h"
+#include "resource/assets.h"
 #include "ui/i18n/lang_config.h"
 #include "lvgl_theme.h"
-#include "lvgl_font.h"
 
+#include <cstdlib>
 #include <string>
 #include <algorithm>
 
@@ -13,27 +14,20 @@
 
 #define TAG "OledDisplay"
 
-LV_FONT_DECLARE(BUILTIN_TEXT_FONT);
-LV_FONT_DECLARE(BUILTIN_ICON_FONT);
-LV_FONT_DECLARE(font_awesome_30_1);
-
 OledDisplay::OledDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_t panel,
     int width, int height, bool mirror_x, bool mirror_y)
     : panel_io_(panel_io), panel_(panel) {
     width_ = width;
     height_ = height;
 
-    auto text_font = std::make_shared<LvglBuiltInFont>(&BUILTIN_TEXT_FONT);
-    auto icon_font = std::make_shared<LvglBuiltInFont>(&BUILTIN_ICON_FONT);
-    auto large_icon_font = std::make_shared<LvglBuiltInFont>(&font_awesome_30_1);
-
     auto dark_theme = std::make_unique<LvglTheme>("dark");
-    dark_theme->set_text_font(text_font);
-    dark_theme->set_icon_font(icon_font);
-    dark_theme->set_large_icon_font(large_icon_font);
 
     auto& theme_manager = LvglThemeManager::GetInstance();
     theme_manager.RegisterTheme("dark", std::move(dark_theme));
+    if (!Assets::GetInstance().LoadFonts()) {
+        ESP_LOGE(TAG, "Required UI fonts are unavailable in respak; refusing built-in fallback");
+        std::abort();
+    }
     current_theme_ = theme_manager.GetTheme("dark");
 
     ESP_LOGI(TAG, "Initialize LVGL");

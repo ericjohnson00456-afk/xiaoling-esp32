@@ -6,6 +6,13 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <esp_log.h>
+
+namespace {
+
+constexpr char kTag[] = "UpgradeView";
+
+}  // namespace
 
 UpgradeView::UpgradeView(Display* display) : display_(display) {
     if (dynamic_cast<LvglDisplay*>(display_) != nullptr) {
@@ -26,12 +33,19 @@ void UpgradeView::CreateUi() {
     auto* theme = display_ != nullptr ? dynamic_cast<LvglTheme*>(display_->GetTheme()) : nullptr;
     if (lvgl == nullptr || theme == nullptr) return;
 
+    auto* text_font = theme->text_font() != nullptr ? theme->text_font()->font() : nullptr;
+    if (text_font == nullptr) {
+        ESP_LOGE(kTag, "Required OTA text font is unavailable; refusing built-in fallback");
+        return;
+    }
+
     root_ = lv_obj_create(lv_display_get_screen_active(lvgl->GetLvglDisplay()));
     lv_obj_set_size(root_, LV_HOR_RES, LV_VER_RES);
     lv_obj_set_style_radius(root_, 0, 0);
     lv_obj_set_style_pad_all(root_, theme->spacing(8), 0);
     lv_obj_set_style_border_width(root_, 0, 0);
     lv_obj_set_style_bg_color(root_, theme->background_color(), 0);
+    lv_obj_set_style_text_font(root_, text_font, 0);
     lv_obj_clear_flag(root_, LV_OBJ_FLAG_SCROLLABLE);
 
     title_ = lv_label_create(root_);

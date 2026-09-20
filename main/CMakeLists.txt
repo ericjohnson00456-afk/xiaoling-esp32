@@ -969,8 +969,6 @@ function(build_split_resources)
     set(SPLIT_EMOJI "${SPLIT_OUTPUT_DIR}/emoji.bin")
     set(SPLIT_WAKE_WORD "${SPLIT_OUTPUT_DIR}/wake_word.bin")
 
-    string(REPLACE "basic" "common" BUILTIN_FONT_FILE "${BUILTIN_TEXT_FONT}.bin")
-    set(BUILTIN_FONT_PATH "${XIAOZHI_FONTS_PATH}/cbin/${BUILTIN_FONT_FILE}")
     set(SPLIT_WAKE_WORD_DESCRIPTOR
         "${CMAKE_CURRENT_SOURCE_DIR}/audio/wake_words/micro_wake_word/models/${MWW_MODEL_FILE}")
     string(REGEX REPLACE "\\.tflite$" ".json" SPLIT_WAKE_WORD_DESCRIPTOR
@@ -987,7 +985,6 @@ function(build_split_resources)
         COMMAND python ${PROJECT_DIR}/scripts/build_split_resources.py
                 --resource-root "${CMAKE_CURRENT_SOURCE_DIR}/resource/assets"
                 --output-dir "${SPLIT_OUTPUT_DIR}"
-                --font-file "${BUILTIN_FONT_PATH}"
                 --wake-word-file "${CMAKE_CURRENT_SOURCE_DIR}/audio/wake_words/micro_wake_word/models/${MWW_MODEL_FILE}"
                 --wake-word-name "${MWW_MODEL_WAKE_WORD}"
         DEPENDS ${PROJECT_DIR}/scripts/build_split_resources.py

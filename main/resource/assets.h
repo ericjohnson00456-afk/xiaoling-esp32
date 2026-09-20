@@ -32,6 +32,9 @@ public:
                           std::function<void(int progress, size_t speed)> progress_callback);
     bool VerifyResource(Resource resource, size_t expected_size,
                         const std::array<uint8_t, 16>& expected_md5);
+    // Load all runtime fonts from the respak/font directory. This is called
+    // before UI pages are created so the first frame uses the final fonts.
+    bool LoadFonts();
     bool Apply();
     AssetStore& RespakStore() { return *this; }
     AssetStore& ToneStore();
@@ -50,6 +53,7 @@ private:
 
     std::string default_assets_url_;
     srmodel_list_t* models_list_ = nullptr;
+    uint32_t loaded_fonts_generation_ = 0;
     AssetStore tone_store_;
     AssetStore emoji_store_;
     AssetStore wake_word_store_;

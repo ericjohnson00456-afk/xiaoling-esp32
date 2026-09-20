@@ -109,6 +109,13 @@ void Application::Initialize() {
 
     SetDeviceState(kDeviceStateStarting);
 
+    // Load ROMFS fonts before constructing any UI pages. The display creates
+    // its themes during board initialization; this call also verifies that
+    // every text and icon font comes from the respak partition.
+    if (!Assets::GetInstance().LoadFonts()) {
+        ESP_LOGE(TAG, "Required ROMFS font resources are unavailable; no font fallback is enabled");
+    }
+
     // UIApp owns display binding and page initialization; Application only
     // provides the scheduler used to marshal work onto the application task.
     auto& ui_manager = UiManager::GetInstance();
@@ -570,6 +577,8 @@ bool Application::CheckAssetsVersion() {
     bool resource_tone_played = false;
     bool tone_downloaded = false;
     for (const auto& item : pending) {
+        // 临时关闭唤醒词资源 OTA。KvOta::GetValue() 对未设置的唤醒词 KV
+        // 返回禁用值；设置 user.disable_wakeword_update=0 可重新开启。
         if ((item.resource == Assets::Resource::WakeWord &&
              KvOta::IsDisabled(KvOta::UpdateType::WakeWord)) ||
             (item.resource == Assets::Resource::Tone &&

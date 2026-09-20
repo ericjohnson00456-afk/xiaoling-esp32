@@ -1,22 +1,18 @@
 #include "lvgl_theme_setup.h"
 
+#include "resource/assets.h"
 #include "lvgl_theme.h"
 #include "settings.h"
 
-#include <font_awesome.h>
+#include <cstdlib>
+#include <esp_log.h>
 #include <memory>
-
-LV_FONT_DECLARE(BUILTIN_TEXT_FONT);
-LV_FONT_DECLARE(BUILTIN_ICON_FONT);
-LV_FONT_DECLARE(font_awesome_30_4);
 
 namespace {
 
-void RegisterLcdThemes() {
-    auto text_font = std::make_shared<LvglBuiltInFont>(&BUILTIN_TEXT_FONT);
-    auto icon_font = std::make_shared<LvglBuiltInFont>(&BUILTIN_ICON_FONT);
-    auto large_icon_font = std::make_shared<LvglBuiltInFont>(&font_awesome_30_4);
+constexpr char kTag[] = "LvglThemeSetup";
 
+void RegisterLcdThemes() {
 #ifndef CONFIG_USE_XIAOLING_MESSAGE_STYLE
     auto light_theme = std::make_unique<LvglTheme>("light");
     light_theme->set_background_color(lv_color_hex(0xFFFFFF));
@@ -28,9 +24,6 @@ void RegisterLcdThemes() {
     light_theme->set_system_text_color(lv_color_hex(0x000000));
     light_theme->set_border_color(lv_color_hex(0x000000));
     light_theme->set_low_battery_color(lv_color_hex(0x000000));
-    light_theme->set_text_font(text_font);
-    light_theme->set_icon_font(icon_font);
-    light_theme->set_large_icon_font(large_icon_font);
 #endif
 
     auto dark_theme = std::make_unique<LvglTheme>("dark");
@@ -43,10 +36,6 @@ void RegisterLcdThemes() {
     dark_theme->set_system_text_color(lv_color_hex(0xFFFFFF));
     dark_theme->set_border_color(lv_color_hex(0xFFFFFF));
     dark_theme->set_low_battery_color(lv_color_hex(0xFF0000));
-    dark_theme->set_text_font(text_font);
-    dark_theme->set_icon_font(icon_font);
-    dark_theme->set_large_icon_font(large_icon_font);
-
     auto& theme_manager = LvglThemeManager::GetInstance();
 #ifndef CONFIG_USE_XIAOLING_MESSAGE_STYLE
     theme_manager.RegisterTheme("light", std::move(light_theme));
@@ -58,6 +47,11 @@ void RegisterLcdThemes() {
 
 LvglTheme* InitializeAndGetLcdTheme() {
     RegisterLcdThemes();
+
+    if (!Assets::GetInstance().LoadFonts()) {
+        ESP_LOGE(kTag, "Required UI fonts are unavailable in respak; refusing built-in fallback");
+        std::abort();
+    }
 
 #ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
     return LvglThemeManager::GetInstance().GetTheme("dark");

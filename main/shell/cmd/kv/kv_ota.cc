@@ -89,7 +89,11 @@ bool IsDisabled(UpdateType type) {
 
 int32_t GetValue(UpdateType type) {
     Settings settings(KvUser::kNamespace, false);
-    return settings.GetInt(StorageKey(type), 0);
+    // 临时策略：唤醒词资源 OTA 默认关闭。显式设置
+    // user.disable_wakeword_update=0 仍可重新开启更新；后续版本恢复默认开启时，
+    // 删除这个 WakeWord 特殊默认值即可。
+    const int32_t default_value = type == UpdateType::WakeWord ? 1 : 0;
+    return settings.GetInt(StorageKey(type), default_value);
 }
 
 void SetDisabled(UpdateType type, int32_t value) {

@@ -132,22 +132,22 @@ bool LoadWakeWordPair(AssetStore& wake_assets, const std::string& descriptor_pat
 }  // namespace
 
 bool Assets::Apply() {
+    // Mount and apply font resources before parsing the rest of the package.
+    // This makes the split ROMFS fonts available even when it has no legacy
+    // index.json manifest.
+    if (!LoadFonts()) {
+        ESP_LOGE(TAG, "Required UI fonts are unavailable in respak");
+        return false;
+    }
+
     void* ptr = nullptr;
     size_t size = 0;
     cJSON* root = nullptr;
     if (GetAssetData("index.json", ptr, size)) {
         root = cJSON_ParseWithLength(static_cast<char*>(ptr), size);
     } else {
-        // respak.bin from the ARCS-MINI resource layout intentionally contains
-        // only font files and has no legacy index.json. Provide the canonical
-        // font path so the existing theme application path still works.
+        // A split respak may contain only fonts and no legacy manifest.
         root = cJSON_CreateObject();
-        if (root != nullptr) {
-            std::vector<std::string> font_paths;
-            if (ListAssetFiles("/font", font_paths) && !font_paths.empty()) {
-                cJSON_AddStringToObject(root, "text_font", font_paths.front().c_str());
-            }
-        }
     }
     if (root == nullptr) {
         ESP_LOGE(TAG, "The index.json file is not valid");
@@ -260,25 +260,9 @@ bool Assets::Apply() {
     auto light_theme = theme_manager.GetTheme("light");
     auto dark_theme = theme_manager.GetTheme("dark");
 
-    cJSON* font = cJSON_GetObjectItem(root, "text_font");
-    if (cJSON_IsString(font)) {
-        std::string fonts_text_file = font->valuestring;
-        if (GetAssetData(fonts_text_file, ptr, size)) {
-            auto text_font = std::make_shared<LvglCBinFont>(ptr);
-            if (text_font->font() == nullptr) {
-                ESP_LOGE(TAG, "Failed to load fonts.bin");
-                return false;
-            }
-            if (light_theme != nullptr) {
-                light_theme->set_text_font(text_font);
-            }
-            if (dark_theme != nullptr) {
-                dark_theme->set_text_font(text_font);
-            }
-        } else {
-            ESP_LOGE(TAG, "The font file %s is not found", fonts_text_file.c_str());
-        }
-    }
+    // The canonical text font is loaded by LoadFonts() above. Ignore legacy
+    // manifest entries so an OTA package cannot replace it or reintroduce a
+    // built-in fallback.
 
     cJSON* emoji_collection = cJSON_GetObjectItem(root, "emoji_collection");
     if (cJSON_IsArray(emoji_collection)) {
@@ -376,6 +360,90 @@ bool Assets::Apply() {
 
     cJSON_Delete(root);
     return true;
+}
+
+bool Assets::LoadFonts() {
+    const uint32_t current_generation = generation();
+    if (current_generation != 0 && loaded_fonts_generation_ == current_generation) {
+        auto& theme_manager = LvglThemeManager::GetInstance();
+        auto light_theme = theme_manager.GetTheme("light");
+        auto dark_theme = theme_manager.GetTheme("dark");
+        const auto theme_ready = [](LvglTheme* theme) {
+            return theme != nullptr && theme->text_font() != nullptr &&
+                   theme->icon_font() != nullptr && theme->large_icon_font() != nullptr;
+        };
+        if ((light_theme == nullptr || theme_ready(light_theme)) && theme_ready(dark_theme)) {
+            return true;
+        }
+    }
+
+    std::vector<std::string> paths;
+    if (!ListAssetFiles("/font", paths) || paths.empty()) {
+        return false;
+    }
+    std::sort(paths.begin(), paths.end());
+
+    constexpr char kTextFontFilename[] = "font_puhui_common_20_4.bin";
+    std::string text_path;
+    std::string icon_path;
+    std::string large_icon_path;
+    for (const auto& path : paths) {
+        const size_t slash = path.find_last_of('/');
+        const std::string filename = path.substr(slash == std::string::npos ? 0 : slash + 1);
+        if (text_path.empty() && filename == kTextFontFilename) {
+            text_path = path;
+        } else if (filename == "font_awesome_20_4.bin") {
+            icon_path = path;
+        } else if (filename == "font_awesome_30_4.bin") {
+            large_icon_path = path;
+        }
+    }
+
+    auto& theme_manager = LvglThemeManager::GetInstance();
+    auto light_theme = theme_manager.GetTheme("light");
+    auto dark_theme = theme_manager.GetTheme("dark");
+    auto load_font = [&](const std::string& path,
+                         const char* role,
+                         auto setter) -> bool {
+        if (path.empty()) {
+            ESP_LOGE(TAG, "Required %s font is missing from respak", role);
+            return false;
+        }
+        void* data = nullptr;
+        size_t size = 0;
+        if (!GetAssetData(path, data, size) || data == nullptr || size == 0) {
+            ESP_LOGE(TAG, "The %s font file %s is not found", role, path.c_str());
+            return false;
+        }
+        auto font = std::make_shared<LvglCBinFont>(data);
+        if (font->font() == nullptr) {
+            ESP_LOGE(TAG, "Failed to load %s font file %s", role, path.c_str());
+            return false;
+        }
+        if (light_theme != nullptr) {
+            setter(light_theme, font);
+        }
+        if (dark_theme != nullptr) {
+            setter(dark_theme, font);
+        }
+        ESP_LOGI(TAG, "Loaded %s font from %s", role, path.c_str());
+        return true;
+    };
+
+    const bool text_loaded = load_font(text_path, "text", [](LvglTheme* theme, const std::shared_ptr<LvglFont>& font) {
+        theme->set_text_font(font);
+    });
+    const bool icon_loaded = load_font(icon_path, "icon", [](LvglTheme* theme, const std::shared_ptr<LvglFont>& font) {
+        theme->set_icon_font(font);
+    });
+    const bool large_icon_loaded = load_font(large_icon_path, "large icon", [](LvglTheme* theme, const std::shared_ptr<LvglFont>& font) {
+        theme->set_large_icon_font(font);
+    });
+    const bool loaded = text_loaded && icon_loaded && large_icon_loaded;
+    if (loaded) {
+        loaded_fonts_generation_ = current_generation;
+    }
+    return loaded;
 }
 
 Assets::Assets()
