@@ -3,6 +3,7 @@
 #include "display/display.h"
 #include "board.h"
 #include "home_view.h"
+#include "ui/i18n/lang_config.h"
 #include "ui/ui_manager.h"
 #include "ui/ui_page_ids.h"
 #include "ui/utils/image/lvgl_image.h"
@@ -10,6 +11,8 @@
 
 #include <utility>
 #include <cstring>
+#include <algorithm>
+#include <cstdlib>
 
 #include <esp_log.h>
 
@@ -33,6 +36,27 @@ private:
 
 }  // namespace
 #endif
+
+namespace {
+
+bool ReadJsonUint32(const cJSON* object, const char* name, uint32_t* value) {
+    if (!cJSON_IsObject(object) || value == nullptr) {
+        return false;
+    }
+    const auto* item = cJSON_GetObjectItemCaseSensitive(object, name);
+    if (!cJSON_IsNumber(item) || item->valuedouble < 0.0 ||
+        item->valuedouble > static_cast<double>(UINT32_MAX)) {
+        return false;
+    }
+    const auto converted = static_cast<uint32_t>(item->valuedouble);
+    if (static_cast<double>(converted) != item->valuedouble) {
+        return false;
+    }
+    *value = converted;
+    return true;
+}
+
+}  // namespace
 
 HomePresenter& HomePresenter::GetInstance() {
     static HomePresenter instance;
@@ -114,6 +138,7 @@ int HomePresenter::Close(const UiNavScreen* screen, void* data) {
     }
     presenter->UnsubscribeVoiceEvents();
     presenter->StopBannerTimer();
+    presenter->ResetSubtitles(true);
     presenter->view_.reset();
     presenter->last_emotion_.clear();
     presenter->last_chat_role_.clear();
@@ -154,9 +179,40 @@ void HomePresenter::SubscribeVoiceEvents() {
     subscribe_text(XIAOLING_IAT_START);
     subscribe_text(XIAOLING_IAT_UPDATE);
     subscribe_text(XIAOLING_IAT_END);
-    subscribe_text(XIAOLING_TTS_TXT_START);
-    subscribe_text(XIAOLING_TTS_TXT_UPDATE);
-    subscribe_text(XIAOLING_TTS_TXT_END);
+    voice_event_subscriptions_.push_back(events.Subscribe(
+        XIAOLING_TTS_TXT_START, [this](const XiaolingEvent&) {
+            UiManager::GetInstance().Dispatch([this]() { OnTtsTextStart(); });
+        }));
+    voice_event_subscriptions_.push_back(events.Subscribe(
+        XIAOLING_TTS_TXT_UPDATE, [this](const XiaolingEvent& event) {
+            UiManager::GetInstance().Dispatch(
+                [this, text = event.text]() { OnTtsTextUpdate(text); });
+        }));
+    voice_event_subscriptions_.push_back(events.Subscribe(
+        XIAOLING_TTS_TXT_INTERRUPT, [this](const XiaolingEvent&) {
+            UiManager::GetInstance().Dispatch([this]() { OnTtsTextInterrupt(); });
+        }));
+    voice_event_subscriptions_.push_back(events.Subscribe(
+        XIAOLING_TTS_OUTPUT_STARTED, [this](const XiaolingEvent&) {
+            UiManager::GetInstance().Dispatch([this]() { OnTtsPlaying(); });
+        }));
+    voice_event_subscriptions_.push_back(events.Subscribe(
+        XIAOLING_TTS_OUTPUT_PROGRESS, [this](const XiaolingEvent& event) {
+            uint32_t audio_clock_ms = 0;
+            if (!event.text.empty()) {
+                char* end = nullptr;
+                const unsigned long value = std::strtoul(event.text.c_str(), &end, 10);
+                if (end != event.text.c_str() && *end == '\0' && value <= UINT32_MAX) {
+                    audio_clock_ms = static_cast<uint32_t>(value);
+                }
+            }
+            UiManager::GetInstance().Dispatch(
+                [this, audio_clock_ms]() { OnTtsAudioProgress(audio_clock_ms); });
+        }));
+    voice_event_subscriptions_.push_back(events.Subscribe(
+        XIAOLING_TTS_STOPPED, [this](const XiaolingEvent&) {
+            UiManager::GetInstance().Dispatch([this]() { OnTtsStopped(); });
+        }));
 }
 
 void HomePresenter::UnsubscribeVoiceEvents() {
@@ -165,6 +221,156 @@ void HomePresenter::UnsubscribeVoiceEvents() {
         events.Unsubscribe(id);
     }
     voice_event_subscriptions_.clear();
+}
+
+void HomePresenter::ResetSubtitles(bool clear_text) {
+    subtitle_segments_.clear();
+    subtitle_index_ = 0;
+    subtitle_audio_started_ = false;
+    subtitle_audio_clock_ms_ = 0;
+    if (clear_text && view_ != nullptr) {
+        view_->SetSubtitleText("");
+    }
+}
+
+void HomePresenter::OnTtsTextStart() {
+    if (view_ == nullptr) {
+        return;
+    }
+    const bool audio_started = subtitle_audio_started_;
+    const uint32_t audio_clock_ms = subtitle_audio_clock_ms_;
+    ResetSubtitles(true);
+    if (audio_started) {
+        subtitle_audio_started_ = true;
+        subtitle_audio_clock_ms_ = audio_clock_ms;
+    }
+    ESP_LOGI(TAG, "字幕 UI 流开始: audio_started=%d, clock=%lums",
+             subtitle_audio_started_ ? 1 : 0,
+             static_cast<unsigned long>(subtitle_audio_clock_ms_));
+}
+
+void HomePresenter::OnTtsTextUpdate(const std::string& text) {
+    if (view_ == nullptr || text.empty()) {
+        return;
+    }
+    cJSON* root = cJSON_ParseWithLength(text.data(), text.size());
+    if (root == nullptr) {
+        ESP_LOGW(TAG, "字幕时间段 JSON 解析失败，已忽略: bytes=%u",
+                 static_cast<unsigned>(text.size()));
+        return;
+    }
+    std::function<void(const cJSON*)> add_segment = [this](const cJSON* item) {
+        if (!cJSON_IsObject(item)) {
+            return;
+        }
+        const auto* text_item = cJSON_GetObjectItemCaseSensitive(item, "text");
+        uint32_t cloud_index = 0;
+        uint32_t start_ms = 0;
+        uint32_t end_ms = 0;
+        const bool valid = cJSON_IsString(text_item) && text_item->valuestring != nullptr &&
+            text_item->valuestring[0] != '\0' &&
+            ReadJsonUint32(item, "index", &cloud_index) &&
+            ReadJsonUint32(item, "start_ms", &start_ms) &&
+            ReadJsonUint32(item, "end_ms", &end_ms) &&
+            end_ms > start_ms;
+        if (!valid) {
+            ESP_LOGW(TAG, "字幕时间段字段无效，已忽略");
+            return;
+        }
+
+        if ((subtitle_segments_.empty() && cloud_index != 0) ||
+            (!subtitle_segments_.empty() &&
+             (cloud_index != subtitle_segments_.back().cloud_index + 1 ||
+              start_ms < subtitle_segments_.back().end_ms))) {
+            ESP_LOGW(TAG, "字幕时间段乱序或重复，已忽略: index=%lu, start=%lums",
+                     static_cast<unsigned long>(cloud_index),
+                     static_cast<unsigned long>(start_ms));
+            return;
+        }
+        subtitle_segments_.push_back(
+            {cloud_index, text_item->valuestring, start_ms, end_ms});
+    };
+    if (cJSON_IsArray(root)) {
+        cJSON* item = nullptr;
+        cJSON_ArrayForEach(item, root) { add_segment(item); }
+    } else {
+        const cJSON* item = root;
+        const auto* nested = cJSON_IsObject(root)
+            ? cJSON_GetObjectItemCaseSensitive(root, "data") : nullptr;
+        if (nested != nullptr && cJSON_IsObject(nested)) item = nested;
+        add_segment(item);
+    }
+    ScheduleSubtitle();
+    cJSON_Delete(root);
+}
+
+void HomePresenter::OnTtsTextInterrupt() {
+    if (view_ == nullptr) {
+        return;
+    }
+    ResetSubtitles(true);
+}
+
+void HomePresenter::OnTtsPlaying() {
+    if (view_ == nullptr) {
+        return;
+    }
+    // This callback is already marshalled to the UI/application task from the
+    // first PCM output event. Update the visible state here instead of waiting
+    // for the subsequent DeviceStatus notification cycle. The device state is
+    // still transitioned by Application and remains the single source of truth.
+    SetStatus(Lang::Strings::SPEAKING);
+    SetEmotion("说话");
+    subtitle_audio_started_ = true;
+    subtitle_audio_clock_ms_ = 0;
+    ESP_LOGI(TAG, "字幕 UI 音频时钟启动");
+    ScheduleSubtitle();
+}
+
+void HomePresenter::OnTtsAudioProgress(uint32_t audio_clock_ms) {
+    if (view_ == nullptr || !subtitle_audio_started_) {
+        return;
+    }
+    subtitle_audio_clock_ms_ = std::max(subtitle_audio_clock_ms_, audio_clock_ms);
+    ScheduleSubtitle();
+}
+
+void HomePresenter::OnTtsStopped() {
+    if (view_ == nullptr) {
+        return;
+    }
+    ResetSubtitles(true);
+}
+
+void HomePresenter::ScheduleSubtitle() {
+    if (!subtitle_audio_started_ || subtitle_index_ >= subtitle_segments_.size()) {
+        return;
+    }
+
+    const uint64_t elapsed_ms = subtitle_audio_clock_ms_;
+    while (subtitle_index_ < subtitle_segments_.size() &&
+           subtitle_segments_[subtitle_index_].end_ms <= elapsed_ms) {
+        ++subtitle_index_;
+    }
+    if (subtitle_index_ >= subtitle_segments_.size()) {
+        return;
+    }
+
+    const auto& segment = subtitle_segments_[subtitle_index_];
+    if (elapsed_ms < segment.start_ms) {
+        return;
+    }
+    if (view_ != nullptr) {
+        view_->SetSubtitleText(segment.text);
+        ESP_LOGI(TAG, "字幕 UI 显示: cloud_index=%lu, queue_index=%u, bytes=%u, interval=%lu-%lums, clock=%lums",
+                 static_cast<unsigned long>(segment.cloud_index),
+                 static_cast<unsigned>(subtitle_index_),
+                 static_cast<unsigned>(segment.text.size()),
+                 static_cast<unsigned long>(segment.start_ms),
+                 static_cast<unsigned long>(segment.end_ms),
+                 static_cast<unsigned long>(elapsed_ms));
+    }
+    ++subtitle_index_;
 }
 
 void HomePresenter::SetText(std::string text) {

@@ -82,6 +82,7 @@ bool XiaolingConn::Connect() {
 }
 
 void XiaolingConn::Disconnect() {
+    ClearUplinkQueue();
     if (voice_ != nullptr) {
         voice_->Reset();
     }
@@ -95,8 +96,42 @@ bool XiaolingConn::IsConnected() const {
     return transport_connected_ && protocol_connected_ && !error_occurred_;
 }
 
+bool XiaolingConn::IsSessionActive() const {
+    return session_active_.load();
+}
+
+bool XiaolingConn::CanUploadAudio() const {
+    return voice_ != nullptr && voice_->audio_upload_enabled();
+}
+
 bool XiaolingConn::SendAudio(std::unique_ptr<AudioStreamPacket> packet) {
-    return voice_ != nullptr && voice_->SendAudio(std::move(packet));
+    if (packet == nullptr || packet->payload.empty() || !IsConnected()) {
+        return false;
+    }
+
+    bool wake_sender = false;
+    {
+        std::lock_guard<std::mutex> lock(uplink_mutex_);
+        wake_sender = uplink_queue_.empty();
+        if (uplink_queue_.size() >= kMaxUplinkPackets) {
+            // Uplink audio is useful only in real time. Preserve the newest
+            // post-AEC speech instead of building a stale network backlog.
+            uplink_queue_.pop_front();
+            if ((++dropped_uplink_packets_ % 25) == 1) {
+                ESP_LOGW(TAG, "上行网络队列满，丢弃旧包: count=%lu",
+                         static_cast<unsigned long>(dropped_uplink_packets_));
+            }
+        }
+        uplink_queue_.push_back(std::move(packet));
+    }
+    if (wake_sender && task_handle_ != nullptr) {
+        xTaskNotifyGive(task_handle_);
+    }
+    return true;
+}
+
+void XiaolingConn::OnAudioSent(std::function<void(uint32_t)> callback) {
+    on_audio_sent_ = std::move(callback);
 }
 
 void XiaolingConn::SendWakeWordDetected(const std::string& wake_word) {
@@ -119,6 +154,12 @@ void XiaolingConn::SendStopListening() {
 
 bool XiaolingConn::EndSession() {
     return voice_ != nullptr && voice_->EndSession();
+}
+
+void XiaolingConn::PrepareAbortSpeaking(AbortReason reason) {
+    if (voice_ != nullptr) {
+        voice_->PrepareAbortSpeaking(reason);
+    }
 }
 
 void XiaolingConn::SendAbortSpeaking(AbortReason reason) {
@@ -172,7 +213,9 @@ void XiaolingConn::OnDisconnected(std::function<void()> callback) {
 bool XiaolingConn::StartSupervisor() {
     desired_connected_ = true;
     if (!running_.exchange(true)) {
-        if (xTaskCreate(TaskEntry, "xiaoling_conn", 6144, this, 4, &task_handle_) != pdPASS) {
+        // TLS writes may wait for socket capacity. Keep this task at the app
+        // priority so a slow uplink cannot starve UI and receive processing.
+        if (xTaskCreate(TaskEntry, "xiaoling_conn", 6144, this, 1, &task_handle_) != pdPASS) {
             ESP_LOGE(TAG, "创建小聆连接管理任务失败");
             task_handle_ = nullptr;
             running_ = false;
@@ -229,6 +272,73 @@ bool XiaolingConn::SendBinary(const uint8_t* data, size_t size) {
 
 void XiaolingConn::SetSessionActive(bool active) {
     session_active_ = active;
+    if (!active) {
+        ClearUplinkQueue();
+    }
+}
+
+void XiaolingConn::ClearUplinkQueue() {
+    std::lock_guard<std::mutex> lock(uplink_mutex_);
+    uplink_queue_.clear();
+}
+
+bool XiaolingConn::SendPendingAudio() {
+    size_t pending = 0;
+    {
+        std::lock_guard<std::mutex> lock(uplink_mutex_);
+        pending = uplink_queue_.size();
+    }
+    if (pending == 0) {
+        return false;
+    }
+
+    // Accumulate only a short window of 20 ms packets. The length-prefixed
+    // opus-wb frames can share one WebSocket message, greatly reducing TLS
+    // small-write pressure while keeping barge-in latency bounded.
+    if (pending < kUplinkBatchPackets) {
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(kUplinkBatchWaitMs));
+    }
+
+    std::vector<std::unique_ptr<AudioStreamPacket>> packets;
+    packets.reserve(kUplinkBatchPackets);
+    uint32_t duration_ms = 0;
+    {
+        std::lock_guard<std::mutex> lock(uplink_mutex_);
+        while (!uplink_queue_.empty() && packets.size() < kUplinkBatchPackets) {
+            const auto frame_duration = uplink_queue_.front()->frame_duration;
+            if (frame_duration > 0) {
+                duration_ms += static_cast<uint32_t>(frame_duration);
+            }
+            packets.push_back(std::move(uplink_queue_.front()));
+            uplink_queue_.pop_front();
+        }
+    }
+
+    if (!running_ || !desired_connected_ || packets.empty()) {
+        return true;
+    }
+    const size_t packet_count = packets.size();
+    const int64_t send_started_us = esp_timer_get_time();
+    const bool sent = voice_ != nullptr && voice_->SendAudioBatch(std::move(packets));
+    const uint32_t send_elapsed_ms = static_cast<uint32_t>(
+        (esp_timer_get_time() - send_started_us) / 1000);
+    if (send_elapsed_ms >= 200) {
+        size_t queued = 0;
+        {
+            std::lock_guard<std::mutex> lock(uplink_mutex_);
+            queued = uplink_queue_.size();
+        }
+        ESP_LOGW(TAG,
+                 "上行 WebSocket 发送较慢: frames=%u, audio=%lums, wait=%lums, queued=%u, ok=%d",
+                 static_cast<unsigned>(packet_count),
+                 static_cast<unsigned long>(duration_ms),
+                 static_cast<unsigned long>(send_elapsed_ms),
+                 static_cast<unsigned>(queued), sent ? 1 : 0);
+    }
+    if (sent && on_audio_sent_) {
+        on_audio_sent_(duration_ms);
+    }
+    return true;
 }
 
 void XiaolingConn::TaskEntry(void* arg) {
@@ -281,6 +391,12 @@ void XiaolingConn::Run() {
             }
         }
 
+        if (desired_connected_ && transport_connected_ && protocol_connected_ &&
+            SendPendingAudio()) {
+            // Drain a backlog in bounded batches before sleeping again.
+            continue;
+        }
+
         const auto wait_ms = transport_connected_ ? 250 : kReconnectIntervalMs;
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(wait_ms));
     }
@@ -298,6 +414,9 @@ bool XiaolingConn::ConnectOnce() {
     const auto access_token = LoadAccessToken();
     if (url.empty() || access_token.empty()) {
         return false;
+    }
+    if (voice_ != nullptr) {
+        voice_->SetAccessToken(access_token);
     }
     const XiaolingWsHeaders headers = {
         {"Authorization", NormalizeBearerToken(access_token)},

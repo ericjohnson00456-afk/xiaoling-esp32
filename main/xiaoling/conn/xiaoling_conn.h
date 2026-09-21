@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -36,12 +37,16 @@ public:
     bool Connect();
     void Disconnect();
     bool IsConnected() const;
+    bool IsSessionActive() const;
+    bool CanUploadAudio() const;
 
     bool SendAudio(std::unique_ptr<AudioStreamPacket> packet);
+    void OnAudioSent(std::function<void(uint32_t)> callback);
     void SendWakeWordDetected(const std::string& wake_word);
     void SendStartListening(ListeningMode mode);
     void SendStopListening();
     bool EndSession();
+    void PrepareAbortSpeaking(AbortReason reason);
     void SendAbortSpeaking(AbortReason reason);
     void SendMcpMessage(const std::string& message);
     bool ResolveKuwoMusicUrl(const std::string& item_id, std::string& url);
@@ -62,6 +67,9 @@ private:
     static constexpr uint32_t kReconnectIntervalMs = 3000;
     static constexpr uint32_t kProtocolConnectTimeoutMs = 10000;
     static constexpr EventBits_t kProtocolConnectedBit = BIT0;
+    static constexpr size_t kMaxUplinkPackets = 25;
+    static constexpr size_t kUplinkBatchPackets = 5;
+    static constexpr uint32_t kUplinkBatchWaitMs = 40;
 
     std::unique_ptr<XiaolingSessionVoice> voice_;
     EventGroupHandle_t event_group_ = nullptr;
@@ -80,11 +88,16 @@ private:
     TaskHandle_t task_handle_ = nullptr;
     int64_t last_heartbeat_us_ = 0;
 
+    std::mutex uplink_mutex_;
+    std::deque<std::unique_ptr<AudioStreamPacket>> uplink_queue_;
+    uint32_t dropped_uplink_packets_ = 0;
+
     mutable std::mutex auth_mutex_;
     std::string access_token_;
     bool error_occurred_ = false;
 
     std::function<void(const cJSON*)> on_incoming_json_;
+    std::function<void(uint32_t)> on_audio_sent_;
     std::function<void(XiaolingError)> on_network_error_;
     std::function<void()> on_connected_;
     std::function<void()> on_disconnected_;
@@ -98,6 +111,8 @@ private:
     void ForceReconnect();
     void PublishDisconnected();
     void SetSessionActive(bool active);
+    bool SendPendingAudio();
+    void ClearUplinkQueue();
 
     bool EnsureAuthenticated();
     bool Authenticate(const std::string& extra_code = "");

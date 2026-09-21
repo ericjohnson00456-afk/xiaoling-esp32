@@ -43,6 +43,13 @@ public:
 #endif
 
 private:
+    struct SubtitleSegment {
+        uint32_t cloud_index = 0;
+        std::string text;
+        uint32_t start_ms = 0;
+        uint32_t end_ms = 0;
+    };
+
     HomePresenter() = default;
 
     static int Open(const UiNavScreen* screen, void** data);
@@ -55,6 +62,14 @@ private:
     std::string SubstituteWakeWord(const std::string& text) const;
     void SubscribeVoiceEvents();
     void UnsubscribeVoiceEvents();
+    void OnTtsTextStart();
+    void OnTtsTextUpdate(const std::string& text);
+    void OnTtsTextInterrupt();
+    void OnTtsPlaying();
+    void OnTtsAudioProgress(uint32_t audio_clock_ms);
+    void OnTtsStopped();
+    void ResetSubtitles(bool clear_text);
+    void ScheduleSubtitle();
     void StopBannerTimer();
     void OnBannerTick();
     static void BannerTimerCallback(void* arg);
@@ -66,6 +81,10 @@ private:
     esp_timer_handle_t banner_timer_ = nullptr;
     std::function<bool()> banner_idle_provider_;
     std::vector<uint32_t> voice_event_subscriptions_;
+    std::vector<SubtitleSegment> subtitle_segments_;
+    size_t subtitle_index_ = 0;
+    bool subtitle_audio_started_ = false;
+    uint32_t subtitle_audio_clock_ms_ = 0;
     mutable std::mutex wake_word_mutex_;
     std::function<std::string()> wake_word_provider_;
     std::string last_emotion_;

@@ -3,6 +3,8 @@
 #include <mutex>
 
 #include <esp_audio_simple_player.h>
+#include <esp_gmf_io.h>
+#include <esp_gmf_io_http.h>
 
 #include "player_engine.h"
 
@@ -19,10 +21,13 @@ public:
     bool IsPlaying() const override;
 
 private:
+    static int ConfigureInputIo(esp_asp_handle_t handle, void* ctx);
+    static int HttpIoEventCallback(http_stream_event_msg_t* event);
     static int OutputCallback(uint8_t* data, int data_size, void* ctx);
     static int EventCallbackAdapter(esp_asp_event_pkt_t* event, void* ctx);
 
     int HandleOutput(uint8_t* data, int data_size);
+    int HandleHttpIoEvent(http_stream_event_msg_t* event);
     int HandleEvent(esp_asp_event_pkt_t* event);
     void Emit(const PlaybackEvent& event);
 
@@ -34,6 +39,8 @@ private:
     PlaybackEndReason stop_reason_ = PlaybackEndReason::kNone;
     uint32_t playback_started_ms_ = 0;
     uint32_t output_chunks_ = 0;
+    bool http_request_ready_emitted_ = false;
     bool initialized_ = false;
     bool playing_ = false;
+    bool draining_ = false;
 };

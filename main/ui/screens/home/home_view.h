@@ -29,6 +29,7 @@ public:
     void HideImage();
 #endif
     void SetText(const std::string& text);
+    void SetSubtitleText(const std::string& text);
     void SetChatMessage(const std::string& role, const std::string& text);
     void ShowNotification(const std::string& text, int duration_ms);
     void SetWifiIcon(const std::string& icon);
@@ -49,6 +50,7 @@ private:
     LvglDisplay* lvgl_ = nullptr;
     lv_obj_t* root_ = nullptr;
     lv_obj_t* content_ = nullptr;
+    lv_obj_t* subtitle_label_ = nullptr;
     lv_obj_t* emoji_box_ = nullptr;
     lv_obj_t* emoji_label_ = nullptr;
     lv_obj_t* emoji_image_ = nullptr;

@@ -43,11 +43,18 @@
 /* Keep the normal server-downlink queue small so interactive Opus playback
  * remains responsive. Network TTS uses a separate, deeper limit below. */
 #define MAX_PLAYBACK_TASKS_IN_QUEUE 8
-/* The TTS endpoint can pause for several seconds between chunks. A decoded
- * PCM block is about 36 ms at 16 kHz; 96 blocks provide about 3.5 s of
- * startup buffering without making the first response feel sluggish. */
-#define MAX_PLAYER_PLAYBACK_TASKS_IN_QUEUE 160
-#define PLAYER_PREBUFFER_TASKS 96
+/* TTS HTTP delivers MP3 in bursty chunks. Keep enough decoded PCM to absorb
+ * multi-second gaps between network reads; the queue is allocated in PSRAM
+ * on this board. Short clips bypass the gate when the stream finishes. */
+#define MAX_PLAYER_PLAYBACK_TASKS_IN_QUEUE 192
+/* Keep about 0.8 seconds before opening the DAC. Recent traces show the cloud
+ * commonly pauses 400-700 ms again immediately after the first MP3 frame, so
+ * the previous 12-block watermark could underrun during the first phrase. */
+#define PLAYER_PREBUFFER_TASKS 24
+/* Once a live TTS stream has actually run dry, accumulate about 3.5 seconds.
+ * This cannot hide an arbitrarily long server stall, but it avoids a cascade
+ * of short start/stop cycles after the connection resumes. */
+#define PLAYER_REBUFFER_TASKS 96
 #define MAX_DECODE_PACKETS_IN_QUEUE (2400 / OPUS_FRAME_DURATION_MS)
 #define MAX_SEND_PACKETS_IN_QUEUE (2400 / OPUS_FRAME_DURATION_MS)
 #define MAX_PROCESSED_WAKE_FRAMES_IN_QUEUE 4
@@ -70,6 +77,7 @@ struct AudioServiceCallbacks {
     std::function<void(void)> on_audio_testing_queue_full;
     // Called after the first streamed-player PCM block is handed to the codec.
     std::function<void(void)> on_player_output_started;
+    std::function<void(uint32_t)> on_player_output_progress;
 };
 
 
@@ -125,6 +133,7 @@ public:
 
     bool PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> packet, bool wait = false);
     bool PushPcmToPlaybackQueue(const uint8_t* data, size_t size, int sample_rate, bool wait = true);
+    void BeginPlayerPlayback();
     void MarkPlayerPlaybackFinished();
     void ClearPlaybackQueue();
     void WaitForPlaybackComplete();
@@ -190,14 +199,17 @@ private:
     std::deque<std::unique_ptr<AudioTask>> audio_playback_queue_;
     bool audio_output_busy_ = false;
     bool player_playback_finished_ = false;
+    bool player_prebuffering_ = true;
     bool player_prebuffer_wait_logged_ = false;
-    bool player_prebuffer_release_logged_ = false;
+    uint32_t player_rebuffer_count_ = 0;
     size_t player_pcm_bytes_ = 0;
     /* Diagnostics for streamed-player jitter. These are written by the
        output task and reset when a new player session starts. */
     std::atomic<uint32_t> player_output_chunks_{0};
     std::atomic<uint32_t> player_output_last_end_ms_{0};
     std::atomic<uint32_t> player_output_underruns_{0};
+    std::atomic<uint32_t> player_audio_clock_ms_{0};
+    std::atomic_bool player_stream_active_{false};
     // For server AEC
     std::deque<uint32_t> timestamp_queue_;
 

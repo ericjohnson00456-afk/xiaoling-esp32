@@ -5,6 +5,8 @@
 #include "playback_request.h"
 
 enum class PlaybackState {
+    // HTTP/TLS 已建连且请求已发出，媒体响应体可能仍在等待云端生成。
+    kStreamReady,
     kPlaying,
     kPaused,
     kStopped,

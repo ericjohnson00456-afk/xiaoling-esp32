@@ -30,6 +30,7 @@
 #include <array>
 #include <cstdio>
 #include <esp_log.h>
+#include <esp_timer.h>
 #include <esp_system.h>
 #include <nvs_flash.h>
 #include <font_awesome.h>
@@ -196,10 +197,19 @@ void Application::Initialize() {
             if (event.channel != PlaybackChannel::kTts) {
                 return;
             }
+            if (event.state == PlaybackState::kStreamReady) {
+                XiaolingEventBus::GetInstance().Publish(XIAOLING_TTS_STREAM_READY);
+                return;
+            }
             if (event.state == PlaybackState::kPlaying) {
                 active_tts_session_id_ = event.session_id;
                 background_tts_pending_.store(true);
+                XiaolingEventBus::GetInstance().Publish(XIAOLING_TTS_PLAYING);
                 session_controller_.StartTts(event.session_id);
+                // Unlike the URL event, kPlaying means the HTTP response has
+                // yielded decodable TTS audio.
+                UiApp::SetStatus(UiApp::Status::Speaking);
+                UiApp::SetEmotion("说话");
                 if (!exit_requested_.load() && tts_output_started_.exchange(false) &&
                     (GetDeviceState() == kDeviceStateIdle ||
                      GetDeviceState() == kDeviceStateListening)) {
@@ -218,6 +228,9 @@ void Application::Initialize() {
             if (active_tts_session_id_ != event.session_id) {
                 return;
             }
+            XiaolingEventBus::GetInstance().Publish(
+                XIAOLING_TTS_STOPPED,
+                event.reason == PlaybackEndReason::kNaturalEnd ? "natural" : "interrupted");
             active_tts_session_id_ = 0;
             background_tts_pending_.store(false);
             session_controller_.EndTts(event.session_id);
@@ -278,6 +291,7 @@ void Application::Initialize() {
             return;
         }
         tts_output_started_.store(true);
+        XiaolingEventBus::GetInstance().Publish(XIAOLING_TTS_OUTPUT_STARTED);
         Schedule([this]() {
             if (!exit_requested_.load() && active_tts_session_id_ != 0 &&
                 tts_output_started_.exchange(false) &&
@@ -287,6 +301,10 @@ void Application::Initialize() {
                 SetDeviceState(kDeviceStateSpeaking);
             }
         });
+    };
+    callbacks.on_player_output_progress = [](uint32_t audio_clock_ms) {
+        XiaolingEventBus::GetInstance().Publish(
+            XIAOLING_TTS_OUTPUT_PROGRESS, std::to_string(audio_clock_ms));
     };
     audio_service_.SetCallbacks(callbacks);
 
@@ -433,18 +451,17 @@ void Application::Run() {
         }
 
         if (bits & MAIN_EVENT_SEND_AUDIO) {
-            // 每轮只发送一个音频包，避免持续录音时饿死 IAT 字幕等主任务事件。
-            if (auto packet = audio_service_.PopPacketFromSendQueue()) {
-#ifdef CONFIG_LSPLATFORM
-                auto duration = packet->frame_duration;
-                if (xiaoling_conn_ && xiaoling_conn_->SendAudio(std::move(packet))) {
-                    uplink_watchdog_.Feed(duration);
+            // XiaolingConn performs WebSocket writes on its existing worker.
+            // Move a bounded burst off the codec queue without blocking UI.
+            constexpr size_t kMaxPacketsPerPass = 12;
+            for (size_t i = 0; i < kMaxPacketsPerPass; ++i) {
+                auto packet = audio_service_.PopPacketFromSendQueue();
+                if (!packet) {
+                    break;
                 }
-#else // !CONFIG_LSPLATFORM
                 if (xiaoling_conn_) {
                     xiaoling_conn_->SendAudio(std::move(packet));
                 }
-#endif // CONFIG_LSPLATFORM
             }
 
             // EventGroup 位会合并；队列仍有积压时主动安排下一轮发送。
@@ -543,7 +560,11 @@ void Application::HandleActivationDoneEvent() {
     // Release OTA object after activation is complete
     ota_.reset();
     auto& board = Board::GetInstance();
-    board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
+    // Xiaoling keeps a WebSocket alive and opens latency-sensitive TTS HTTP
+    // streams after activation. OnConnected() has already selected
+    // PERFORMANCE; do not immediately overwrite it with MAX_MODEM here.
+    // Deep Wi-Fi sleep made the downlink arrive in large, multi-second gaps.
+    board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
 }
 
 void Application::ActivationTask() {
@@ -888,6 +909,12 @@ void Application::InitializeXiaolingConn() {
         }
     });
 
+#ifdef CONFIG_LSPLATFORM
+    xiaoling_conn_->OnAudioSent([this](uint32_t duration_ms) {
+        uplink_watchdog_.Feed(duration_ms);
+    });
+#endif // CONFIG_LSPLATFORM
+
     xiaoling_conn_->OnDisconnected([this, &board]() {
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
         UiApp::SetDuplexVisible(false);
@@ -947,9 +974,10 @@ void Application::InitializeXiaolingConn() {
 
         if (strcmp(action->valuestring, "finish") == 0 ||
             strcmp(action->valuestring, "closed") == 0) {
-            Schedule([this]() {
+            const bool natural_finish = strcmp(action->valuestring, "finish") == 0;
+            Schedule([this, natural_finish]() {
                 if (background_music_session_) {
-                    // The cloud finish is the end-of-response barrier.  If a
+                    // The cloud finish is the end-of-response barrier. If a
                     // streamed TTS URL is still draining, the playback event
                     // will call FinishBackgroundMusicSession() afterwards.
                     background_session_finished_ = true;
@@ -961,7 +989,15 @@ void Application::InitializeXiaolingConn() {
                     return;
                 }
                 playback_intents_.Pop(PlaybackIntent::kVoiceSession);
-                if (GetDeviceState() == kDeviceStateListening) {
+                const auto state = GetDeviceState();
+                if (natural_finish &&
+                    session_controller_.policy().mode == DuplexMode::kFullDuplex &&
+                    (state == kDeviceStateListening || state == kDeviceStateSpeaking) &&
+                    xiaoling_conn_ && xiaoling_conn_->IsConnected() &&
+                    !xiaoling_conn_->IsSessionActive()) {
+                    ESP_LOGI(TAG, "全双工云端会话已结束，立即重启 AEC 音频上行");
+                    xiaoling_conn_->SendStartListening(kListeningModeRealtime);
+                } else if (state == kDeviceStateListening) {
                     SetDeviceState(kDeviceStateIdle);
                 }
             });
@@ -1173,10 +1209,8 @@ void Application::HandleWakeWordDetectedEvent() {
     }
     PauseWakeWordDetection();
 
-    // Only accept audio wake words while the device is standing by. Wake-word
-    // candidates during a conversation, playback, or activation are ignored.
     auto state = GetDeviceState();
-    if (state != kDeviceStateIdle) {
+    if (state != kDeviceStateIdle && state != kDeviceStateSpeaking) {
         ESP_LOGI(TAG, "Ignoring wake word while device is in %s state",
                  DeviceStatus::GetStateName(state));
         return;
@@ -1189,6 +1223,13 @@ void Application::HandleWakeWordDetectedEvent() {
 #if CONFIG_SEND_WAKE_WORD_DATA
     audio_service_.EncodeWakeWord();
 #endif
+
+    if (state == kDeviceStateSpeaking) {
+        // 语音唤醒与按键唤醒走同一条 TTS 打断链路：先冻结 timeline
+        // 游标并停止旧回复，再启动下一轮，避免旧 sid 被新 start 覆盖。
+        AbortSpeaking(kAbortReasonWakeWordDetected);
+        SetDeviceState(kDeviceStateIdle);
+    }
 
     if (!EnsureXiaolingReadyForWakeup()) {
         return;
@@ -1259,6 +1300,10 @@ void Application::AbortSpeaking(AbortReason reason) {
         return;
     }
 
+    if (xiaoling_conn_) {
+        // 必须在播放器 STOPPED 回调清理 timeline 之前冻结当前 PCM 时钟游标。
+        xiaoling_conn_->PrepareAbortSpeaking(reason);
+    }
     if (reason == kAbortReasonWakeWordDetected) {
         audio_player_.StopNonMusic(PlaybackEndReason::kPreempted);
     } else {
@@ -1401,8 +1446,20 @@ void Application::BeginWakeup(ListeningMode mode) {
         iat_update_subscription_id_ = XiaolingEventBus::GetInstance().Subscribe(
             XIAOLING_IAT_UPDATE, on_iat_text);
         iat_end_subscription_id_ = XiaolingEventBus::GetInstance().Subscribe(
-            XIAOLING_IAT_END, [this](const XiaolingEvent&) {
-                Schedule([this]() { iat_utterance_active_ = false; });
+            XIAOLING_IAT_END, [this](const XiaolingEvent& event) {
+                Schedule([this, text = event.text]() {
+                    iat_utterance_active_ = false;
+                    // A non-empty final IAT means the user's sentence is
+                    // complete. Show the cloud-thinking phase until a TTS URL
+                    // arrives. The URL callback sets this flag before queuing
+                    // its own UI update, which prevents a late IAT task from
+                    // flashing the UI back from speaking to thinking.
+                    if (!text.empty() && !tts_waiting_for_playback_.load() &&
+                        GetDeviceState() == kDeviceStateListening) {
+                        UiApp::SetStatusText("思考中...");
+                        UiApp::SetEmotion("等待");
+                    }
+                });
             });
     }
 }
@@ -1582,10 +1639,15 @@ void Application::HandleStateChangedEvent() {
             UiApp::DismissOverlays();
 #endif // CONFIG_LSPLATFORM
 
+            // The cloud session and local AFE have independent lifecycles in
+            // full duplex. A server finish can close the former while the AEC
+            // pipeline intentionally remains running.
+            if (xiaoling_conn_ && !xiaoling_conn_->CanUploadAudio()) {
+                xiaoling_conn_->SendStartListening(listening_mode_);
+            }
+
             // Make sure the audio processor is running
             if (!audio_service_.IsAudioProcessorRunning()) {
-                // Send the start listening command
-                xiaoling_conn_->SendStartListening(listening_mode_);
                 audio_service_.EnableVoiceProcessing(true);
 #ifdef CONFIG_LSPLATFORM
                 uplink_watchdog_.Start();
@@ -1597,9 +1659,10 @@ void Application::HandleStateChangedEvent() {
             UiApp::SetStatus(UiApp::Status::Speaking);
             UiApp::SetEmotion("说话");
 
+            // Background-music interaction is always simplex. Otherwise keep
+            // the post-AEC uplink alive only for an active realtime session.
             if (background_music_session_ ||
-                listening_mode_ != kListeningModeRealtime ||
-                session_controller_.policy().mode == DuplexMode::kSimplex) {
+                !session_controller_.KeepListeningDuringTts()) {
                 audio_service_.EnableVoiceProcessing(false);
 #ifdef CONFIG_LSPLATFORM
                 uplink_watchdog_.Stop();

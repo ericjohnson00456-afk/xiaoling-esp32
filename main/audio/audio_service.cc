@@ -115,7 +115,7 @@ void AudioService::Start() {
         AudioService* audio_service = (AudioService*)arg;
         audio_service->AudioOutputTask();
         vTaskDelete(NULL);
-    }, "audio_output", 2048 * 2, this, 8, &audio_output_task_handle_);
+    }, "audio_output", 2048 * 2, this, 10, &audio_output_task_handle_);
 #else
     /* Start the audio input task */
     xTaskCreate([](void* arg) {
@@ -129,7 +129,7 @@ void AudioService::Start() {
         AudioService* audio_service = (AudioService*)arg;
         audio_service->AudioOutputTask();
         vTaskDelete(NULL);
-    }, "audio_output", 2048, this, 8, &audio_output_task_handle_);
+    }, "audio_output", 2048 * 2, this, 10, &audio_output_task_handle_);
 #endif
 
     /* Start the opus codec task */
@@ -397,20 +397,27 @@ void AudioService::AudioOutputTask() {
             break;
         }
 
-        /* Network TTS is bursty at startup. Wait for a bounded amount of PCM
-           before opening the speaker so the first response does not underrun
-           while the HTTP and decoder tasks are catching up. A finished stream
-           releases this gate for short clips with fewer than four blocks. */
+        /* Network TTS is bursty. Use a small startup watermark for response
+           latency, then a larger recovery watermark after a real underrun so
+           playback resumes as a coherent phrase instead of one PCM block at
+           a time. A finished stream always releases the gate for its tail. */
+        const bool is_player =
+            audio_playback_queue_.front()->type == kAudioTaskTypePlayerToPlaybackQueue;
+        const size_t prebuffer_target = player_output_chunks_.load() == 0
+            ? PLAYER_PREBUFFER_TASKS : PLAYER_REBUFFER_TASKS;
         while (!service_stopped_ && !audio_playback_queue_.empty() &&
                audio_playback_queue_.front()->type == kAudioTaskTypePlayerToPlaybackQueue &&
-               audio_playback_queue_.size() < PLAYER_PREBUFFER_TASKS &&
+               player_prebuffering_ &&
+               audio_playback_queue_.size() < prebuffer_target &&
                !player_playback_finished_ &&
-               !player_prebuffer_release_logged_) {
+               is_player) {
             if (!player_prebuffer_wait_logged_) {
                 player_prebuffer_wait_logged_ = true;
-                ESP_LOGI(TAG, "播放器预缓冲等待: queue=%u/%u",
+                ESP_LOGI(TAG, "播放器%s缓冲等待: queue=%u/%u, recovery=%lu",
+                         player_output_chunks_.load() == 0 ? "预" : "重新",
                          static_cast<unsigned>(audio_playback_queue_.size()),
-                         static_cast<unsigned>(PLAYER_PREBUFFER_TASKS));
+                         static_cast<unsigned>(prebuffer_target),
+                         static_cast<unsigned long>(player_rebuffer_count_));
             }
             audio_queue_cv_.wait(lock);
         }
@@ -420,16 +427,28 @@ void AudioService::AudioOutputTask() {
         if (audio_playback_queue_.empty()) {
             continue;
         }
-        if (player_prebuffer_wait_logged_ && !player_prebuffer_release_logged_) {
-            player_prebuffer_release_logged_ = true;
-            ESP_LOGI(TAG, "播放器预缓冲释放: queue=%u, stream_finished=%d",
+        if (is_player && player_prebuffering_) {
+            player_prebuffering_ = false;
+            player_prebuffer_wait_logged_ = false;
+            ESP_LOGI(TAG, "播放器缓冲释放: queue=%u/%u, stream_finished=%d, recovery=%lu",
                      static_cast<unsigned>(audio_playback_queue_.size()),
-                     player_playback_finished_ ? 1 : 0);
+                     static_cast<unsigned>(prebuffer_target),
+                     player_playback_finished_ ? 1 : 0,
+                     static_cast<unsigned long>(player_rebuffer_count_));
         }
 
         auto task = std::move(audio_playback_queue_.front());
         audio_playback_queue_.pop_front();
         const size_t queue_size_after_pop = audio_playback_queue_.size();
+        if (task->type == kAudioTaskTypePlayerToPlaybackQueue &&
+            audio_playback_queue_.empty() && !player_playback_finished_) {
+            player_prebuffering_ = true;
+            player_prebuffer_wait_logged_ = false;
+            ++player_rebuffer_count_;
+            ESP_LOGW(TAG, "播放器队列欠载，进入重新缓冲: recovery=%lu, target=%u",
+                     static_cast<unsigned long>(player_rebuffer_count_),
+                     static_cast<unsigned>(PLAYER_REBUFFER_TASKS));
+        }
         audio_output_busy_ = true;
         audio_queue_cv_.notify_all();
         lock.unlock();
@@ -461,6 +480,20 @@ void AudioService::AudioOutputTask() {
             ESP_LOGI(TAG, "播放器首个 PCM 已交给 codec: samples=%u",
                      static_cast<unsigned>(task->pcm.size()));
             callbacks_.on_player_output_started();
+        }
+        if (task->type == kAudioTaskTypePlayerToPlaybackQueue) {
+            const int sample_rate = codec_->output_sample_rate();
+            const uint32_t duration_ms = sample_rate > 0
+                ? static_cast<uint32_t>((static_cast<uint64_t>(task->pcm.size()) * 1000) /
+                                        static_cast<uint32_t>(sample_rate))
+                : 0;
+            if (duration_ms > 0) {
+                const uint32_t audio_clock_ms =
+                    player_audio_clock_ms_.fetch_add(duration_ms) + duration_ms;
+                if (callbacks_.on_player_output_progress) {
+                    callbacks_.on_player_output_progress(audio_clock_ms);
+                }
+            }
         }
 
         lock.lock();
@@ -649,6 +682,18 @@ void AudioService::PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t
         timestamp_queue_.pop_front();
     }
 
+    if (type == kAudioTaskTypeEncodeToSendQueue &&
+        audio_encode_queue_.size() >= MAX_ENCODE_TASKS_IN_QUEUE) {
+        // Uplink audio is real-time data. Blocking the AFE callback here makes
+        // its input ringbuffer overflow and breaks barge-in. Dropping one old
+        // frame is preferable to stalling the microphone pipeline.
+        audio_encode_queue_.pop_front();
+        static uint32_t dropped_uplink_frames = 0;
+        if ((++dropped_uplink_frames % 25) == 1) {
+            ESP_LOGW(TAG, "上行编码队列满，丢弃旧帧: count=%lu",
+                     static_cast<unsigned long>(dropped_uplink_frames));
+        }
+    }
     audio_queue_cv_.wait(lock, [this, &task]() {
         return service_stopped_ || task->uplink_generation != uplink_generation_ ||
                audio_encode_queue_.size() < MAX_ENCODE_TASKS_IN_QUEUE;
@@ -712,13 +757,18 @@ bool AudioService::PushPcmToPlaybackQueue(const uint8_t* data, size_t size, int 
     audio_playback_queue_.push_back(std::move(task));
     player_pcm_bytes_ += pcm_bytes;
     const size_t queue_size = audio_playback_queue_.size();
-    const bool first_chunk = !player_prebuffer_wait_logged_ && queue_size == 1;
+    const bool first_chunk = player_output_chunks_.load() == 0 && queue_size == 1;
     audio_queue_cv_.notify_all();
     if (first_chunk) {
         ESP_LOGI(TAG, "首个播放器 PCM 入队: bytes=%u, queue=%u",
                  static_cast<unsigned>(size), static_cast<unsigned>(queue_size));
     }
     return true;
+}
+
+void AudioService::BeginPlayerPlayback() {
+    ResetDecoder();
+    player_stream_active_.store(true);
 }
 
 void AudioService::MarkPlayerPlaybackFinished() {
@@ -745,6 +795,7 @@ void AudioService::MarkPlayerPlaybackFinished() {
 
 void AudioService::ClearPlaybackQueue() {
     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    player_stream_active_.store(false);
     audio_playback_queue_.clear();
     audio_queue_cv_.notify_all();
 }
@@ -755,6 +806,7 @@ void AudioService::WaitForPlaybackComplete() {
         return service_stopped_ || (audio_playback_queue_.empty() && !audio_output_busy_);
     });
     if (service_stopped_) {
+        player_stream_active_.store(false);
         return;
     }
 
@@ -770,6 +822,7 @@ void AudioService::WaitForPlaybackComplete() {
         vTaskDelay(pdMS_TO_TICKS(drain_ms));
         ESP_LOGI(TAG, "播放器 DMA 排空完成: drain=%dms", drain_ms);
     }
+    player_stream_active_.store(false);
 }
 
 bool AudioService::PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> packet, bool wait) {
@@ -1088,13 +1141,16 @@ void AudioService::ResetDecoder() {
     player_output_chunks_.store(0);
     player_output_last_end_ms_.store(0);
     player_output_underruns_.store(0);
+    player_audio_clock_ms_.store(0);
     player_pcm_bytes_ = 0;
     timestamp_queue_.clear();
     audio_decode_queue_.clear();
     audio_playback_queue_.clear();
     player_playback_finished_ = false;
+    player_prebuffering_ = true;
     player_prebuffer_wait_logged_ = false;
-    player_prebuffer_release_logged_ = false;
+    player_rebuffer_count_ = 0;
+    player_stream_active_.store(false);
     audio_testing_queue_.clear();
     audio_queue_cv_.notify_all();
 }
@@ -1106,7 +1162,8 @@ void AudioService::CheckAndUpdateAudioPowerState() {
     if (input_elapsed > AUDIO_POWER_TIMEOUT_MS && codec_->input_enabled()) {
         codec_->EnableInput(false);
     }
-    if (output_elapsed > AUDIO_POWER_TIMEOUT_MS && codec_->output_enabled()) {
+    if (output_elapsed > AUDIO_POWER_TIMEOUT_MS && codec_->output_enabled() &&
+        !player_stream_active_.load()) {
         codec_->EnableOutput(false);
     }
     if (!codec_->input_enabled() && !codec_->output_enabled()) {

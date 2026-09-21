@@ -120,9 +120,23 @@ void HomeView::CreateUi() {
     lv_obj_set_scroll_dir(content_, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(content_, LV_SCROLLBAR_MODE_OFF);
 
+    subtitle_label_ = lv_label_create(root_);
+    lv_obj_set_width(subtitle_label_, LV_HOR_RES * 90 / 100);
+    // Keep long streamed TTS text inside the lower subtitle area. Three
+    // lines fit the 240px panel without covering the bottom of the face.
+    lv_label_set_long_mode(subtitle_label_, LV_LABEL_LONG_WRAP);
+    if (text_font != nullptr) {
+        lv_obj_set_style_text_font(subtitle_label_, text_font, 0);
+        lv_obj_set_height(subtitle_label_, text_font->line_height * 3);
+    }
+    lv_obj_set_style_text_align(subtitle_label_, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(subtitle_label_, theme->text_color(), 0);
+    lv_obj_align(subtitle_label_, LV_ALIGN_BOTTOM_MID, 0, -theme->spacing(4));
+    lv_label_set_text(subtitle_label_, "");
+
     emoji_image_ = lv_image_create(root_);
     lv_obj_add_flag(emoji_image_, LV_OBJ_FLAG_FLOATING | LV_OBJ_FLAG_HIDDEN);
-    lv_obj_align(emoji_image_, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_align(emoji_image_, LV_ALIGN_CENTER, 0, -12);
     emoji_label_ = lv_label_create(root_);
     lv_obj_add_flag(emoji_label_, LV_OBJ_FLAG_FLOATING);
     lv_obj_set_style_text_color(emoji_label_, theme->text_color(), 0);
@@ -130,12 +144,12 @@ void HomeView::CreateUi() {
         lv_obj_set_style_text_font(emoji_label_, large_font, 0);
     }
     lv_label_set_text(emoji_label_, FONT_AWESOME_MICROCHIP_AI);
-    lv_obj_center(emoji_label_);
+    lv_obj_align(emoji_label_, LV_ALIGN_CENTER, 0, -12);
 #else
     emoji_box_ = lv_obj_create(root_);
     lv_obj_set_size(emoji_box_, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     SetTransparent(emoji_box_);
-    lv_obj_align(emoji_box_, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_align(emoji_box_, LV_ALIGN_CENTER, 0, -12);
 
     emoji_label_ = lv_label_create(emoji_box_);
     lv_obj_set_style_text_color(emoji_label_, theme->text_color(), 0);
@@ -216,6 +230,21 @@ void HomeView::CreateUi() {
     lv_obj_set_style_text_align(chat_message_label_, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(chat_message_label_, theme->text_color(), 0);
     lv_obj_align(chat_message_label_, LV_ALIGN_BOTTOM_MID, 0, -theme->spacing(4));
+
+    subtitle_label_ = lv_label_create(root_);
+    lv_obj_set_width(subtitle_label_, LV_HOR_RES * 90 / 100);
+    lv_obj_set_height(subtitle_label_, text_font != nullptr ? text_font->line_height * 3 : 60);
+    // The presenter advances sentence pieces itself. Wrap the current piece
+    // inside the fixed three-line box instead of replacing its tail with dots.
+    lv_label_set_long_mode(subtitle_label_, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_align(subtitle_label_, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(subtitle_label_, theme->text_color(), 0);
+    if (text_font != nullptr) {
+        lv_obj_set_style_text_font(subtitle_label_, text_font, 0);
+    }
+    lv_obj_align(subtitle_label_, LV_ALIGN_BOTTOM_MID, 0, -theme->spacing(4));
+    lv_label_set_text(subtitle_label_, "");
+    lv_obj_add_flag(subtitle_label_, LV_OBJ_FLAG_HIDDEN);
 #endif
 
 #ifdef CONFIG_LSPLATFORM
@@ -248,6 +277,7 @@ void HomeView::DestroyUi() {
         root_ = nullptr;
     }
     content_ = nullptr;
+    subtitle_label_ = nullptr;
     emoji_box_ = nullptr;
     emoji_label_ = nullptr;
     emoji_image_ = nullptr;
@@ -397,6 +427,38 @@ void HomeView::SetText(const std::string& text) {
     SetChatMessage("system", text);
 }
 
+void HomeView::SetSubtitleText(const std::string& text) {
+    if (lvgl_ == nullptr) {
+        if (display_ != nullptr) {
+            display_->SetChatMessage("system", text.c_str());
+        }
+        return;
+    }
+    DisplayLockGuard lock(display_);
+    if (!lock.locked()) {
+        return;
+    }
+    if (subtitle_label_ != nullptr) {
+        lv_label_set_text(subtitle_label_, text.c_str());
+        if (text.empty()) {
+            lv_obj_add_flag(subtitle_label_, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_remove_flag(subtitle_label_, LV_OBJ_FLAG_HIDDEN);
+            // Image/animation widgets may be created or refreshed after the
+            // subtitle label. Keep spoken text on the top visual layer.
+            lv_obj_move_foreground(subtitle_label_);
+        }
+    }
+#if !CONFIG_USE_WECHAT_MESSAGE_STYLE
+    // Timeline data can arrive while audio is still prebuffering. Clearing the
+    // old subtitle at that point must not hide the final IAT text during the
+    // thinking phase. Hide it only when a real TTS subtitle is displayed.
+    if (!text.empty() && chat_message_label_ != nullptr) {
+        lv_obj_add_flag(chat_message_label_, LV_OBJ_FLAG_HIDDEN);
+    }
+#endif
+}
+
 void HomeView::SetChatMessage(const std::string& role, const std::string& text) {
     if (lvgl_ == nullptr) {
         if (display_ != nullptr) {
@@ -438,6 +500,10 @@ void HomeView::SetChatMessage(const std::string& role, const std::string& text) 
 #else
     if (chat_message_label_ != nullptr) {
         lv_label_set_text(chat_message_label_, text.c_str());
+        lv_obj_remove_flag(chat_message_label_, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (subtitle_label_ != nullptr) {
+        lv_obj_add_flag(subtitle_label_, LV_OBJ_FLAG_HIDDEN);
     }
     if (role != "system" && emoji_label_ != nullptr) {
         lv_obj_add_flag(emoji_label_, LV_OBJ_FLAG_HIDDEN);
