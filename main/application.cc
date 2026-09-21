@@ -241,6 +241,14 @@ void Application::Initialize() {
                 ESP_LOGI(TAG, "退出请求：TTS 播放结束，恢复唤醒检测但保持待命");
                 if (GetDeviceState() != kDeviceStateIdle) {
                     SetDeviceState(kDeviceStateIdle);
+                } else {
+                    // The exit handler already moved the device to idle before
+                    // the delayed TTS stream started.  kPlaying updated the UI
+                    // directly without changing DeviceStatus, so transitioning
+                    // to idle again would be a no-op and leave the speaking
+                    // expression visible.  Restore the idle UI explicitly.
+                    UiApp::SetStatus(UiApp::Status::Standby);
+                    UiApp::SetEmotion("待机");
                 }
                 if (background_music_session_) {
                     background_session_finished_ = true;
