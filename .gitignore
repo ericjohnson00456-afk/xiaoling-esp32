@@ -14,8 +14,8 @@ main/mmap_generate_emoji.h
 .cache
 *.pyc
 *.bin
-!main/resource/assets/font/
-!main/resource/assets/font/*.bin
+!main/resource/assets/respak/font/
+!main/resource/assets/respak/font/*.bin
 mmap_generate_*.h
 .clangd
 scripts/wake_word/
