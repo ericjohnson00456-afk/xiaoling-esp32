@@ -1299,22 +1299,29 @@ void Application::BeginWakeup(ListeningMode mode) {
     }
     iat_utterance_active_ = false;
     audio_service_.EnableVoiceProcessing(false);
-    audio_player_.PlayWakeup([this, effective_mode](bool proceed) {
+    audio_player_.PlayWakeup([this](bool proceed) {
         playback_intents_.Pop(PlaybackIntent::kPromptTone);
-        if (GetDeviceState() != kDeviceStateConnecting) {
-            return;
-        }
-        if (proceed && xiaoling_conn_ && xiaoling_conn_->IsConnected()) {
-            ESP_LOGI(TAG, "Wakeup tone finished; start audio upload");
-            SetListeningMode(effective_mode);
-        } else {
+        if (!proceed) {
+            if (GetDeviceState() == kDeviceStateListening && xiaoling_conn_) {
+                xiaoling_conn_->SendStopListening();
+            }
             if (xiaoling_conn_) {
                 xiaoling_conn_->SendWakeWordDetected("");
             }
             SetDeviceState(kDeviceStateIdle);
             RestoreBackgroundMusicSession();
+            return;
         }
+        ESP_LOGI(TAG, "Wakeup tone finished; audio upload already active");
     });
+    if (GetDeviceState() != kDeviceStateConnecting) {
+        return;
+    }
+    // Do not serialize capture behind the prompt tone.  The player keeps the
+    // wakeup tone protected from TTS admission while the listening state opens
+    // the cloud session and starts the microphone pipeline in parallel.
+    ESP_LOGI(TAG, "Wakeup tone started; start audio upload in parallel");
+    SetListeningMode(effective_mode);
     audio_player_.SetTtsUrlCallback([this]() {
         tts_waiting_for_playback_.store(true);
         tts_output_started_.store(false);
@@ -1460,6 +1467,9 @@ void Application::CancelWakeup() {
     audio_player_.CancelWakeup();
     playback_intents_.Pop(PlaybackIntent::kPromptTone);
     if (xiaoling_conn_) {
+        if (GetDeviceState() == kDeviceStateListening) {
+            xiaoling_conn_->SendStopListening();
+        }
         xiaoling_conn_->SendWakeWordDetected("");
     }
     SetDeviceState(kDeviceStateIdle);
@@ -1505,7 +1515,12 @@ void Application::HandleStateChangedEvent() {
     if (new_state != kDeviceStateIdle) {
         keep_voice_processing_on_idle_ = false;
     }
-    if (new_state != kDeviceStateConnecting && audio_player_.IsWakeupPending()) {
+    // Listening now starts in parallel with the wakeup tone.  Keep that tone
+    // alive for the connecting -> listening transition; unrelated state
+    // changes still cancel it.
+    if (new_state != kDeviceStateConnecting &&
+        new_state != kDeviceStateListening &&
+        audio_player_.IsWakeupPending()) {
         audio_player_.CancelWakeup();
         if (xiaoling_conn_) {
             xiaoling_conn_->SendWakeWordDetected("");
