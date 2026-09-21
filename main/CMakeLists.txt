@@ -752,7 +752,7 @@ include(${PROJECT_DIR}/main/audio/wake_words/micro_wake_word/models/models.cmake
 
 idf_component_register(SRCS ${SOURCES}
                     INCLUDE_DIRS ${INCLUDE_DIRS}
-                    REQUIRES espressif__adc_battery_estimation efuse console spi_flash app_update esp_app_format esp_psram 78__esp-opus
+                    REQUIRES espressif__adc_battery_estimation esp_adc efuse console spi_flash app_update esp_app_format esp_psram 78__esp-opus
                     WHOLE_ARCHIVE
                     )
 
