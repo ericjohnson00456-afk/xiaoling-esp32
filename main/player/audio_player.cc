@@ -60,6 +60,98 @@ uint32_t AudioPlayer::PlayTtsUrl(const std::string& url) {
 }
 
 uint32_t AudioPlayer::PlayMusicUrl(const std::string& url) {
+    if (!TtsPlayer::IsHttpUrl(url)) {
+        return 0;
+    }
+    {
+        std::lock_guard<std::mutex> lock(music_list_mutex_);
+        music_list_.clear();
+        music_list_.push_back(url);
+        current_music_index_ = 0;
+    }
+    const auto session_id = PlayMusicUrlInternal(url);
+    if (session_id != 0) {
+        std::function<void()> callback;
+        {
+            std::lock_guard<std::mutex> lock(callback_mutex_);
+            callback = music_start_callback_;
+        }
+        if (callback) callback();
+    }
+    return session_id;
+}
+
+uint32_t AudioPlayer::PlayMusicList(const std::vector<std::string>& urls) {
+    std::vector<std::string> valid_urls;
+    valid_urls.reserve(urls.size());
+    for (const auto& url : urls) {
+        if (TtsPlayer::IsHttpUrl(url)) {
+            valid_urls.push_back(url);
+        }
+    }
+    if (valid_urls.empty()) {
+        return 0;
+    }
+    std::string first_url;
+    {
+        std::lock_guard<std::mutex> lock(music_list_mutex_);
+        music_list_ = std::move(valid_urls);
+        current_music_index_ = 0;
+        first_url = music_list_.front();
+    }
+    const auto session_id = PlayMusicUrlInternal(first_url);
+    if (session_id != 0) {
+        std::function<void()> callback;
+        {
+            std::lock_guard<std::mutex> lock(callback_mutex_);
+            callback = music_start_callback_;
+        }
+        if (callback) callback();
+    }
+    return session_id;
+}
+
+bool AudioPlayer::PlayPreviousMusic() {
+    std::string url;
+    {
+        std::lock_guard<std::mutex> lock(music_list_mutex_);
+        if (music_list_.empty()) {
+            return false;
+        }
+        current_music_index_ = current_music_index_ == 0
+                                   ? music_list_.size() - 1
+                                   : current_music_index_ - 1;
+        url = music_list_[current_music_index_];
+    }
+    return PlayMusicUrlInternal(url) != 0;
+}
+
+bool AudioPlayer::PlayNextMusic() {
+    std::string url;
+    {
+        std::lock_guard<std::mutex> lock(music_list_mutex_);
+        if (music_list_.empty()) {
+            return false;
+        }
+        current_music_index_ = (current_music_index_ + 1) % music_list_.size();
+        url = music_list_[current_music_index_];
+    }
+    return PlayMusicUrlInternal(url) != 0;
+}
+
+bool AudioPlayer::ReplayMusic() {
+    std::string url;
+    {
+        std::lock_guard<std::mutex> lock(music_list_mutex_);
+        if (music_list_.empty()) {
+            return false;
+        }
+        url = music_list_[current_music_index_];
+    }
+    return PlayMusicUrlInternal(url) != 0;
+}
+
+uint32_t AudioPlayer::PlayMusicUrlInternal(const std::string& url) {
     if (engine_ == nullptr || audio_service_ == nullptr || wakeup_in_progress_ ||
         !TtsPlayer::IsHttpUrl(url)) {
         return 0;
@@ -154,6 +246,17 @@ bool AudioPlayer::IsPlaying() const {
            (music_channel_ != nullptr && music_channel_->IsAudible());
 }
 
+bool AudioPlayer::IsMusicPlaying() const {
+    return music_channel_ != nullptr && music_channel_->IsAudible();
+}
+
+bool AudioPlayer::ResumeMusic() {
+    if (wakeup_in_progress_ || music_channel_ == nullptr) {
+        return false;
+    }
+    return music_channel_->Resume();
+}
+
 void AudioPlayer::DispatchPlaybackEvent(const PlaybackEvent& event) {
     if (tone_channel_ != nullptr && event.channel == tone_channel_->Type()) {
         tone_channel_->OnEvent(event);
@@ -170,9 +273,12 @@ bool AudioPlayer::PauseMusic() {
     if (music_channel_ == nullptr || !music_channel_->IsAudible()) {
         return true;
     }
+    // HTTP streaming cannot be paused reliably because the GMF worker may be
+    // blocked in the network reader. Stop it immediately so wakeup is not
+    // delayed by the HTTP timeout; MusicPlayer can restart the URL on resume.
     if (!music_channel_->Pause()) {
-        ESP_LOGE(TAG, "暂停音乐失败，停止音乐以避免覆盖提示音");
-        return music_engine_->Stop(PlaybackEndReason::kPreempted);
+        ESP_LOGE(TAG, "停止音乐失败，无法避免覆盖提示音");
+        return false;
     }
     audio_service_->ClearPlaybackQueue();
     return true;
@@ -186,6 +292,11 @@ void AudioPlayer::SetEventCallback(EventCallback callback) {
 void AudioPlayer::SetTtsUrlCallback(TtsUrlCallback callback) {
     std::lock_guard<std::mutex> lock(callback_mutex_);
     tts_url_callback_ = std::move(callback);
+}
+
+void AudioPlayer::SetMusicStartCallback(std::function<void()> callback) {
+    std::lock_guard<std::mutex> lock(callback_mutex_);
+    music_start_callback_ = std::move(callback);
 }
 
 void AudioPlayer::HandleEngineEvent(const PlaybackEvent& event) {

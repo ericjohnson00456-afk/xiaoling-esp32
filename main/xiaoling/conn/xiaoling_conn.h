@@ -44,6 +44,7 @@ public:
     bool EndSession();
     void SendAbortSpeaking(AbortReason reason);
     void SendMcpMessage(const std::string& message);
+    bool ResolveKuwoMusicUrl(const std::string& item_id, std::string& url);
     void SetNarrowbandMode(bool enabled);
 
     int server_sample_rate() const;

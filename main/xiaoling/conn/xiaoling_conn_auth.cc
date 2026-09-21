@@ -52,7 +52,8 @@ namespace {
 
 bool PostJsonForToken(const std::string& url, const std::string& body,
                       const std::vector<std::pair<std::string, std::string>>& headers,
-                      int& status_code, std::string& response_body) {
+                      int& status_code, std::string& response_body,
+                      int timeout_ms = 0) {
     auto network = Board::GetInstance().GetNetwork();
     if (network == nullptr) {
         ESP_LOGE(TAG, "Network interface is unavailable");
@@ -68,6 +69,9 @@ bool PostJsonForToken(const std::string& url, const std::string& body,
     http->SetHeader("Content-Type", "application/json");
     for (const auto& [name, value] : headers) {
         http->SetHeader(name.c_str(), value.c_str());
+    }
+    if (timeout_ms > 0) {
+        http->SetTimeout(timeout_ms);
     }
     http->SetContent(std::string(body));
 
@@ -95,6 +99,55 @@ bool XiaolingConn::EnsureAuthenticated() {
         return false;
     }
     return Authenticate();
+}
+
+bool XiaolingConn::ResolveKuwoMusicUrl(const std::string& item_id, std::string& url) {
+    url.clear();
+    if (item_id.empty() || !EnsureAuthenticated()) {
+        return false;
+    }
+
+    cJSON* request = cJSON_CreateObject();
+    if (request == nullptr) {
+        return false;
+    }
+    cJSON_AddStringToObject(request, "itemid", item_id.c_str());
+    cJSON_AddStringToObject(request, "format", "128kmp3");
+    char* request_text = cJSON_PrintUnformatted(request);
+    cJSON_Delete(request);
+    if (request_text == nullptr) {
+        return false;
+    }
+
+    const std::string request_body(request_text);
+    cJSON_free(request_text);
+    const std::vector<std::pair<std::string, std::string>> headers = {
+        {"Authorization", NormalizeBearerToken(LoadAccessToken())},
+        {"Device-Id", SystemInfo::GetCloudDeviceId()},
+        {"Client-Id", Board::GetInstance().GetUuid()},
+    };
+    int status_code = 0;
+    std::string response_body;
+    const std::string url_endpoint =
+        std::string("http://") + XiaolingConfig::GetHost() + "/v1/kuwo/tranklink";
+    if (!PostJsonForToken(url_endpoint, request_body, headers, status_code, response_body, 3000) ||
+        status_code < 200 || status_code >= 300) {
+        ESP_LOGW(TAG, "获取酷我歌曲 URL 失败: itemid=%s status=%d", item_id.c_str(), status_code);
+        return false;
+    }
+
+    cJSON* root = cJSON_ParseWithLength(response_body.data(), response_body.size());
+    if (root == nullptr) {
+        return false;
+    }
+    const cJSON* data = cJSON_GetObjectItemCaseSensitive(root, "data");
+    const cJSON* first = cJSON_IsArray(data) ? cJSON_GetArrayItem(data, 0) : nullptr;
+    const cJSON* audio_path = cJSON_GetObjectItemCaseSensitive(first, "audiopath");
+    if (cJSON_IsString(audio_path) && audio_path->valuestring != nullptr) {
+        url = audio_path->valuestring;
+    }
+    cJSON_Delete(root);
+    return !url.empty();
 }
 
 bool XiaolingConn::Authenticate(const std::string& extra_code) {

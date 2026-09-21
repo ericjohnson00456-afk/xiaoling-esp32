@@ -1,5 +1,6 @@
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include "application.h"
 #include "mcp_server.h"
@@ -24,12 +25,17 @@ MCP_REGISTER_TOOL(RegisterPlayAudioUrl, McpToolGroup::kCommon, 21) {
                    if (!cJSON_IsArray(items) || cJSON_GetArraySize(items) == 0) {
                      cJSON_Delete(root); throw std::runtime_error("没有可播放的音频");
                    }
-                   std::string url;
-                   cJSON *item = cJSON_GetArrayItem(items, 0);
-                   cJSON *url_item = cJSON_IsObject(item) ? cJSON_GetObjectItem(item, "url") : nullptr;
-                   if (cJSON_IsString(url_item) && url_item->valuestring) url = url_item->valuestring;
+                   std::vector<std::string> urls;
+                   for (int i = 0; i < cJSON_GetArraySize(items); ++i) {
+                     cJSON *item = cJSON_GetArrayItem(items, i);
+                     cJSON *url_item = cJSON_IsObject(item) ? cJSON_GetObjectItem(item, "url") : nullptr;
+                     if (cJSON_IsString(url_item) && url_item->valuestring && url_item->valuestring[0] != '\0')
+                       urls.emplace_back(url_item->valuestring);
+                   }
                    cJSON_Delete(root);
-                   if (Application::GetInstance().GetAudioPlayer().PlayMusicUrl(url) == 0)
+                   if (urls.empty())
+                     throw std::runtime_error("没有可播放的音频 URL");
+                   if (Application::GetInstance().GetAudioPlayer().PlayMusicList(urls) == 0)
                      throw std::runtime_error("提交音频播放失败");
                    return std::string("播放成功");
                  });

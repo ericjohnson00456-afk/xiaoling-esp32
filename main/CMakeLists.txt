@@ -3,6 +3,9 @@ set(SOURCES "audio/audio_codec.cc"
             "audio/audio_service.cc"
             "audio/opus_encoder/opus_wb_encoder.cc"
             "player/audio_player.cc"
+            "player/intents/playback_intent_stack.cc"
+            "player/intents/music_intent.cc"
+            "player/intents/voice_session_intent.cc"
             "player/channels/tone_player.cc"
             "player/channels/tts_player.cc"
             "player/channels/music_player.cc"
@@ -77,7 +80,7 @@ list(APPEND SOURCES ${SHELL_CMD_SOURCES})
 set(INCLUDE_DIRS "."
                  "ui/themes" "ui/utils/font" "ui/utils/image" "ui/utils/emoji" "audio"
                  "player" "player/core" "player/engine" "player/channels" "player/resource" "xiaoling" "xiaoling/session" "xiaoling/conn" "mcp"
-                  "ui" "ui/compat" "ui/screens" "ui/screens/home" "ui/screens/qrcode" "ui/screens/upgrade"
+                  "player/intents" "ui" "ui/compat" "ui/screens" "ui/screens/home" "ui/screens/qrcode" "ui/screens/upgrade"
                   "system" "resource" "shell" "ota")
 
 # Add board common files

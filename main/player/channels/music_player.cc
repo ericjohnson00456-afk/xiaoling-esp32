@@ -24,6 +24,9 @@ uint32_t MusicPlayer::PlayUrl(const std::string& url) {
     request.priority = 20;
     request.resumable = true;
     const auto session_id = Submit(request, *engine_);
+    if (session_id != 0) {
+        current_url_ = url;
+    }
     session_id_ = session_id;
     paused_ = false;
     return session_id;
@@ -33,7 +36,7 @@ bool MusicPlayer::Pause() {
     if (!engine_->IsPlaying() || paused_) {
         return true;
     }
-    if (!engine_->Pause()) {
+    if (!engine_->Stop(PlaybackEndReason::kPreempted)) {
         return false;
     }
     paused_ = true;
@@ -41,10 +44,9 @@ bool MusicPlayer::Pause() {
 }
 
 bool MusicPlayer::Resume() {
-    if (!paused_ || !engine_->IsPlaying() || !engine_->Resume()) {
+    if (!paused_ || current_url_.empty() || PlayUrl(current_url_) == 0) {
         return false;
     }
-    paused_ = false;
     return true;
 }
 
@@ -65,7 +67,8 @@ void MusicPlayer::OnEvent(const PlaybackEvent& event) {
     if (event.state == PlaybackState::kStopped ||
         event.state == PlaybackState::kCompleted ||
         event.state == PlaybackState::kFailed) {
-        session_id_ = 0;
-        paused_ = false;
+        if (!paused_) {
+            session_id_ = 0;
+        }
     }
 }

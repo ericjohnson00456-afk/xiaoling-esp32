@@ -27,4 +27,5 @@ private:
     SessionAllocator allocate_session_;
     std::atomic<uint32_t> session_id_{0};
     std::atomic_bool paused_{false};
+    std::string current_url_;
 };

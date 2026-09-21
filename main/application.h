@@ -17,6 +17,7 @@
 #include "ota/ota.h"
 #include "audio_service.h"
 #include "player/audio_player.h"
+#include "player/intents/playback_intent_stack.h"
 #include "xiaoling/session/session_core.h"
 #include "system/device_status.h"
 #include "system/watchdog.h"
@@ -118,6 +119,7 @@ public:
     void Reboot();
     void WakeWordInvoke(const std::string& wake_word);
     bool UpgradeFirmware(const std::string& url, const std::string& version = "");
+    bool ResolveKuwoMusicUrl(const std::string& item_id, std::string& url);
     bool CanEnterSleepMode();
     void SendMcpMessage(const std::string& payload);
     void SetAecMode(AecMode mode);
@@ -156,6 +158,12 @@ private:
     AudioService audio_service_;
     AudioPlayer audio_player_;
     VoiceSessionController session_controller_;
+    PlaybackIntentStack playback_intents_;
+    bool background_music_session_ = false;
+    bool background_session_finished_ = false;
+    bool music_was_playing_for_session_ = false;
+    ListeningMode listening_mode_before_background_session_ = kListeningModeAutoStop;
+    std::atomic_bool background_tts_pending_{false};
     uint32_t active_tts_session_id_ = 0;
     // Half-duplex ends listening before the streamed TTS produces its first
     // PCM block. Keep the UI in the thinking state during that idle gap.
@@ -214,6 +222,8 @@ private:
     void PauseWakeWordDetection();
     bool EndListeningSessionForWakeup();
     void BeginWakeup(ListeningMode mode);
+    void FinishBackgroundMusicSession();
+    void RestoreBackgroundMusicSession();
     void CancelWakeup();
     void PublishWifiIcon();
     void PlayOtaTone(uint16_t tone_id, uint8_t repeat_count = 1);
