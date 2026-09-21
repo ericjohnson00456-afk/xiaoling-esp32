@@ -88,10 +88,10 @@ bool LegacyDisplayAdapter::HandleHomeVisible(bool visible) {
 }
 
 bool LegacyDisplayAdapter::HandleStatusBarUpdate(bool update_all) {
-    // Status-bar values are now pushed to the active View by their presenters.
-    // Keep the legacy call as a handled no-op to avoid routing it back through
-    // UiApp and recursively calling Display::UpdateStatusBar().
     (void)update_all;
+    // The legacy application still refreshes the status bar once per clock
+    // tick. Use that existing path to refresh the Home battery image too.
+    HomePresenter::GetInstance().UpdateBattery();
     return true;
 }
 

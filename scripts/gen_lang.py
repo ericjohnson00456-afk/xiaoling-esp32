@@ -100,7 +100,7 @@ def generate_header(lang_code, output_path):
     main_dir = os.path.dirname(output_path)
     while os.path.basename(main_dir) != "main" and os.path.dirname(main_dir) != main_dir:
         main_dir = os.path.dirname(main_dir)
-    assets_dir = os.path.join(main_dir, "resource", "assets")
+    assets_dir = os.path.join(main_dir, "resource", "assets", "respak")
 
     english_source = load_language(assets_dir, "en-US")
     primary_source = load_language(assets_dir, lang_code)

@@ -11,6 +11,7 @@
 #include <lvgl.h>
 
 #include <cstring>
+#include <algorithm>
 #include <map>
 #include <utility>
 
@@ -152,15 +153,23 @@ void HomeView::CreateUi() {
     lv_obj_set_style_pad_hor(top_bar, theme->spacing(4), 0);
     lv_obj_set_style_pad_ver(top_bar, theme->spacing(2), 0);
     lv_obj_set_flex_flow(top_bar, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(top_bar, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_flex_align(top_bar, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_align(top_bar, LV_ALIGN_TOP_MID, 0, 0);
-    network_label_ = lv_label_create(top_bar);
+
+    auto* left_icons = lv_obj_create(top_bar);
+    lv_obj_set_size(left_icons, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    SetTransparent(left_icons);
+    lv_obj_set_style_pad_column(left_icons, theme->spacing(2), 0);
+    lv_obj_set_flex_flow(left_icons, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(left_icons, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    network_label_ = lv_label_create(left_icons);
     lv_label_set_text(network_label_, "");
     if (icon_font != nullptr) {
         lv_obj_set_style_text_font(network_label_, icon_font, 0);
     }
     lv_obj_set_style_text_color(network_label_, theme->text_color(), 0);
-    duplex_image_ = lv_image_create(top_bar);
+    duplex_image_ = lv_image_create(left_icons);
     lv_obj_set_size(duplex_image_, 18, 18);
     lv_obj_add_flag(duplex_image_, LV_OBJ_FLAG_HIDDEN);
 
@@ -171,6 +180,18 @@ void HomeView::CreateUi() {
     }
     lv_obj_set_style_text_color(clock_label_, theme->text_color(), 0);
     lv_obj_add_flag(clock_label_, LV_OBJ_FLAG_HIDDEN);
+
+#ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
+    auto* right_icons = lv_obj_create(top_bar);
+    lv_obj_set_size(right_icons, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    SetTransparent(right_icons);
+    lv_obj_set_flex_flow(right_icons, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(right_icons, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    battery_image_ = lv_image_create(right_icons);
+    lv_obj_set_size(battery_image_, 24, 20);
+    lv_obj_add_flag(battery_image_, LV_OBJ_FLAG_HIDDEN);
+#endif
 
     status_label_ = lv_label_create(root_);
     lv_obj_set_width(status_label_, LV_HOR_RES * 75 / 100);
@@ -233,6 +254,11 @@ void HomeView::DestroyUi() {
     network_label_ = nullptr;
     duplex_image_ = nullptr;
     clock_label_ = nullptr;
+#ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
+    battery_image_ = nullptr;
+    battery_icon_.reset();
+    battery_icon_index_ = -1;
+#endif
     status_label_ = nullptr;
     notification_label_ = nullptr;
     chat_message_label_ = nullptr;
@@ -466,6 +492,62 @@ void HomeView::SetWifiIcon(const std::string& icon) {
     } else if (display_ != nullptr) {
         display_->SetNetworkIcon(icon.c_str());
     }
+}
+
+void HomeView::SetBattery(int level, bool charging) {
+#ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
+    if (lvgl_ == nullptr || battery_image_ == nullptr) {
+        return;
+    }
+
+    // The BOX3 ADC estimator reports zero capacity when the battery input is
+    // below the valid battery-voltage range (including no battery connected).
+    // Keep power0 for a real 1%-10% battery, but hide the indicator for this
+    // zero-capacity/no-battery state.
+    if (level <= 0) {
+        DisplayLockGuard lock(display_);
+        if (lock.locked()) {
+            lv_obj_add_flag(battery_image_, LV_OBJ_FLAG_HIDDEN);
+            battery_icon_.reset();
+            battery_icon_index_ = -1;
+        }
+        return;
+    }
+
+    const int clamped_level = std::max(0, std::min(level, 100));
+    // The asset set has ten levels: power0/charging0 represents 10% or less,
+    // and power9/charging9 represents the 91-100% range.
+    const int icon_index = clamped_level <= 10 ? 0 : std::min(9, (clamped_level - 1) / 10);
+
+    DisplayLockGuard lock(display_);
+    if (!lock.locked()) {
+        return;
+    }
+
+    if (battery_icon_ == nullptr || battery_icon_index_ != icon_index ||
+        battery_icon_charging_ != charging) {
+        const std::string path = std::string(charging ? "/icon/battery/ic_status_charging" :
+                                              "/icon/battery/ic_status_power") +
+                                 std::to_string(icon_index) + ".png";
+        void* data = nullptr;
+        size_t size = 0;
+        if (!Assets::GetInstance().GetAssetData(path, data, size) || data == nullptr || size == 0) {
+            lv_obj_add_flag(battery_image_, LV_OBJ_FLAG_HIDDEN);
+            battery_icon_.reset();
+            battery_icon_index_ = -1;
+            return;
+        }
+        battery_icon_ = std::make_unique<LvglRawImage>(data, size);
+        battery_icon_index_ = icon_index;
+        battery_icon_charging_ = charging;
+    }
+
+    lv_image_set_src(battery_image_, battery_icon_->image_dsc());
+    lv_obj_remove_flag(battery_image_, LV_OBJ_FLAG_HIDDEN);
+#else
+    (void)level;
+    (void)charging;
+#endif
 }
 
 void HomeView::SetStatus(const std::string& status) {

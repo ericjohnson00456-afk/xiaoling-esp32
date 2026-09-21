@@ -14,6 +14,7 @@ public:
     bool IsCharging();
     bool IsDischarging();
     uint8_t GetBatteryLevel();
+    float GetBatteryVoltage();
 
     void OnChargingStatusChanged(std::function<void(bool)> callback);
 

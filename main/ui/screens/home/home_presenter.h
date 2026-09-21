@@ -32,6 +32,7 @@ public:
     void SetChatMessage(std::string role, std::string text);
     void ShowNotification(std::string text, int duration_ms = 3000);
     void SetWifiIcon(std::string icon);
+    void UpdateBattery();
     void SetStatus(std::string status);
     void SetTime(std::string time);
     void SetDuplexMode(DuplexMode mode);
@@ -73,6 +74,8 @@ private:
     uint32_t last_voice_text_revision_ = 0;
     std::string last_text_;
     std::string wifi_icon_;
+    int battery_level_ = 0;
+    bool battery_charging_ = false;
     std::string status_text_;
     std::string time_text_;
     DuplexMode duplex_mode_ = DuplexMode::kHalfDuplex;

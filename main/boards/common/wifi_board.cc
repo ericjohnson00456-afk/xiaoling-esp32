@@ -29,34 +29,22 @@
 #ifdef CONFIG_PROV_MODE_BLE
 #include "application.h"
 #include "ui/utils/image/lvgl_image.h"
-
-extern const char xl_ble_prov_png_start[] asm("_binary_xl_ble_prov_png_start");
-extern const char xl_ble_prov_png_end[] asm("_binary_xl_ble_prov_png_end");
-extern const char xl_ble_prov_staging_png_start[] asm("_binary_xl_ble_prov_staging_png_start");
-extern const char xl_ble_prov_staging_png_end[] asm("_binary_xl_ble_prov_staging_png_end");
-
-void GetProvisioningImage(const char*& start, const char*& end) {
-    if (KvUser::GetDeviceMode() == 1) {
-        start = xl_ble_prov_staging_png_start;
-        end = xl_ble_prov_staging_png_end;
-    } else {
-        // Integration currently reuses the production provisioning QR code.
-        start = xl_ble_prov_png_start;
-        end = xl_ble_prov_png_end;
-    }
-}
 #endif
 
 #if CONFIG_LSPLATFORM
 std::unique_ptr<LvglImage> WifiBoard::GetProvisioningQRCode(std::string& message) {
 #ifdef CONFIG_PROV_MODE_BLE
     message = Lang::Strings::BLUFI_CONFIG_INSTRUCTIONS;
-    const char* image_start = nullptr;
-    const char* image_end = nullptr;
-    GetProvisioningImage(image_start, image_end);
-    return std::make_unique<LvglRawImage>(
-        (void*)image_start,
-        (size_t)(image_end - image_start));
+    const char* path = KvUser::GetDeviceMode() == 1
+        ? "/provisioning/xl_ble_prov_staging.png"
+        : "/provisioning/xl_ble_prov.png";
+    void* image_data = nullptr;
+    size_t image_size = 0;
+    if (!Assets::GetInstance().GetAssetData(path, image_data, image_size) ||
+        image_data == nullptr || image_size == 0) {
+        return nullptr;
+    }
+    return std::make_unique<LvglRawImage>(image_data, image_size);
 #else
     message.clear();
     return nullptr;

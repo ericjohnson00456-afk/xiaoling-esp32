@@ -102,12 +102,6 @@ if(CONFIG_PROV_MODE_BLE)
 elseif(CONFIG_USE_ESP_BLUFI_WIFI_PROVISIONING)
     list(APPEND SOURCES "boards/common/blufi.cpp")
 endif()
-if(CONFIG_PROV_MODE_BLE)
-    set(BLUFI_ASSETS
-        ${CMAKE_CURRENT_SOURCE_DIR}/resource/assets/provisioning/xl_ble_prov.png
-        ${CMAKE_CURRENT_SOURCE_DIR}/resource/assets/provisioning/xl_ble_prov_staging.png)
-endif()
-
 idf_build_get_property(build_components BUILD_COMPONENTS)
 # Function to find component dynamically by pattern
 function(find_component_by_pattern PATTERN COMPONENT_VAR PATH_VAR)
@@ -741,8 +735,8 @@ elseif(CONFIG_LANGUAGE_SR_RS)
 endif()
 
 # Define generation path
-set(LANG_JSON "${CMAKE_CURRENT_SOURCE_DIR}/resource/assets/locales/${LANG_DIR}/language.json")
-set(ENGLISH_LANG_JSON "${CMAKE_CURRENT_SOURCE_DIR}/resource/assets/locales/en-US/language.json")
+set(LANG_JSON "${CMAKE_CURRENT_SOURCE_DIR}/resource/assets/respak/locales/${LANG_DIR}/language.json")
+set(ENGLISH_LANG_JSON "${CMAKE_CURRENT_SOURCE_DIR}/resource/assets/respak/locales/en-US/language.json")
 set(LANG_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/ui/i18n/lang_config.h")
 
 # If target chip is ESP32, exclude specific files to avoid build errors
@@ -757,8 +751,8 @@ endif()
 include(${PROJECT_DIR}/main/audio/wake_words/micro_wake_word/models/models.cmake)
 
 idf_component_register(SRCS ${SOURCES}
-                    EMBED_FILES ${BLUFI_ASSETS}
                     INCLUDE_DIRS ${INCLUDE_DIRS}
+                    REQUIRES espressif__adc_battery_estimation efuse console spi_flash app_update esp_app_format esp_psram 78__esp-opus
                     WHOLE_ARCHIVE
                     )
 
@@ -860,7 +854,7 @@ function(build_default_assets_bin)
     )
 
     file(GLOB_RECURSE ROMFS_RESOURCE_FILES
-         "${CMAKE_CURRENT_SOURCE_DIR}/resource/assets/*")
+         "${CMAKE_CURRENT_SOURCE_DIR}/resource/assets/respak/*")
 
     # Add builtin text font if defined
     if(BUILTIN_TEXT_FONT)
@@ -869,7 +863,7 @@ function(build_default_assets_bin)
 
     # Add default emoji collection if defined
     if(CONFIG_USE_XIAOLING_MESSAGE_STYLE)
-        list(APPEND BUILD_ARGS "--romfs_resources" "${CMAKE_CURRENT_SOURCE_DIR}/resource/assets" "--romfs")
+        list(APPEND BUILD_ARGS "--romfs_resources" "${CMAKE_CURRENT_SOURCE_DIR}/resource/assets/respak" "--romfs")
     elseif(DEFAULT_EMOJI_COLLECTION)
         # 非小聆板型使用 xiaozhi-fonts/png 下的静态 PNG 集合。
         list(APPEND BUILD_ARGS "--emoji_collection" "${DEFAULT_EMOJI_COLLECTION}")
@@ -980,7 +974,9 @@ function(build_split_resources)
     endif()
 
     file(GLOB_RECURSE SPLIT_RESOURCE_FILES
-         "${CMAKE_CURRENT_SOURCE_DIR}/resource/assets/*")
+         "${CMAKE_CURRENT_SOURCE_DIR}/resource/assets/respak/*"
+         "${CMAKE_CURRENT_SOURCE_DIR}/resource/assets/tone/*"
+         "${CMAKE_CURRENT_SOURCE_DIR}/resource/assets/emoji/*")
     add_custom_command(
         OUTPUT ${SPLIT_RESPAK} ${SPLIT_TONE} ${SPLIT_EMOJI} ${SPLIT_WAKE_WORD}
         COMMAND python ${PROJECT_DIR}/scripts/build_split_resources.py
@@ -1006,10 +1002,12 @@ partition_table_get_partition_info(respak_size "--partition-name respak" "size")
 partition_table_get_partition_info(size "--partition-name assets" "size")
 partition_table_get_partition_info(offset "--partition-name assets" "offset")
 if ("${respak_size}")
-    if(CONFIG_FLASH_DEFAULT_ASSETS)
-        build_split_resources()
+    if(CONFIG_FLASH_NONE_ASSETS)
+        message(STATUS "Split resource flashing disabled (FLASH_NONE_ASSETS)")
     else()
-        message(STATUS "Split resource partitions present; default split resource flashing disabled")
+        # Split resources are generated from the checked-in resource roots and
+        # are part of the normal idf.py flash flow.
+        build_split_resources()
     endif()
 elseif ("${size}" AND "${offset}")
     # Flash assets based on configuration

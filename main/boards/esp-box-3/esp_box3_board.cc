@@ -1,5 +1,6 @@
 #include "display/lcd_display.h"
 
+#include "adc_battery_monitor.h"
 #include "wifi_board.h"
 #include "codecs/box_audio_codec.h"
 #include "esp_lcd_ili9341.h"
@@ -11,6 +12,7 @@
 #include <esp_lcd_panel_vendor.h>
 #include <driver/i2c_master.h>
 #include <driver/spi_common.h>
+#include <driver/usb_serial_jtag.h>
 
 #define TAG "EspBox3Board"
 
@@ -40,6 +42,14 @@ private:
     i2c_master_bus_handle_t i2c_bus_;
     Button boot_button_;
     LcdDisplay* display_;
+    AdcBatteryMonitor* battery_monitor_ = nullptr;
+
+    void InitializeBatteryMonitor() {
+        // SENSOR-01: VBAT+ is divided by 301K/100K and routed to IO10
+        // (ESP32-S3 ADC1 channel 9).
+        battery_monitor_ = new AdcBatteryMonitor(
+            ADC_UNIT_1, ADC_CHANNEL_9, 301000.0f, 100000.0f);
+    }
 
     void InitializeI2c() {
         // Initialize I2C peripheral
@@ -144,6 +154,7 @@ public:
         InitializeSpi();
         InitializeIli9341Display();
         InitializeButtons();
+        InitializeBatteryMonitor();
         GetBacklight()->RestoreBrightness();
     }
 
@@ -167,6 +178,28 @@ public:
 
     virtual Display* GetDisplay() override {
         return display_;
+    }
+
+    virtual bool GetBatteryLevel(int& level, bool& charging, bool& discharging) override {
+        if (battery_monitor_ == nullptr) {
+            return false;
+        }
+
+        level = battery_monitor_->GetBatteryLevel();
+        const float battery_voltage = battery_monitor_->GetBatteryVoltage();
+        if (battery_voltage < 1.0f) {
+            // An ADC reading below 1 V means the battery input is absent.
+            // Report zero so the Home view hides the battery indicator.
+            level = 0;
+        }
+
+        // SENSOR-01 does not route AP5056 CHRG/STDBY to the ESP32-S3.
+        // Use native USB Serial/JTAG host presence as the available charging
+        // indication. This detects a connected computer, not a charge-only USB
+        // supply.
+        charging = usb_serial_jtag_is_connected();
+        discharging = !charging;
+        return true;
     }
 
     virtual Backlight* GetBacklight() override {

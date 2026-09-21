@@ -1,6 +1,7 @@
 #include "home_presenter.h"
 
 #include "display/display.h"
+#include "board.h"
 #include "home_view.h"
 #include "ui/ui_manager.h"
 #include "ui/ui_page_ids.h"
@@ -80,6 +81,7 @@ int HomePresenter::Show(const UiNavScreen* screen, void* data) {
     presenter->SetChatMessage(presenter->last_chat_role_, presenter->last_chat_text_);
     presenter->SetText(presenter->last_text_);
     presenter->SetWifiIcon(presenter->wifi_icon_);
+    presenter->UpdateBattery();
     presenter->SetStatus(presenter->status_text_);
     presenter->SetTime(presenter->time_text_);
     presenter->SetDuplexVisible(presenter->duplex_visible_);
@@ -190,6 +192,21 @@ void HomePresenter::SetWifiIcon(std::string icon) {
     wifi_icon_ = std::move(icon);
     if (view_ != nullptr) {
         view_->SetWifiIcon(wifi_icon_);
+    }
+}
+
+void HomePresenter::UpdateBattery() {
+    int level = 0;
+    bool charging = false;
+    bool discharging = false;
+    if (!Board::GetInstance().GetBatteryLevel(level, charging, discharging)) {
+        return;
+    }
+
+    battery_level_ = level;
+    battery_charging_ = charging;
+    if (view_ != nullptr) {
+        view_->SetBattery(battery_level_, battery_charging_);
     }
 }
 

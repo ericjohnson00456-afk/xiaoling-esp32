@@ -101,6 +101,18 @@ uint8_t AdcBatteryMonitor::GetBatteryLevel() {
     return (uint8_t)capacity;
 }
 
+float AdcBatteryMonitor::GetBatteryVoltage() {
+    if (adc_battery_estimation_handle_ == nullptr) {
+        return 0.0f;
+    }
+
+    float voltage = 0.0f;
+    if (adc_battery_estimation_get_voltage(adc_battery_estimation_handle_, &voltage) != ESP_OK) {
+        return 0.0f;
+    }
+    return voltage;
+}
+
 void AdcBatteryMonitor::OnChargingStatusChanged(std::function<void(bool)> callback) {
     on_charging_status_changed_ = callback;
 }

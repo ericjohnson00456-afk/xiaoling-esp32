@@ -68,18 +68,14 @@ def main() -> int:
         for directory in (respak, tone, emoji, wake):
             directory.mkdir()
 
-        # Static UI resources and localized activation audio belong to respak.
-        # Tone and emoji are intentionally excluded because they are updated
-        # through their own URLs. Keeping locales here makes activation audio
-        # survive tone OTA updates.
-        for entry in source.iterdir():
-            if entry.name in ("tone", "emoji"):
-                continue
-            target = respak / entry.name
-            if entry.is_dir():
-                shutil.copytree(entry, target, dirs_exist_ok=True)
-            elif entry.is_file():
-                shutil.copy2(entry, target)
+        # Static UI resources and localized activation audio belong to the
+        # explicitly scoped respak directory. Keeping the four resource roots
+        # separate prevents a new tone/emoji file from silently changing the
+        # respak image.
+        respak_source = source / "respak"
+        if not respak_source.is_dir():
+            raise RuntimeError(f"Missing respak resource directory: {respak_source}")
+        copy_tree(respak_source, respak)
 
         relocate_activation_assets(respak / "locales", respak / "activation")
 

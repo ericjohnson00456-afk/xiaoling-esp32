@@ -35,6 +35,8 @@
 #include "display.h"
 #include "application.h"
 #include "system/system_info.h"
+#include "resource/assets.h"
+#include "ui/utils/image/lvgl_image.h"
 
 #include "esp_blufi_api.h"
 #include "blufi.h"
@@ -75,9 +77,6 @@ static esp_blufi_extra_info_t gl_sta_conn_info;
 static bool provstate = false;
 static bool authstate = false;
 char ble_name[24];
-
-extern const char xl_ble_prov_png_start[] asm("_binary_xl_ble_prov_png_start");
-extern const char xl_ble_prov_png_end[]   asm("_binary_xl_ble_prov_png_end");
 
 static void blufi_wait_for_completion_task(void*)
 {
@@ -483,10 +482,16 @@ void blufi_start(void)
 
     // Show the provisioning QR before WiFi/BLE initialization consumes the
     // remaining internal heap. The display keeps the image alive internally.
-    auto qrcode = std::make_unique<LvglRawImage>((void *)xl_ble_prov_png_start,
-                                                   (size_t)(xl_ble_prov_png_end - xl_ble_prov_png_start));
-    auto display = Board::GetInstance().GetDisplay();
-    display->ShowActivation(std::move(qrcode), "扫码或搜索“小聆AI”小程序\n选择ESP32 - 蓝牙配网");
+    void* qrcode_data = nullptr;
+    size_t qrcode_size = 0;
+    if (assets.GetAssetData("/provisioning/xl_ble_prov.png", qrcode_data, qrcode_size) &&
+        qrcode_data != nullptr && qrcode_size != 0) {
+        auto qrcode = std::make_unique<LvglRawImage>(qrcode_data, qrcode_size);
+        auto display = Board::GetInstance().GetDisplay();
+        display->ShowActivation(std::move(qrcode), "扫码或搜索“小聆AI”小程序\n选择ESP32 - 蓝牙配网");
+    } else {
+        BLUFI_ERROR("Provisioning image is missing from respak");
+    }
 
     provstate = false;
     authstate = false;
