@@ -7,10 +7,13 @@
 #include "shell/cmd/kv/kv_user.h"
 #include "ui/i18n/lang_config.h"
 #include "ui/screens/home/home_presenter.h"
+#include "ui/screens/alarm/alarm_ring_presenter.h"
+#include "ui/screens/alarm/alarm_success_presenter.h"
 #include "ui/screens/qrcode/qrcode_presenter.h"
 #include "ui/screens/upgrade/upgrade_presenter.h"
 #include "ui/ui_manager.h"
 #include "ui/ui_page_ids.h"
+#include "ui/widgets/toast.h"
 
 #include <esp_log.h>
 
@@ -171,6 +174,8 @@ bool Initialize() {
 #endif
 
     if (ui.RegisterScreen(&HomePresenter::Screen()) != 0 ||
+        ui.RegisterScreen(&AlarmSuccessPresenter::Screen()) != 0 ||
+        ui.RegisterScreen(&AlarmRingPresenter::Screen()) != 0 ||
         ui.RegisterScreen(&QrCodePresenter::Screen()) != 0 ||
         ui.RegisterScreen(&UpgradePresenter::Screen()) != 0 ||
         ui.SetDefaultScreen(UI_PAGE_HOME) != 0) {
@@ -206,6 +211,25 @@ void ShowNotification(Notification notification, int32_t duration_ms, std::strin
 void ShowNotification(std::string text, int32_t duration_ms) {
     UiManager::GetInstance().Dispatch([text = std::move(text), duration_ms]() mutable {
         ShowNotificationOnDisplay(std::move(text), duration_ms);
+    });
+}
+
+void ShowToast(std::string text, int32_t duration_ms) {
+    UiManager::GetInstance().Dispatch([text = std::move(text), duration_ms]() mutable {
+        auto& manager = UiManager::GetInstance();
+        if (manager.lvgl_display() != nullptr) {
+            Toast::GetInstance().Show(text, duration_ms);
+        } else if (auto* display = manager.display(); display != nullptr) {
+            display->ShowNotification(text, duration_ms);
+        }
+    });
+}
+
+void DismissToast() {
+    UiManager::GetInstance().Dispatch([]() {
+        if (UiManager::GetInstance().lvgl_display() != nullptr) {
+            Toast::GetInstance().Dismiss();
+        }
     });
 }
 
@@ -245,6 +269,12 @@ void ShowEmotionOnce(std::string emotion) {
         } else if (auto* display = UiManager::GetInstance().display(); display != nullptr) {
             display->ShowEmotionOnce(emotion.c_str());
         }
+    });
+}
+
+void SetAlarmActive(bool active) {
+    UiManager::GetInstance().Dispatch([active]() {
+        HomePresenter::GetInstance().SetAlarmActive(active);
     });
 }
 

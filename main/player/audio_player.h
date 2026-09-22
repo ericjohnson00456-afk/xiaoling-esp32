@@ -36,6 +36,7 @@ public:
     bool PlayNextMusic();
     bool ReplayMusic();
     uint32_t PlayTone(uint16_t tone_id);
+    uint32_t PlayAlarmTone(uint16_t tone_id);
     void PlayWakeup(std::function<void(bool)> completion);
     void CancelWakeup();
     bool IsWakeupPending() const;

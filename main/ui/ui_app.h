@@ -48,10 +48,15 @@ void SetStatusText(std::string text);
 void ShowNotification(Notification notification, int32_t duration_ms = 3000,
                       std::string detail = {});
 void ShowNotification(std::string text, int32_t duration_ms = 3000);
+// Generic page-independent transient message overlay.
+void ShowToast(std::string text, int32_t duration_ms = 3000);
+void DismissToast();
 void SetChatMessage(std::string role, std::string content);
 void SetVoicePrompt(std::string text);
 void SetEmotion(std::string emotion);
 void ShowEmotionOnce(std::string emotion);
+// Show the runtime-countdown indicator next to the Home battery icon.
+void SetAlarmActive(bool active);
 void UpdateStatusBar(bool update_all = false);
 void DismissOverlays();
 void ShowVolume(int32_t volume, bool percent = false);

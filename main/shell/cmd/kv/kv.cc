@@ -108,6 +108,7 @@ enum class UserIntKey {
     IdleExitTimeoutMs,
     Volume,
     MinVolume,
+    MinAlarmVolume,
     Brightness,
     MinBrightness,
 };
@@ -122,6 +123,9 @@ UserIntKey ParseUserIntKey(const char* logical_key) {
     if (std::strcmp(logical_key, KvUser::kIdleExitTimeoutMs) == 0) return UserIntKey::IdleExitTimeoutMs;
     if (std::strcmp(logical_key, KvUser::kVolume) == 0) return UserIntKey::Volume;
     if (std::strcmp(logical_key, KvUser::kMinVolume) == 0) return UserIntKey::MinVolume;
+    if (std::strcmp(logical_key, KvUser::kMinAlarmVolume) == 0) {
+        return UserIntKey::MinAlarmVolume;
+    }
     if (std::strcmp(logical_key, KvUser::kBrightness) == 0) return UserIntKey::Brightness;
     if (std::strcmp(logical_key, KvUser::kMinBrightness) == 0) return UserIntKey::MinBrightness;
     return UserIntKey::None;
@@ -139,6 +143,7 @@ bool IsValidUserIntValue(UserIntKey key, int32_t value) {
             return value >= 0;
         case UserIntKey::Volume:
         case UserIntKey::MinVolume:
+        case UserIntKey::MinAlarmVolume:
         case UserIntKey::Brightness:
         case UserIntKey::MinBrightness:
             return value >= 0 && value <= 100;
@@ -184,6 +189,9 @@ void SetUserIntValue(UserIntKey key, int32_t value) {
             }
             break;
         }
+        case UserIntKey::MinAlarmVolume:
+            KvUser::SetMinAlarmVolume(value);
+            break;
         case UserIntKey::Brightness: {
             const int32_t effective_value = std::max(value, KvUser::GetMinBrightness());
             auto* backlight = Board::GetInstance().GetBacklight();
@@ -216,6 +224,7 @@ int32_t GetUserIntValue(UserIntKey key) {
         case UserIntKey::IdleExitTimeoutMs: return KvUser::GetIdleExitTimeoutMs();
         case UserIntKey::Volume: return KvUser::GetVolume();
         case UserIntKey::MinVolume: return KvUser::GetMinVolume();
+        case UserIntKey::MinAlarmVolume: return KvUser::GetMinAlarmVolume();
         case UserIntKey::Brightness: return KvUser::GetBrightness();
         case UserIntKey::MinBrightness: return KvUser::GetMinBrightness();
         case UserIntKey::None: return -1;
@@ -231,6 +240,7 @@ const char* UserIntKeyName(UserIntKey key) {
         case UserIntKey::IdleExitTimeoutMs: return KvUser::kIdleExitTimeoutMs;
         case UserIntKey::Volume: return KvUser::kVolume;
         case UserIntKey::MinVolume: return KvUser::kMinVolume;
+        case UserIntKey::MinAlarmVolume: return KvUser::kMinAlarmVolume;
         case UserIntKey::Brightness: return KvUser::kBrightness;
         case UserIntKey::MinBrightness: return KvUser::kMinBrightness;
         case UserIntKey::None: return "";
@@ -718,6 +728,19 @@ int32_t GetMinVolume() {
 void SetMinVolume(int32_t value) {
     Settings settings(KvUser::kNamespace, true);
     settings.SetInt("min_volume", std::clamp(value, int32_t{0}, int32_t{100}));
+}
+
+int32_t GetMinAlarmVolume() {
+    Settings settings(KvUser::kNamespace, false);
+    // NVS key names are limited to 15 characters, so the public logical key
+    // user.min_alarm_volume maps to this shorter physical key.
+    return std::clamp(settings.GetInt("min_alarm_vol", kDefaultMinAlarmVolume),
+                      int32_t{0}, int32_t{100});
+}
+
+void SetMinAlarmVolume(int32_t value) {
+    Settings settings(KvUser::kNamespace, true);
+    settings.SetInt("min_alarm_vol", std::clamp(value, int32_t{0}, int32_t{100}));
 }
 
 int32_t GetVolume() {

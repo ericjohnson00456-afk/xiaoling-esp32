@@ -49,6 +49,7 @@ set(SOURCES "audio/audio_codec.cc"
             "application_button.cc"
             "ota/ota.cc"
             "system/time_sync.cc"
+            "alarm/alarm_service.cc"
             "shell/settings.cc"
             "shell/serial_shell.cc"
             "resource/assets.cc"
@@ -68,7 +69,9 @@ list(APPEND SOURCES ${MCP_TOOL_SOURCES})
 file(GLOB UI_SOURCES
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/*.cc"
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/compat/*.cc"
+     "${CMAKE_CURRENT_SOURCE_DIR}/ui/widgets/*.cc"
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/screens/home/*.cc"
+     "${CMAKE_CURRENT_SOURCE_DIR}/ui/screens/alarm/*.cc"
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/screens/qrcode/*.cc"
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/screens/upgrade/*.cc")
 list(APPEND SOURCES ${UI_SOURCES})
@@ -81,7 +84,8 @@ list(APPEND SOURCES ${SHELL_CMD_SOURCES})
 set(INCLUDE_DIRS "."
                  "ui/themes" "ui/utils/font" "ui/utils/image" "ui/utils/emoji" "audio"
                  "player" "player/core" "player/engine" "player/channels" "player/resource" "xiaoling" "xiaoling/session" "xiaoling/conn" "mcp"
-                  "player/intents" "ui" "ui/compat" "ui/screens" "ui/screens/home" "ui/screens/qrcode" "ui/screens/upgrade"
+                 "player/intents" "ui" "ui/compat" "ui/widgets" "ui/screens" "ui/screens/home" "ui/screens/alarm" "ui/screens/qrcode" "ui/screens/upgrade"
+                 "alarm"
                   "system" "resource" "shell" "ota")
 
 # Add board common files

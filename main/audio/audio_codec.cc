@@ -46,7 +46,15 @@ void AudioCodec::SetOutputVolume(int volume) {
     output_volume_ = volume;
     ESP_LOGI(TAG, "Set output volume to %d", output_volume_);
     
-    KvUser::SetVolume(output_volume_);
+    if (persist_output_volume_) {
+        KvUser::SetVolume(output_volume_);
+    }
+}
+
+void AudioCodec::SetOutputVolumeTemporary(int volume) {
+    persist_output_volume_ = false;
+    SetOutputVolume(volume);
+    persist_output_volume_ = true;
 }
 
 void AudioCodec::SetInputGain(float gain) {

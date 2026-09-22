@@ -1,5 +1,6 @@
 #include "legacy_display_adapter.h"
 
+#include "alarm/alarm_service.h"
 #include "ui/ui_manager.h"
 #include "ui/ui_page_ids.h"
 #include "ui/screens/home/home_presenter.h"
@@ -90,7 +91,9 @@ bool LegacyDisplayAdapter::HandleHomeVisible(bool visible) {
 bool LegacyDisplayAdapter::HandleStatusBarUpdate(bool update_all) {
     (void)update_all;
     // The legacy application still refreshes the status bar once per clock
-    // tick. Use that existing path to refresh the Home battery image too.
+    // tick. Use that existing path to refresh runtime countdown and battery.
+    HomePresenter::GetInstance().SetAlarmActive(
+        AlarmService::GetInstance().HasActiveCountdown());
     HomePresenter::GetInstance().UpdateBattery();
     return true;
 }

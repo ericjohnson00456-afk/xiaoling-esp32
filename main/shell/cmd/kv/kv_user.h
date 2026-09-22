@@ -18,11 +18,13 @@ inline constexpr char kFullDuplexTimeoutMs[] = "user.full_duplex_timeout_ms";
 inline constexpr char kIdleExitTimeoutMs[] = "user.idle_exit_timeout_ms";
 inline constexpr char kVolume[] = "user.volume";
 inline constexpr char kMinVolume[] = "user.min_volume";
+inline constexpr char kMinAlarmVolume[] = "user.min_alarm_volume";
 inline constexpr char kBrightness[] = "user.brightness";
 inline constexpr char kMinBrightness[] = "user.min_brightness";
 
 inline constexpr int32_t kDefaultVolume = 70;
 inline constexpr int32_t kDefaultMinVolume = 10;
+inline constexpr int32_t kDefaultMinAlarmVolume = 60;
 inline constexpr int32_t kDefaultBrightness = 70;
 inline constexpr int32_t kDefaultMinBrightness = 10;
 
@@ -40,6 +42,8 @@ int32_t GetVolume();
 void SetVolume(int32_t value);
 int32_t GetMinVolume();
 void SetMinVolume(int32_t value);
+int32_t GetMinAlarmVolume();
+void SetMinAlarmVolume(int32_t value);
 int32_t GetBrightness();
 void SetBrightness(int32_t value);
 int32_t GetMinBrightness();

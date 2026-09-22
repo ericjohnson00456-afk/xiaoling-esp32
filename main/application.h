@@ -127,6 +127,8 @@ public:
     void PlaySound(const std::string_view& sound);
     void PlayLocalizedAudio(const char* name);
     void PlayTone(uint16_t tone_id);
+    uint32_t StartAlarmTone(uint16_t tone_id);
+    void StopAlarmTone();
     AudioService& GetAudioService() { return audio_service_; }
     AudioPlayer& GetAudioPlayer() { return audio_player_; }
     void SetDuplexMode(DuplexMode mode);
@@ -160,6 +162,8 @@ private:
     AudioPlayer audio_player_;
     VoiceSessionController session_controller_;
     PlaybackIntentStack playback_intents_;
+    int alarm_previous_volume_ = -1;
+    bool alarm_resume_music_ = false;
     bool background_music_session_ = false;
     bool background_session_finished_ = false;
     bool music_was_playing_for_session_ = false;

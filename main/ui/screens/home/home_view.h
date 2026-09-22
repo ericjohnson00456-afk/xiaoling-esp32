@@ -33,6 +33,7 @@ public:
     void SetChatMessage(const std::string& role, const std::string& text);
     void ShowNotification(const std::string& text, int duration_ms);
     void SetWifiIcon(const std::string& icon);
+    void SetAlarmActive(bool active);
     void SetBattery(int level, bool charging);
     void SetStatus(const std::string& status);
     void SetTime(const std::string& time);
@@ -72,6 +73,8 @@ private:
 #ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
     std::unique_ptr<LvglRawImage> half_duplex_icon_;
     std::unique_ptr<LvglRawImage> full_duplex_icon_;
+    lv_obj_t* alarm_image_ = nullptr;
+    std::unique_ptr<LvglRawImage> alarm_icon_;
     lv_obj_t* battery_image_ = nullptr;
     std::unique_ptr<LvglRawImage> battery_icon_;
     int battery_icon_index_ = -1;

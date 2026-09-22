@@ -1,5 +1,6 @@
 #include "application.h"
 
+#include "alarm/alarm_service.h"
 #include "boards/common/board.h"
 #include "system/system_reset.h"
 #include "ui/ui_manager.h"
@@ -30,6 +31,11 @@ void Application::HandleButtonLongPress() {
 }
 
 void Application::ProcessButtonLongPress() {
+    if (AlarmService::GetInstance().IsRinging()) {
+        ESP_LOGI(kTag, "Long press: stop alarm");
+        AlarmService::GetInstance().Stop(true);
+        return;
+    }
     if (!ota_confirmation_pending_.load()) {
         return;
     }
@@ -41,6 +47,15 @@ void Application::ProcessButtonLongPress() {
 }
 
 void Application::ProcessButtonClick(uint8_t click_count) {
+    if (AlarmService::GetInstance().IsRinging()) {
+        ESP_LOGI(kTag, "Click: %s alarm", AlarmService::GetInstance().CanSnooze() ? "snooze" : "stop");
+        if (AlarmService::GetInstance().CanSnooze()) {
+            AlarmService::GetInstance().Snooze();
+        } else {
+            AlarmService::GetInstance().Stop(true);
+        }
+        return;
+    }
     if (click_count == 1 && ota_confirmation_pending_.load()) {
         ESP_LOGI(kTag, "Single click: start pending app OTA");
         ota_confirmation_decision_.store(1);

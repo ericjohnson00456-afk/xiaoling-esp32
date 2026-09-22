@@ -18,6 +18,7 @@ public:
     void OnEvent(const PlaybackEvent& event) override;
 
     uint32_t PlayTone(uint16_t tone_id);
+    uint32_t PlayAlarm(uint16_t tone_id);
     void PlayWakeup(std::function<void(bool)> completion);
     void CancelWakeup();
     bool IsWakeupPending() const { return static_cast<bool>(completion_); }

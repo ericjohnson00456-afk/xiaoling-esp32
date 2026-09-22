@@ -1,4 +1,5 @@
 #include "application.h"
+#include "alarm/alarm_service.h"
 #include "board.h"
 #include "display/display.h"
 #include "system/system_info.h"
@@ -27,6 +28,7 @@
 #endif // CONFIG_LSPLATFORM
 
 #include <cstring>
+#include <algorithm>
 #include <array>
 #include <cstdio>
 #include <esp_log.h>
@@ -197,6 +199,7 @@ void Application::Initialize() {
     audio_player_.SetEventCallback([this](const PlaybackEvent& event) {
         Schedule([this, event]() {
             audio_player_.DispatchPlaybackEvent(event);
+            AlarmService::GetInstance().HandlePlaybackEvent(event);
             if (event.channel != PlaybackChannel::kTts) {
                 return;
             }
@@ -340,6 +343,9 @@ void Application::Initialize() {
     DeviceStatus::AddStateChangeListener([this](DeviceState old_state, DeviceState new_state) {
         xEventGroupSetBits(event_group_, MAIN_EVENT_STATE_CHANGED);
     });
+
+    // 本地闹钟不依赖云端鉴权；NVS 就绪后立即恢复，校时完成后自动开始调度。
+    AlarmService::GetInstance().Initialize();
 
     // Start the clock timer to update the status bar
     esp_timer_start_periodic(clock_timer_handle_, 1000000);
@@ -501,6 +507,7 @@ void Application::Run() {
 
         if (bits & MAIN_EVENT_CLOCK_TICK) {
             clock_ticks_++;
+            AlarmService::GetInstance().Tick();
             PublishWifiIcon();
             UiApp::UpdateStatusBar();
 
@@ -1275,6 +1282,10 @@ void Application::HandleStopListeningEvent() {
 }
 
 void Application::HandleWakeWordDetectedEvent() {
+    // 唤醒词先关闭当前闹钟，再继续正常唤醒会话。
+    if (AlarmService::GetInstance().IsRinging()) {
+        AlarmService::GetInstance().Stop();
+    }
     if (exit_requested_.load() &&
         (tts_waiting_for_playback_.load() || audio_player_.IsPlaying())) {
         ESP_LOGI(TAG, "忽略退出期间排队的唤醒词，TTS 尚未播放完成");
@@ -2044,6 +2055,50 @@ void Application::PlayActivationAudio(uint16_t id) {
 void Application::PlayTone(uint16_t tone_id) {
     if (audio_player_.PlayTone(tone_id) == 0) {
         ESP_LOGW(TAG, "ROMFS tone 播放失败: id=%u", static_cast<unsigned>(tone_id));
+    }
+}
+
+uint32_t Application::StartAlarmTone(uint16_t tone_id) {
+    const bool already_ringing = playback_intents_.Contains(PlaybackIntent::kAlarm);
+    if (!already_ringing) {
+        alarm_resume_music_ = audio_player_.IsMusicPlaying() &&
+                              !playback_intents_.Contains(PlaybackIntent::kMusic);
+        if (auto* codec = Board::GetInstance().GetAudioCodec(); codec != nullptr) {
+            const int minimum_ring_volume = KvUser::GetMinAlarmVolume();
+            const int current_volume = codec->output_volume();
+            if (current_volume < minimum_ring_volume) {
+                alarm_previous_volume_ = current_volume;
+                codec->SetOutputVolumeTemporary(minimum_ring_volume);
+                ESP_LOGI(TAG, "闹钟临时音量: %d -> %d", current_volume,
+                         minimum_ring_volume);
+            } else {
+                // The configured value is a floor, not a fixed ring volume.
+                alarm_previous_volume_ = -1;
+                ESP_LOGI(TAG, "闹钟保持当前音量: %d (minimum=%d)", current_volume,
+                         minimum_ring_volume);
+            }
+        }
+    }
+    playback_intents_.Push(PlaybackIntent::kAlarm);
+    const uint32_t session_id = audio_player_.PlayAlarmTone(tone_id);
+    if (session_id == 0) {
+        ESP_LOGW(TAG, "闹钟提示音播放失败: id=%u", static_cast<unsigned>(tone_id));
+    }
+    return session_id;
+}
+
+void Application::StopAlarmTone() {
+    audio_player_.StopNonMusic(PlaybackEndReason::kCancelled);
+    playback_intents_.Pop(PlaybackIntent::kAlarm);
+    if (alarm_previous_volume_ >= 0) {
+        if (auto* codec = Board::GetInstance().GetAudioCodec(); codec != nullptr) {
+            codec->SetOutputVolumeTemporary(alarm_previous_volume_);
+        }
+        alarm_previous_volume_ = -1;
+    }
+    if (alarm_resume_music_) {
+        audio_player_.ResumeMusic();
+        alarm_resume_music_ = false;
     }
 }
 

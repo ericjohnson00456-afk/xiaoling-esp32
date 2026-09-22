@@ -197,10 +197,27 @@ void HomeView::CreateUi() {
 
 #ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
     auto* right_icons = lv_obj_create(top_bar);
-    lv_obj_set_size(right_icons, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    // Both status images start hidden. A content-sized parent can therefore be
+    // laid out as 0x0 and keep clipping the alarm when it becomes visible later
+    // (especially on USB-powered devices where the battery icon stays hidden).
+    // Reserve the complete alarm + gap + battery area from the beginning.
+    lv_obj_set_size(right_icons, 20 + theme->spacing(2) + 24, 20);
     SetTransparent(right_icons);
+    lv_obj_set_style_pad_column(right_icons, theme->spacing(2), 0);
     lv_obj_set_flex_flow(right_icons, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(right_icons, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    alarm_image_ = lv_image_create(right_icons);
+    lv_obj_set_size(alarm_image_, 20, 20);
+    void* alarm_data = nullptr;
+    size_t alarm_size = 0;
+    if (Assets::GetInstance().GetAssetData("/icon/alarm/ic_status_alarm.png",
+                                           alarm_data, alarm_size) &&
+        alarm_data != nullptr && alarm_size > 0) {
+        alarm_icon_ = std::make_unique<LvglRawImage>(alarm_data, alarm_size);
+        lv_image_set_src(alarm_image_, alarm_icon_->image_dsc());
+    }
+    lv_obj_add_flag(alarm_image_, LV_OBJ_FLAG_HIDDEN);
 
     battery_image_ = lv_image_create(right_icons);
     lv_obj_set_size(battery_image_, 24, 20);
@@ -285,6 +302,8 @@ void HomeView::DestroyUi() {
     duplex_image_ = nullptr;
     clock_label_ = nullptr;
 #ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
+    alarm_image_ = nullptr;
+    alarm_icon_.reset();
     battery_image_ = nullptr;
     battery_icon_.reset();
     battery_icon_index_ = -1;
@@ -558,6 +577,37 @@ void HomeView::SetWifiIcon(const std::string& icon) {
     } else if (display_ != nullptr) {
         display_->SetNetworkIcon(icon.c_str());
     }
+}
+
+void HomeView::SetAlarmActive(bool active) {
+#ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
+    if (lvgl_ == nullptr || alarm_image_ == nullptr) return;
+
+    DisplayLockGuard lock(display_);
+    if (!lock.locked()) return;
+    if (!active) {
+        lv_obj_add_flag(alarm_image_, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_update_layout(lv_obj_get_parent(alarm_image_));
+        return;
+    }
+
+    if (alarm_icon_ == nullptr) {
+        void* data = nullptr;
+        size_t size = 0;
+        if (!Assets::GetInstance().GetAssetData("/icon/alarm/ic_status_alarm.png",
+                                                data, size) ||
+            data == nullptr || size == 0) {
+            lv_obj_add_flag(alarm_image_, LV_OBJ_FLAG_HIDDEN);
+            return;
+        }
+        alarm_icon_ = std::make_unique<LvglRawImage>(data, size);
+        lv_image_set_src(alarm_image_, alarm_icon_->image_dsc());
+    }
+    lv_obj_remove_flag(alarm_image_, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_update_layout(lv_obj_get_parent(alarm_image_));
+#else
+    (void)active;
+#endif
 }
 
 void HomeView::SetBattery(int level, bool charging) {

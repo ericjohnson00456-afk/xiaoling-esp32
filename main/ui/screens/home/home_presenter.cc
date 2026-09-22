@@ -105,6 +105,7 @@ int HomePresenter::Show(const UiNavScreen* screen, void* data) {
     presenter->SetChatMessage(presenter->last_chat_role_, presenter->last_chat_text_);
     presenter->SetText(presenter->last_text_);
     presenter->SetWifiIcon(presenter->wifi_icon_);
+    presenter->SetAlarmActive(presenter->alarm_active_);
     presenter->UpdateBattery();
     presenter->SetStatus(presenter->status_text_);
     presenter->SetTime(presenter->time_text_);
@@ -512,6 +513,13 @@ void HomePresenter::SetWifiIcon(std::string icon) {
     wifi_icon_ = std::move(icon);
     if (view_ != nullptr) {
         view_->SetWifiIcon(wifi_icon_);
+    }
+}
+
+void HomePresenter::SetAlarmActive(bool active) {
+    alarm_active_ = active;
+    if (view_ != nullptr) {
+        view_->SetAlarmActive(active);
     }
 }
 

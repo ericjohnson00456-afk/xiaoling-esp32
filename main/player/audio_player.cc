@@ -185,6 +185,17 @@ uint32_t AudioPlayer::PlayTone(uint16_t tone_id) {
     return tone_channel_->PlayTone(tone_id);
 }
 
+uint32_t AudioPlayer::PlayAlarmTone(uint16_t tone_id) {
+    if (engine_ == nullptr || tone_channel_ == nullptr || wakeup_in_progress_) {
+        ESP_LOGW(TAG, "播放器不可用或唤醒提示音正在播放");
+        return 0;
+    }
+    if (!PauseMusic() || !StopNonMusic(PlaybackEndReason::kPreempted)) {
+        return 0;
+    }
+    return tone_channel_->PlayAlarm(tone_id);
+}
+
 void AudioPlayer::PlayWakeup(std::function<void(bool)> completion) {
     wakeup_in_progress_ = true;
     if (!PauseMusic() || !StopNonMusic(PlaybackEndReason::kPreempted)) {

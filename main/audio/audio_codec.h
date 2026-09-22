@@ -20,6 +20,8 @@ public:
     virtual ~AudioCodec();
     
     virtual void SetOutputVolume(int volume);
+    // Apply a runtime-only volume without overwriting the user's persisted setting.
+    void SetOutputVolumeTemporary(int volume);
     virtual void SetInputGain(float gain);
     virtual void EnableInput(bool enable);
     virtual void EnableOutput(bool enable);
@@ -55,6 +57,7 @@ protected:
     int input_channels_ = 1;
     int output_channels_ = 1;
     int output_volume_ = 70;
+    bool persist_output_volume_ = true;
     float input_gain_ = 0.0;
 
     virtual int Read(int16_t* dest, int samples) = 0;
