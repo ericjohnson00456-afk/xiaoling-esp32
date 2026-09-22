@@ -124,17 +124,19 @@ bool XiaolingConn::SendText(const std::string& text) {
         return false;
     }
     LogTextFrame("TX", text);
-
-    bool sent = false;
     {
-        std::lock_guard<std::mutex> lock(websocket_mutex_);
-        sent = websocket_ != nullptr && websocket_->SendText(text);
+        std::lock_guard<std::mutex> lock(control_mutex_);
+        if (control_queue_.size() >= kMaxControlMessages) {
+            ESP_LOGE(TAG, "WebSocket 控制队列已满: pending=%u",
+                     static_cast<unsigned>(control_queue_.size()));
+            return false;
+        }
+        control_queue_.push_back(text);
     }
-    if (!sent) {
-        HandleTransportDisconnected(generation_.load());
-        SetError(XiaolingError::ServerError);
+    if (task_handle_ != nullptr) {
+        xTaskNotifyGive(task_handle_);
     }
-    return sent;
+    return true;
 }
 
 void XiaolingConn::SendMcpMessage(const std::string& message) {

@@ -39,6 +39,7 @@ private:
     std::function<void()> on_disconnected_;
     std::function<void(int)> on_error_;
     uint32_t rx_binary_sequence_ = 0;
+    uint32_t tx_binary_sequence_ = 0;
 };
 
 #endif  // XIAOLING_CONN_WEBSOCKET_H

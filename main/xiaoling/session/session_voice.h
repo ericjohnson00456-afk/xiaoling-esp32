@@ -54,6 +54,8 @@ public:
     // 在停止本地 TTS 前冻结实际 PCM 播放位置对应的 timeline 游标。
     void PrepareAbortSpeaking(AbortReason reason);
     void SendAbortSpeaking(AbortReason reason);
+    // 非空 IAT 触发的全双工打断：停止字幕并上报播放点，但保持会话和上行。
+    void HandleIatBargeIn();
 
     void HandleMessage(const cJSON* root);
     void HandleBinary(std::vector<uint8_t> payload);
@@ -104,6 +106,8 @@ private:
     std::string pending_wake_word_;
     std::deque<std::unique_ptr<AudioStreamPacket>> pending_wake_audio_;
     std::atomic_bool uplink_audio_format_checked_{false};
+    std::atomic<uint32_t> uplink_batch_sequence_{0};
+    std::atomic<uint32_t> uplink_rejected_batches_{0};
 
     bool iat_active_ = false;
     std::atomic_bool tts_text_active_{false};
@@ -135,6 +139,7 @@ private:
     bool CheckUplinkAudioFormat(const AudioStreamPacket& packet);
     bool SendUplinkAudioPacket(const AudioStreamPacket& packet);
     void SetSessionActive(bool active);
+    void SetAudioUploadEnabled(bool enabled, const char* reason);
     void ResetResultState();
     void HandleIat(const cJSON* data);
     void HandleTts(const cJSON* data, const std::string& reply_sid);

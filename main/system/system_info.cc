@@ -7,6 +7,7 @@
 #include <esp_flash.h>
 #include <esp_mac.h>
 #include <esp_system.h>
+#include <esp_heap_caps.h>
 #include <esp_partition.h>
 #include <esp_app_desc.h>
 #include <esp_ota_ops.h>
@@ -184,7 +185,17 @@ void SystemInfo::PrintTaskList() {
 }
 
 void SystemInfo::PrintHeapStats() {
-    int free_sram = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-    int min_free_sram = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
-    ESP_LOGI(TAG, "free sram: %u minimal sram: %u", free_sram, min_free_sram);
+    const size_t free_sram = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    const size_t min_free_sram = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
+    const size_t largest_sram = heap_caps_get_largest_free_block(
+        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    const size_t free_dma = heap_caps_get_free_size(MALLOC_CAP_DMA);
+    const size_t free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    ESP_LOGI(TAG,
+             "heap: internal=%u, minimum=%u, largest=%u, dma=%u, psram=%u",
+             static_cast<unsigned>(free_sram),
+             static_cast<unsigned>(min_free_sram),
+             static_cast<unsigned>(largest_sram),
+             static_cast<unsigned>(free_dma),
+             static_cast<unsigned>(free_psram));
 }

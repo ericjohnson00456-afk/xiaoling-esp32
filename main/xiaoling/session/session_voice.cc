@@ -14,6 +14,8 @@
 #include <opus.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <freertos/idf_additions.h>
+#include <esp_heap_caps.h>
 
 #include <cstring>
 #include <cctype>
@@ -29,8 +31,8 @@
 
 namespace {
 
-constexpr int kSubtitleHttpWaitMs = 5000;
-constexpr int kSubtitleHeaderMaxWaits = 12;
+constexpr int kSubtitleHttpWaitMs = 1500;
+constexpr int kSubtitleHeaderMaxWaits = 8;
 
 const char* ReadString(const cJSON* object, const char* name) {
     if (!cJSON_IsObject(object)) {
@@ -161,8 +163,17 @@ public:
                      static_cast<unsigned long>(generation));
             return;
         }
-        if (xTaskCreate(&TtsSubtitleFetcher::TaskEntry, "tts_subtitle", 8192,
-                        this, 3, nullptr) != pdPASS) {
+        worker_stack_external_ = true;
+        BaseType_t task_result = xTaskCreateWithCaps(
+            &TtsSubtitleFetcher::TaskEntry, "tts_subtitle", 8192,
+            this, 4, nullptr, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (task_result != pdPASS) {
+            worker_stack_external_ = false;
+            task_result = xTaskCreate(&TtsSubtitleFetcher::TaskEntry,
+                                      "tts_subtitle", 8192,
+                                      this, 4, nullptr);
+        }
+        if (task_result != pdPASS) {
             std::lock_guard<std::mutex> lock(mutex_);
             worker_running_ = false;
             pending_url_.clear();
@@ -195,10 +206,16 @@ private:
 
     static void TaskEntry(void* arg) {
         auto* owner = static_cast<TtsSubtitleFetcher*>(arg);
+        bool external_stack = false;
         if (owner != nullptr) {
             owner->WorkerLoop();
+            external_stack = owner->worker_stack_external_;
         }
-        vTaskDelete(nullptr);
+        if (external_stack) {
+            vTaskDeleteWithCaps(nullptr);
+        } else {
+            vTaskDelete(nullptr);
+        }
     }
 
     void WorkerLoop() {
@@ -381,10 +398,13 @@ private:
                     break;
                 }
                 ++read_errors;
-                ESP_LOGW(TAG, "字幕 HTTP Read 返回 %d: 连续错误=%d", bytes, read_errors);
+                if (read_errors == 1 || (read_errors % 5) == 0) {
+                    ESP_LOGW(TAG, "字幕 HTTP Read 返回 %d: 连续错误=%d", bytes,
+                             read_errors);
+                }
                 // -1 既可能是等待超时，也可能是临时连接异常；短暂超时不能
                 // 结束 SSE，否则长句的后半段会永远没有字幕。
-                if (read_errors >= 60) {
+                if (read_errors >= 20) {
                     ESP_LOGW(TAG, "字幕 HTTP 连续读取失败，结束请求");
                     break;
                 }
@@ -413,6 +433,7 @@ private:
     std::string pending_url_;
     uint32_t pending_generation_ = 0;
     std::string access_token_;
+    bool worker_stack_external_ = false;
 };
 
 namespace {
@@ -533,6 +554,9 @@ bool XiaolingSessionVoice::SendAudioBatch(
         return false;
     }
 
+    const uint32_t sequence = uplink_batch_sequence_.fetch_add(1) + 1;
+    const bool trace_batch = sequence <= 3 || (sequence % 50) == 1;
+
     // 唤醒音频在 start 之前到达，先缓存到服务端确认 started。
     if (!audio_upload_enabled_) {
         if (!pending_wake_word_.empty()) {
@@ -540,6 +564,16 @@ bool XiaolingSessionVoice::SendAudioBatch(
                 pending_wake_audio_.push_back(std::move(packet));
             }
             return true;
+        }
+        const uint32_t rejected = uplink_rejected_batches_.fetch_add(1) + 1;
+        if ((rejected % 10) == 1) {
+            ESP_LOGW(TAG,
+                     "上行链路[会话拒绝]: seq=%lu, packets=%u, rejected=%lu, "
+                     "session_active=%d, end_requested=%d",
+                     static_cast<unsigned long>(sequence),
+                     static_cast<unsigned>(packets.size()),
+                     static_cast<unsigned long>(rejected),
+                     session_active_.load() ? 1 : 0, end_requested_.load() ? 1 : 0);
         }
         return false;
     }
@@ -563,7 +597,21 @@ bool XiaolingSessionVoice::SendAudioBatch(
         framed.push_back(static_cast<uint8_t>(packet->payload.size() & 0xff));
         framed.insert(framed.end(), packet->payload.begin(), packet->payload.end());
     }
-    return binary_sender_(framed.data(), framed.size());
+    if (trace_batch) {
+        ESP_LOGI(TAG,
+                 "上行链路[协议封包]: seq=%lu, packets=%u, bytes=%u, "
+                 "session_active=%d, upload=%d",
+                 static_cast<unsigned long>(sequence),
+                 static_cast<unsigned>(packets.size()),
+                 static_cast<unsigned>(framed.size()),
+                 session_active_.load() ? 1 : 0, audio_upload_enabled_.load() ? 1 : 0);
+    }
+    const bool sent = binary_sender_(framed.data(), framed.size());
+    if (trace_batch || !sent) {
+        ESP_LOGI(TAG, "上行链路[协议发送返回]: seq=%lu, ok=%d",
+                 static_cast<unsigned long>(sequence), sent ? 1 : 0);
+    }
+    return sent;
 }
 
 void XiaolingSessionVoice::SendWakeWordDetected(const std::string& wake_word) {
@@ -647,7 +695,7 @@ void XiaolingSessionVoice::SendStartListening(ListeningMode mode) {
     }
 
     end_requested_ = false;
-    audio_upload_enabled_ = false;
+    SetAudioUploadEnabled(false, "send_start_prepare");
     uplink_audio_format_checked_ = false;
     if (event_group_ == nullptr) {
         if (error_callback_) {
@@ -687,7 +735,7 @@ void XiaolingSessionVoice::SendStopListening() {
         // server acknowledgement immediately on another core.
         end_requested_ = true;
         if (text_sender_("{\"action\":\"end\"}")) {
-            audio_upload_enabled_ = false;
+            SetAudioUploadEnabled(false, "send_end_ok");
         } else {
             end_requested_ = false;
         }
@@ -699,7 +747,7 @@ bool XiaolingSessionVoice::EndSession() {
     const bool sent = !was_active ||
         (text_sender_ && text_sender_("{\"action\":\"end\"}"));
 
-    audio_upload_enabled_ = false;
+    SetAudioUploadEnabled(false, "end_session");
     end_requested_ = false;
     pending_wake_word_.clear();
     pending_wake_audio_.clear();
@@ -804,9 +852,27 @@ void XiaolingSessionVoice::SendAbortSpeaking(AbortReason reason) {
     }
     CancelSubtitleStream(true);
     if (session_active_ && text_sender_ && text_sender_("{\"action\":\"cancel\"}")) {
-        audio_upload_enabled_ = false;
+        SetAudioUploadEnabled(false, "cancel_ok");
         SetSessionActive(false);
     }
+}
+
+void XiaolingSessionVoice::HandleIatBargeIn() {
+    // A new IAT belongs to the existing full-duplex session. Report the old
+    // reply cursor, but do not send action=cancel or disable audio upload: the
+    // cloud still needs the remainder of the user's new utterance.
+    PrepareAbortSpeaking(kAbortReasonWakeWordDetected);
+    SendFrozenReplyInterruption();
+    {
+        std::lock_guard<std::mutex> lock(subtitle_state_mutex_);
+        pending_subtitle_url_.clear();
+        tts_audio_pending_ = false;
+        tts_pipeline_running_ = false;
+        tts_audio_playing_ = false;
+        tts_audio_clock_ms_ = 0;
+    }
+    CancelSubtitleStream(true);
+    ESP_LOGI(TAG, "IAT 已打断 TTS 字幕，保持当前会话和音频上行");
 }
 
 bool XiaolingSessionVoice::FlushPendingWakeAudio() {
@@ -921,7 +987,7 @@ void XiaolingSessionVoice::HandleMessage(const cJSON* root) {
             ResetResultState();
         }
         SetSessionActive(true);
-        audio_upload_enabled_ = true;
+        SetAudioUploadEnabled(true, "cloud_started");
         if (event_group_ != nullptr) {
             xEventGroupSetBits(event_group_, kSessionStartedBit);
         }
@@ -931,7 +997,7 @@ void XiaolingSessionVoice::HandleMessage(const cJSON* root) {
     if (std::strcmp(action, "finish") == 0 ||
         std::strcmp(action, "closed") == 0 ||
         std::strcmp(action, "error") == 0) {
-        audio_upload_enabled_ = false;
+        SetAudioUploadEnabled(false, action);
         SetSessionActive(false);
         if (event_group_ != nullptr) {
             xEventGroupSetBits(event_group_, kSessionStartedBit);
@@ -985,7 +1051,7 @@ void XiaolingSessionVoice::HandleMessage(const cJSON* root) {
 }
 
 void XiaolingSessionVoice::Reset() {
-    audio_upload_enabled_ = false;
+    SetAudioUploadEnabled(false, "reset");
     end_requested_ = false;
     SetSessionActive(false);
     pending_wake_word_.clear();
@@ -1002,6 +1068,17 @@ void XiaolingSessionVoice::SetSessionActive(bool active) {
     if (session_state_callback_) {
         session_state_callback_(active);
     }
+}
+
+void XiaolingSessionVoice::SetAudioUploadEnabled(bool enabled, const char* reason) {
+    const bool previous = audio_upload_enabled_.exchange(enabled);
+    ESP_LOGI(TAG,
+             "上行链路[云端开关]: %d->%d, reason=%s, session_active=%d, "
+             "end_requested=%d, sid=%s",
+             previous ? 1 : 0, enabled ? 1 : 0,
+             reason != nullptr ? reason : "unknown",
+             session_active_.load() ? 1 : 0, end_requested_.load() ? 1 : 0,
+             session_id_.c_str());
 }
 
 void XiaolingSessionVoice::ResetResultState() {
@@ -1037,7 +1114,7 @@ void XiaolingSessionVoice::HandleIat(const cJSON* data) {
     if (is_last && end_requested_.load() && last_iat_text_.empty()) {
         iat_active_ = false;
         end_requested_ = false;
-        audio_upload_enabled_ = false;
+        SetAudioUploadEnabled(false, "empty_final_iat_after_end");
         SetSessionActive(false);
         return;
     }

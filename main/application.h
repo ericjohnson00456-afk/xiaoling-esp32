@@ -24,7 +24,6 @@
 
 // Main event bits
 #define MAIN_EVENT_SCHEDULE             (1 << 0)
-#define MAIN_EVENT_SEND_AUDIO           (1 << 1)
 #define MAIN_EVENT_WAKE_WORD_DETECTED   (1 << 2)
 #define MAIN_EVENT_VAD_CHANGE           (1 << 3)
 #define MAIN_EVENT_ERROR                (1 << 4)
@@ -83,6 +82,7 @@ public:
      * Schedule a callback to be executed in the main task
      */
     void Schedule(std::function<void()>&& callback);
+    void ScheduleUrgent(std::function<void()>&& callback);
 
     /**
      * Alert with status, message, emotion and optional localized tone name.
@@ -148,6 +148,7 @@ private:
     ~Application();
 
     std::mutex mutex_;
+    std::deque<std::function<void()>> main_urgent_tasks_;
     std::deque<std::function<void()>> main_tasks_;
     std::unique_ptr<XiaolingConn> xiaoling_conn_;
     EventGroupHandle_t event_group_ = nullptr;
@@ -226,6 +227,7 @@ private:
     void RestoreBackgroundMusicSession();
     void CancelWakeup();
     void PublishWifiIcon();
+    void LogUplinkDiagnostics(const char* phase);
     void PlayOtaTone(uint16_t tone_id, uint8_t repeat_count = 1);
     void PlayActivationAudio(uint16_t id);
 

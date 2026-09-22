@@ -27,7 +27,9 @@ public:
     /* 绑定 display 层创建好的显示设备（application 在板级初始化完成后调用） */
     void Initialize(Display* display);
     void SetTaskScheduler(std::function<void(std::function<void()>&&)> scheduler);
+    void SetUrgentTaskScheduler(std::function<void(std::function<void()>&&)> scheduler);
     void Dispatch(std::function<void()>&& task);
+    void DispatchUrgent(std::function<void()>&& task);
 
     bool initialized() const { return display_ != nullptr; }
     Display* display() const { return display_; }
@@ -56,4 +58,5 @@ private:
     LvglDisplay* lvgl_display_ = nullptr;
     std::unique_ptr<LegacyDisplayAdapter> legacy_display_adapter_;
     std::function<void(std::function<void()>&&)> task_scheduler_;
+    std::function<void(std::function<void()>&&)> urgent_task_scheduler_;
 };

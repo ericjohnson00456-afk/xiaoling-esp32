@@ -3,6 +3,7 @@
 #include "ui/nav_stack.h"
 #include "xiaoling/session/session_core.h"
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -68,6 +69,9 @@ private:
     void OnTtsPlaying();
     void OnTtsAudioProgress(uint32_t audio_clock_ms);
     void OnTtsStopped();
+    void QueueIatText(std::string text);
+    void DrainIatText();
+    void QueueTtsAudioProgress(uint32_t audio_clock_ms);
     void ResetSubtitles(bool clear_text);
     void ScheduleSubtitle();
     void StopBannerTimer();
@@ -85,6 +89,15 @@ private:
     size_t subtitle_index_ = 0;
     bool subtitle_audio_started_ = false;
     uint32_t subtitle_audio_clock_ms_ = 0;
+    std::atomic<uint32_t> tts_progress_generation_{0};
+    std::atomic<uint32_t> latest_tts_audio_clock_ms_{0};
+    std::atomic_bool tts_progress_dispatch_pending_{false};
+    std::mutex iat_text_mutex_;
+    std::string pending_iat_text_;
+    int64_t pending_iat_received_us_ = 0;
+    int64_t last_iat_delay_log_us_ = 0;
+    bool iat_dispatch_pending_ = false;
+    bool iat_text_visible_ = false;
     mutable std::mutex wake_word_mutex_;
     std::function<std::string()> wake_word_provider_;
     std::string last_emotion_;

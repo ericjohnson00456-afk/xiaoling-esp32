@@ -1,9 +1,12 @@
 #include "xiaoling_conn_websocket.h"
 
+#include "realtime_transport_scope.h"
+
 #include "board.h"
 #include "web_socket.h"
 
 #include <esp_log.h>
+#include <esp_timer.h>
 
 #include <utility>
 
@@ -20,6 +23,7 @@ XiaolingConnWebSocket::~XiaolingConnWebSocket() {
 bool XiaolingConnWebSocket::Connect(const std::string& url, const XiaolingWsHeaders& headers) {
     Disconnect();
     rx_binary_sequence_ = 0;
+    tx_binary_sequence_ = 0;
 
     auto network = Board::GetInstance().GetNetwork();
     if (network == nullptr) {
@@ -101,7 +105,13 @@ bool XiaolingConnWebSocket::IsConnected() const {
 }
 
 bool XiaolingConnWebSocket::SendText(const std::string& text) {
-    return IsConnected() && websocket_->Send(text);
+    if (!IsConnected()) {
+        return false;
+    }
+    // Control messages are short but must not pin their caller behind a
+    // congested socket. They get a slightly wider deadline than 20 ms audio.
+    RealtimeTransportScope deadline(250);
+    return websocket_->Send(text);
 }
 
 bool XiaolingConnWebSocket::SendBinary(const uint8_t* data, size_t size) {
@@ -110,9 +120,28 @@ bool XiaolingConnWebSocket::SendBinary(const uint8_t* data, size_t size) {
                  static_cast<unsigned>(size));
         return false;
     }
+    const uint32_t sequence = ++tx_binary_sequence_;
+    const bool trace_send = sequence <= 3 || (sequence % 50) == 1;
+    const int64_t started_us = esp_timer_get_time();
+    if (trace_send) {
+        ESP_LOGI(TAG, "上行链路[Socket写入开始]: seq=%lu, bytes=%u",
+                 static_cast<unsigned long>(sequence), static_cast<unsigned>(size));
+    }
+    RealtimeTransportScope deadline(120);
     if (!websocket_->Send(data, size, true)) {
         ESP_LOGE(TAG, "WS TX binary failed: bytes=%u", static_cast<unsigned>(size));
         return false;
+    }
+    const uint32_t elapsed_ms = static_cast<uint32_t>(
+        (esp_timer_get_time() - started_us) / 1000);
+    if (elapsed_ms >= 80) {
+        ESP_LOGW(TAG, "上行链路[Socket写入结束]: seq=%lu, bytes=%u, wait=%lums",
+                 static_cast<unsigned long>(sequence), static_cast<unsigned>(size),
+                 static_cast<unsigned long>(elapsed_ms));
+    } else if (trace_send) {
+        ESP_LOGI(TAG, "上行链路[Socket写入结束]: seq=%lu, bytes=%u, wait=%lums",
+                 static_cast<unsigned long>(sequence), static_cast<unsigned>(size),
+                 static_cast<unsigned long>(elapsed_ms));
     }
     return true;
 }
@@ -121,6 +150,7 @@ bool XiaolingConnWebSocket::Ping() {
     if (!IsConnected()) {
         return false;
     }
+    RealtimeTransportScope deadline(250);
     websocket_->Ping();
     return true;
 }

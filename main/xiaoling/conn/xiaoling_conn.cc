@@ -83,6 +83,7 @@ bool XiaolingConn::Connect() {
 
 void XiaolingConn::Disconnect() {
     ClearUplinkQueue();
+    ClearControlQueue();
     if (voice_ != nullptr) {
         voice_->Reset();
     }
@@ -104,8 +105,48 @@ bool XiaolingConn::CanUploadAudio() const {
     return voice_ != nullptr && voice_->audio_upload_enabled();
 }
 
+XiaolingUplinkDiagnostics XiaolingConn::GetUplinkDiagnostics() {
+    XiaolingUplinkDiagnostics diagnostics;
+    {
+        std::lock_guard<std::mutex> lock(uplink_mutex_);
+        diagnostics.queue = uplink_queue_.size();
+        diagnostics.dropped_packets = dropped_uplink_packets_;
+    }
+    diagnostics.connected = IsConnected();
+    diagnostics.session_active = session_active_.load();
+    diagnostics.upload_enabled = CanUploadAudio();
+    diagnostics.enqueued_packets = uplink_enqueued_packets_.load();
+    diagnostics.rejected_packets = uplink_rejected_packets_.load();
+    diagnostics.batches_started = uplink_batches_started_.load();
+    diagnostics.batches_completed = uplink_batches_completed_.load();
+    diagnostics.batches_failed = uplink_batches_failed_.load();
+    diagnostics.sent_frames = uplink_sent_frames_.load();
+    diagnostics.active_sequence = uplink_active_sequence_.load();
+    const int64_t send_started_us = uplink_send_started_us_.load();
+    diagnostics.send_in_progress = send_started_us != 0;
+    if (send_started_us != 0) {
+        diagnostics.active_send_ms = (esp_timer_get_time() - send_started_us) / 1000;
+    }
+    const int64_t last_completed_us = uplink_last_send_completed_us_.load();
+    if (last_completed_us != 0) {
+        diagnostics.last_send_completed_ms =
+            (esp_timer_get_time() - last_completed_us) / 1000;
+    }
+    return diagnostics;
+}
+
 bool XiaolingConn::SendAudio(std::unique_ptr<AudioStreamPacket> packet) {
     if (packet == nullptr || packet->payload.empty() || !IsConnected()) {
+        const uint32_t rejected = uplink_rejected_packets_.fetch_add(1) + 1;
+        if ((rejected % 25) == 1) {
+            ESP_LOGW(TAG,
+                     "上行链路[连接拒绝]: count=%lu, packet=%d, bytes=%u, "
+                     "connected=%d, transport=%d, protocol=%d, error=%d",
+                     static_cast<unsigned long>(rejected), packet != nullptr ? 1 : 0,
+                     packet != nullptr ? static_cast<unsigned>(packet->payload.size()) : 0,
+                     IsConnected() ? 1 : 0, transport_connected_.load() ? 1 : 0,
+                     protocol_connected_.load() ? 1 : 0, error_occurred_ ? 1 : 0);
+        }
         return false;
     }
 
@@ -123,6 +164,7 @@ bool XiaolingConn::SendAudio(std::unique_ptr<AudioStreamPacket> packet) {
             }
         }
         uplink_queue_.push_back(std::move(packet));
+        uplink_enqueued_packets_.fetch_add(1);
     }
     if (wake_sender && task_handle_ != nullptr) {
         xTaskNotifyGive(task_handle_);
@@ -165,6 +207,12 @@ void XiaolingConn::PrepareAbortSpeaking(AbortReason reason) {
 void XiaolingConn::SendAbortSpeaking(AbortReason reason) {
     if (voice_ != nullptr) {
         voice_->SendAbortSpeaking(reason);
+    }
+}
+
+void XiaolingConn::HandleIatBargeIn() {
+    if (voice_ != nullptr) {
+        voice_->HandleIatBargeIn();
     }
 }
 
@@ -213,9 +261,11 @@ void XiaolingConn::OnDisconnected(std::function<void()> callback) {
 bool XiaolingConn::StartSupervisor() {
     desired_connected_ = true;
     if (!running_.exchange(true)) {
-        // TLS writes may wait for socket capacity. Keep this task at the app
-        // priority so a slow uplink cannot starve UI and receive processing.
-        if (xTaskCreate(TaskEntry, "xiaoling_conn", 6144, this, 1, &task_handle_) != pdPASS) {
+        // Uplink audio is latency-sensitive in full duplex. Run above the
+        // capture/codec and subtitle workers, but below PCM playback so AEC
+        // packets keep flowing while HTTP TTS is decoded and rendered.
+        if (xTaskCreate(TaskEntry, "xiaoling_conn", 6144, this,
+                        kUplinkTaskPriority, &task_handle_) != pdPASS) {
             ESP_LOGE(TAG, "创建小聆连接管理任务失败");
             task_handle_ = nullptr;
             running_ = false;
@@ -260,8 +310,26 @@ void XiaolingConn::StopSupervisor() {
 
 bool XiaolingConn::SendBinary(const uint8_t* data, size_t size) {
     bool sent = false;
+    const uint32_t sequence = uplink_active_sequence_.load();
+    const bool trace_send = sequence <= 3 || (sequence % 50) == 1;
+    const int64_t lock_started_us = esp_timer_get_time();
+    if (trace_send) {
+        ESP_LOGI(TAG, "上行链路[WS锁等待]: seq=%lu, bytes=%u",
+                 static_cast<unsigned long>(sequence), static_cast<unsigned>(size));
+    }
     {
         std::lock_guard<std::mutex> lock(websocket_mutex_);
+        const uint32_t lock_wait_ms = static_cast<uint32_t>(
+            (esp_timer_get_time() - lock_started_us) / 1000);
+        if (lock_wait_ms >= 80) {
+            ESP_LOGW(TAG, "上行链路[WS锁获得]: seq=%lu, wait=%lums, socket=%d",
+                     static_cast<unsigned long>(sequence),
+                     static_cast<unsigned long>(lock_wait_ms), websocket_ != nullptr ? 1 : 0);
+        } else if (trace_send) {
+            ESP_LOGI(TAG, "上行链路[WS锁获得]: seq=%lu, wait=%lums, socket=%d",
+                     static_cast<unsigned long>(sequence),
+                     static_cast<unsigned long>(lock_wait_ms), websocket_ != nullptr ? 1 : 0);
+        }
         sent = websocket_ != nullptr && websocket_->SendBinary(data, size);
     }
     if (!sent) {
@@ -280,6 +348,34 @@ void XiaolingConn::SetSessionActive(bool active) {
 void XiaolingConn::ClearUplinkQueue() {
     std::lock_guard<std::mutex> lock(uplink_mutex_);
     uplink_queue_.clear();
+}
+
+void XiaolingConn::ClearControlQueue() {
+    std::lock_guard<std::mutex> lock(control_mutex_);
+    control_queue_.clear();
+}
+
+bool XiaolingConn::SendPendingControl() {
+    std::string text;
+    {
+        std::lock_guard<std::mutex> lock(control_mutex_);
+        if (control_queue_.empty()) {
+            return false;
+        }
+        text = std::move(control_queue_.front());
+        control_queue_.pop_front();
+    }
+
+    bool sent = false;
+    {
+        std::lock_guard<std::mutex> lock(websocket_mutex_);
+        sent = websocket_ != nullptr && websocket_->SendText(text);
+    }
+    if (!sent) {
+        ESP_LOGW(TAG, "WebSocket 控制消息发送失败，触发链路重连");
+        HandleTransportDisconnected(generation_.load());
+    }
+    return true;
 }
 
 bool XiaolingConn::SendPendingAudio() {
@@ -302,6 +398,7 @@ bool XiaolingConn::SendPendingAudio() {
     std::vector<std::unique_ptr<AudioStreamPacket>> packets;
     packets.reserve(kUplinkBatchPackets);
     uint32_t duration_ms = 0;
+    size_t queued_after_pop = 0;
     {
         std::lock_guard<std::mutex> lock(uplink_mutex_);
         while (!uplink_queue_.empty() && packets.size() < kUplinkBatchPackets) {
@@ -312,6 +409,7 @@ bool XiaolingConn::SendPendingAudio() {
             packets.push_back(std::move(uplink_queue_.front()));
             uplink_queue_.pop_front();
         }
+        queued_after_pop = uplink_queue_.size();
     }
 
     if (!running_ || !desired_connected_ || packets.empty()) {
@@ -319,21 +417,58 @@ bool XiaolingConn::SendPendingAudio() {
     }
     const size_t packet_count = packets.size();
     const int64_t send_started_us = esp_timer_get_time();
+    const uint32_t sequence = uplink_batches_started_.fetch_add(1) + 1;
+    uplink_active_sequence_.store(sequence);
+    uplink_send_started_us_.store(send_started_us);
+    const bool trace_batch = sequence <= 3 || (sequence % 50) == 1;
+    if (trace_batch) {
+        ESP_LOGI(TAG,
+                 "上行链路[WS开始]: seq=%lu, frames=%u, audio=%lums, queue_after=%u, "
+                 "connected=%d, session=%d, upload=%d, task_prio=%u",
+                 static_cast<unsigned long>(sequence),
+                 static_cast<unsigned>(packet_count),
+                 static_cast<unsigned long>(duration_ms),
+                 static_cast<unsigned>(queued_after_pop),
+                 IsConnected() ? 1 : 0, session_active_.load() ? 1 : 0,
+                 CanUploadAudio() ? 1 : 0,
+                 static_cast<unsigned>(uxTaskPriorityGet(nullptr)));
+    }
     const bool sent = voice_ != nullptr && voice_->SendAudioBatch(std::move(packets));
     const uint32_t send_elapsed_ms = static_cast<uint32_t>(
         (esp_timer_get_time() - send_started_us) / 1000);
-    if (send_elapsed_ms >= 200) {
+    uplink_send_started_us_.store(0);
+    uplink_last_send_completed_us_.store(esp_timer_get_time());
+    uplink_batches_completed_.fetch_add(1);
+    if (sent) {
+        uplink_sent_frames_.fetch_add(packet_count);
+    } else {
+        uplink_batches_failed_.fetch_add(1);
+    }
+    if (send_elapsed_ms >= 80 || !sent) {
         size_t queued = 0;
         {
             std::lock_guard<std::mutex> lock(uplink_mutex_);
             queued = uplink_queue_.size();
         }
         ESP_LOGW(TAG,
-                 "上行 WebSocket 发送较慢: frames=%u, audio=%lums, wait=%lums, queued=%u, ok=%d",
+                 "上行链路[WS结束]: seq=%lu, frames=%u, audio=%lums, wait=%lums, "
+                 "queued=%u, ok=%d, completed=%lu, failed=%lu",
+                 static_cast<unsigned long>(sequence),
                  static_cast<unsigned>(packet_count),
                  static_cast<unsigned long>(duration_ms),
                  static_cast<unsigned long>(send_elapsed_ms),
-                 static_cast<unsigned>(queued), sent ? 1 : 0);
+                 static_cast<unsigned>(queued), sent ? 1 : 0,
+                 static_cast<unsigned long>(uplink_batches_completed_.load()),
+                 static_cast<unsigned long>(uplink_batches_failed_.load()));
+    } else if (trace_batch) {
+        ESP_LOGI(TAG,
+                 "上行链路[WS结束]: seq=%lu, frames=%u, audio=%lums, wait=%lums, "
+                 "queued=%u, ok=%d",
+                 static_cast<unsigned long>(sequence),
+                 static_cast<unsigned>(packet_count),
+                 static_cast<unsigned long>(duration_ms),
+                 static_cast<unsigned long>(send_elapsed_ms),
+                 static_cast<unsigned>(queued_after_pop), sent ? 1 : 0);
     }
     if (sent && on_audio_sent_) {
         on_audio_sent_(duration_ms);
@@ -389,6 +524,13 @@ void XiaolingConn::Run() {
                 }
                 last_heartbeat_us_ = now;
             }
+        }
+
+        if (desired_connected_ && transport_connected_ && protocol_connected_ &&
+            SendPendingControl()) {
+            // Control frames (start/end/interruption/MCP) are sparse and must
+            // be observed before another batch of realtime audio.
+            continue;
         }
 
         if (desired_connected_ && transport_connected_ && protocol_connected_ &&
@@ -495,6 +637,8 @@ void XiaolingConn::HandleTransportDisconnected(uint32_t generation) {
     }
     const bool was_transport_connected = transport_connected_.exchange(false);
     session_active_ = false;
+    ClearUplinkQueue();
+    ClearControlQueue();
     if (voice_ != nullptr) {
         voice_->Reset();
     }

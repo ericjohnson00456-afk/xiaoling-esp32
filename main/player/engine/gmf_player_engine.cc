@@ -10,6 +10,8 @@
 #include <esp_gmf_io_embed_flash.h>
 #include <esp_gmf_io_http.h>
 #include <esp_gmf_pipeline.h>
+#include <esp_heap_caps.h>
+#include <freertos/idf_additions.h>
 
 #include <cstring>
 #include <strings.h>
@@ -25,6 +27,13 @@ namespace {
 // to absorb short cloud-generation stalls.
 constexpr size_t kStreamingHttpReadSize = 1024;
 constexpr size_t kStreamingHttpBufferSize = 32 * 1024;
+constexpr size_t kPlayerCommandStackSize = 4096;
+constexpr UBaseType_t kPlayerCommandPriority = 8;
+#if CONFIG_FREERTOS_NUMBER_OF_CORES > 1
+constexpr BaseType_t kPlayerCommandCore = 1;
+#else
+constexpr BaseType_t kPlayerCommandCore = tskNO_AFFINITY;
+#endif
 
 std::string UrlHostForLog(const std::string& url) {
     const auto scheme_end = url.find("://");
@@ -61,6 +70,11 @@ int GmfPlayerEngine::ConfigureInputIo(esp_asp_handle_t handle, void* ctx) {
         // it and creates its task/data bus. This overrides the generic HTTP
         // defaults only for playback, without patching managed_components.
         auto* io = static_cast<esp_gmf_io_t*>(input);
+        // Keep TTS network work away from the core-0 AFE path. The audio
+        // output task remains above it at priority 10.
+        io->io_cfg.thread.prio = 9;
+        io->io_cfg.thread.core = kPlayerCommandCore;
+        io->io_cfg.thread.stack_in_ext = true;
         io->io_cfg.buffer_cfg.io_size = kStreamingHttpReadSize;
         io->io_cfg.buffer_cfg.buffer_size = kStreamingHttpBufferSize;
         // 在音频 TCP/TLS 已连接且 GET 已写出之后通知上层。字幕连接可从
@@ -97,11 +111,12 @@ int GmfPlayerEngine::ConfigureInputIo(esp_asp_handle_t handle, void* ctx) {
 }
 
 GmfPlayerEngine::~GmfPlayerEngine() {
+    StopCommandTask();
     if (handle_ == nullptr) {
         return;
     }
     if (IsPlaying()) {
-        Stop(PlaybackEndReason::kCancelled);
+        DoStop(PlaybackEndReason::kCancelled);
     }
     esp_audio_simple_player_destroy(handle_);
     handle_ = nullptr;
@@ -133,7 +148,10 @@ bool GmfPlayerEngine::Initialize(AudioService* audio_service, EventCallback call
     config.task_prio = 9;
     config.task_stack = 8 * 1024;
     config.task_core = 1;
-    config.task_stack_in_ext = false;
+    // The decoder task has an 8 KiB stack. Keeping it in PSRAM preserves
+    // scarce internal SRAM for Wi-Fi/lwIP and DMA during three concurrent
+    // TLS streams.
+    config.task_stack_in_ext = true;
     config.prev = ConfigureInputIo;
     config.prev_ctx = this;
 
@@ -152,6 +170,26 @@ bool GmfPlayerEngine::Initialize(AudioService* audio_service, EventCallback call
 
     audio_service_ = audio_service;
     event_callback_ = std::move(callback);
+    command_task_running_ = true;
+    command_task_finished_ = false;
+    command_task_stack_external_ = true;
+    BaseType_t task_result = xTaskCreatePinnedToCoreWithCaps(
+        CommandTaskEntry, "player_ctl", kPlayerCommandStackSize, this,
+        kPlayerCommandPriority, &command_task_handle_, kPlayerCommandCore,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (task_result != pdPASS) {
+        command_task_stack_external_ = false;
+        task_result = xTaskCreatePinnedToCore(
+            CommandTaskEntry, "player_ctl", kPlayerCommandStackSize, this,
+            kPlayerCommandPriority, &command_task_handle_, kPlayerCommandCore);
+    }
+    if (task_result != pdPASS) {
+        ESP_LOGE(TAG, "创建播放器控制任务失败");
+        command_task_running_ = false;
+        esp_audio_simple_player_destroy(handle_);
+        handle_ = nullptr;
+        return false;
+    }
     initialized_ = true;
     ESP_LOGI(TAG, "流式播放器就绪: output=%d Hz/%d ch/%d bit",
              CONFIG_AUDIO_SIMPLE_PLAYER_RESAMPLE_DEST_RATE,
@@ -166,8 +204,17 @@ bool GmfPlayerEngine::Play(const PlaybackRequest& request) {
         return false;
     }
 
-    if (IsPlaying() && !Stop(PlaybackEndReason::kPreempted)) {
+    command_pending_playback_ = true;
+    return Enqueue(Command{
+        .type = CommandType::kPlay,
+        .request = request,
+    });
+}
+
+bool GmfPlayerEngine::DoPlay(const PlaybackRequest& request) {
+    if (IsPlaying() && !DoStop(PlaybackEndReason::kPreempted)) {
         ESP_LOGE(TAG, "无法停止当前播放会话");
+        command_pending_playback_ = false;
         return false;
     }
 
@@ -190,6 +237,7 @@ bool GmfPlayerEngine::Play(const PlaybackRequest& request) {
     output_chunks_ = 0;
     const auto result = esp_audio_simple_player_run(handle_, request.source.c_str(), nullptr);
     if (result == ESP_GMF_ERR_OK) {
+        command_pending_playback_ = false;
         ESP_LOGI(TAG, "GMF run 已提交: session=%lu, elapsed=%lums",
                  static_cast<unsigned long>(request.session_id),
                  static_cast<unsigned long>(esp_log_timestamp() - playback_started_ms_));
@@ -204,6 +252,7 @@ bool GmfPlayerEngine::Play(const PlaybackRequest& request) {
         draining_ = false;
     }
     audio_service_->ClearPlaybackQueue();
+    command_pending_playback_ = false;
     Emit(PlaybackEvent{
         .session_id = request.session_id,
         .channel = request.channel,
@@ -214,6 +263,10 @@ bool GmfPlayerEngine::Play(const PlaybackRequest& request) {
 }
 
 bool GmfPlayerEngine::Pause() {
+    return Enqueue(Command{.type = CommandType::kPause});
+}
+
+bool GmfPlayerEngine::DoPause() {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!initialized_ || handle_ == nullptr || !playing_) {
         return false;
@@ -222,6 +275,10 @@ bool GmfPlayerEngine::Pause() {
 }
 
 bool GmfPlayerEngine::Resume() {
+    return Enqueue(Command{.type = CommandType::kResume});
+}
+
+bool GmfPlayerEngine::DoResume() {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!initialized_ || handle_ == nullptr || !playing_) {
         return false;
@@ -230,6 +287,14 @@ bool GmfPlayerEngine::Resume() {
 }
 
 bool GmfPlayerEngine::Stop(PlaybackEndReason reason) {
+    command_pending_playback_ = false;
+    return Enqueue(Command{
+        .type = CommandType::kStop,
+        .reason = reason,
+    });
+}
+
+bool GmfPlayerEngine::DoStop(PlaybackEndReason reason) {
     bool drain_only = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -259,7 +324,93 @@ bool GmfPlayerEngine::Stop(PlaybackEndReason reason) {
 
 bool GmfPlayerEngine::IsPlaying() const {
     std::lock_guard<std::mutex> lock(mutex_);
-    return playing_ || draining_;
+    return playing_ || draining_ || command_pending_playback_.load();
+}
+
+bool GmfPlayerEngine::Enqueue(Command command) {
+    if (!command_task_running_ || command_task_handle_ == nullptr) {
+        return false;
+    }
+    {
+        std::lock_guard<std::mutex> lock(command_mutex_);
+        // Multiple interruption sources can request the same stop. A single
+        // pending stop is sufficient and avoids repeatedly entering GMF.
+        if (command.type == CommandType::kStop && !command_queue_.empty() &&
+            command_queue_.back().type == CommandType::kStop) {
+            command_queue_.back().reason = command.reason;
+            return true;
+        }
+        command_queue_.push_back(std::move(command));
+    }
+    xTaskNotifyGive(command_task_handle_);
+    return true;
+}
+
+void GmfPlayerEngine::CommandTaskEntry(void* arg) {
+    auto* engine = static_cast<GmfPlayerEngine*>(arg);
+    engine->CommandLoop();
+    const bool external_stack = engine->command_task_stack_external_;
+    engine->command_task_finished_ = true;
+    if (external_stack) {
+        vTaskDeleteWithCaps(nullptr);
+    } else {
+        vTaskDelete(nullptr);
+    }
+}
+
+void GmfPlayerEngine::CommandLoop() {
+    while (command_task_running_) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        while (command_task_running_) {
+            Command command;
+            {
+                std::lock_guard<std::mutex> lock(command_mutex_);
+                if (command_queue_.empty()) {
+                    break;
+                }
+                command = std::move(command_queue_.front());
+                command_queue_.pop_front();
+            }
+            switch (command.type) {
+                case CommandType::kPlay:
+                    DoPlay(command.request);
+                    break;
+                case CommandType::kPause:
+                    DoPause();
+                    break;
+                case CommandType::kResume:
+                    DoResume();
+                    break;
+                case CommandType::kStop:
+                    DoStop(command.reason);
+                    break;
+                case CommandType::kShutdown:
+                    DoStop(PlaybackEndReason::kCancelled);
+                    command_task_running_ = false;
+                    break;
+            }
+        }
+    }
+}
+
+void GmfPlayerEngine::StopCommandTask() {
+    if (!command_task_running_ || command_task_handle_ == nullptr) {
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(command_mutex_);
+        command_queue_.clear();
+        command_queue_.push_back(Command{.type = CommandType::kShutdown});
+    }
+    xTaskNotifyGive(command_task_handle_);
+    for (int i = 0; i < 300 && !command_task_finished_.load(); ++i) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    if (!command_task_finished_.load()) {
+        ESP_LOGE(TAG, "播放器控制任务退出超时");
+    } else {
+        command_task_handle_ = nullptr;
+    }
 }
 
 int GmfPlayerEngine::OutputCallback(uint8_t* data, int data_size, void* ctx) {
@@ -369,6 +520,7 @@ int GmfPlayerEngine::HandleEvent(esp_asp_event_pkt_t* event) {
             case ESP_ASP_STATE_STOPPED:
                 playing_ = false;
                 draining_ = false;
+                command_pending_playback_ = false;
                 playback_event.state = PlaybackState::kStopped;
                 playback_event.reason = stop_reason_ == PlaybackEndReason::kNone
                                             ? PlaybackEndReason::kCancelled
@@ -377,12 +529,14 @@ int GmfPlayerEngine::HandleEvent(esp_asp_event_pkt_t* event) {
             case ESP_ASP_STATE_FINISHED:
                 playing_ = false;
                 draining_ = true;
+                command_pending_playback_ = false;
                 playback_event.state = PlaybackState::kCompleted;
                 playback_event.reason = PlaybackEndReason::kNaturalEnd;
                 break;
             case ESP_ASP_STATE_ERROR:
                 playing_ = false;
                 draining_ = false;
+                command_pending_playback_ = false;
                 playback_event.state = PlaybackState::kFailed;
                 playback_event.reason = PlaybackEndReason::kFailed;
                 break;

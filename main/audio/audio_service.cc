@@ -1,6 +1,8 @@
 #include "audio_service.h"
 #include "xiaoling/conn/xiaoling_config.h"
 #include <esp_log.h>
+#include <esp_heap_caps.h>
+#include <freertos/idf_additions.h>
 #include <algorithm>
 #include <climits>
 #include <cstring>
@@ -58,6 +60,8 @@ void AudioService::Initialize(AudioCodec* codec) {
 #endif
 
     audio_processor_->OnOutput([this](std::vector<int16_t>&& data) {
+        uplink_afe_frames_.fetch_add(1);
+        uplink_last_afe_ms_.store(esp_log_timestamp());
 #if CONFIG_USE_MICRO_WAKE_WORD
         if (wake_uses_processor_output_.load() && IsWakeWordRunning()) {
             std::lock_guard<std::mutex> lock(processed_wake_mutex_);
@@ -140,12 +144,21 @@ void AudioService::Start() {
     }, "opus_codec", 2048 * 13, this, 8, &opus_codec_task_handle_);
 
 #if CONFIG_USE_MICRO_WAKE_WORD
-    xTaskCreatePinnedToCore([](void* arg) {
+    BaseType_t wake_task_result = xTaskCreatePinnedToCoreWithCaps([](void* arg) {
         AudioService* audio_service = (AudioService*)arg;
         audio_service->ProcessedWakeTask();
-        vTaskDelete(NULL);
-    }, "processed_wake", 2048 * 3, this, 8,
-       &processed_wake_task_handle_, 0);
+        vTaskDeleteWithCaps(nullptr);
+    }, "processed_wake", 2048 * 3, this, 5,
+       &processed_wake_task_handle_, 0, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (wake_task_result != pdPASS) {
+        ESP_LOGW(TAG, "PSRAM 唤醒任务栈分配失败，回退内部 SRAM");
+        xTaskCreatePinnedToCore([](void* arg) {
+            AudioService* audio_service = (AudioService*)arg;
+            audio_service->ProcessedWakeTask();
+            vTaskDelete(nullptr);
+        }, "processed_wake", 2048 * 3, this, 5,
+           &processed_wake_task_handle_, 0);
+    }
 #endif
 }
 
@@ -220,6 +233,8 @@ bool AudioService::ReadAudioData(std::vector<int16_t>& data, int sample_rate, in
     /* Update the last input time */
     last_input_time_ = std::chrono::steady_clock::now();
     debug_statistics_.input_count++;
+    uplink_mic_reads_.fetch_add(1);
+    uplink_last_mic_ms_.store(esp_log_timestamp());
 
     return true;
 }
@@ -363,6 +378,10 @@ void AudioService::ProcessedWakeTask() {
 #endif
             wake_word_->Feed(data);
         }
+        // The streaming model can remain continuously runnable while AEC is
+        // feeding it during TTS. Yield for one tick so the CPU0 application/UI
+        // task and idle watchdog are not starved by wake-word inference.
+        vTaskDelay(1);
     }
     ESP_LOGW(TAG, "Processed wake task stopped");
 }
@@ -568,6 +587,9 @@ void AudioService::OpusCodecTask() {
         if (!audio_encode_queue_.empty() && audio_send_queue_.size() < MAX_SEND_PACKETS_IN_QUEUE) {
             auto task = std::move(audio_encode_queue_.front());
             audio_encode_queue_.pop_front();
+            if (task->type == kAudioTaskTypeEncodeToSendQueue) {
+                uplink_encode_dequeued_.fetch_add(1);
+            }
             audio_queue_cv_.notify_all();
             lock.unlock();
 
@@ -606,9 +628,13 @@ void AudioService::OpusCodecTask() {
                     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
                     if (uplink_enabled_ && task->uplink_generation == uplink_generation_) {
                         audio_send_queue_.push_back(std::move(packet));
+                        uplink_encoded_packets_.fetch_add(1);
+                        uplink_last_encoded_ms_.store(esp_log_timestamp());
                     }
                 }
                 if (callbacks_.on_send_queue_available) {
+                    uplink_send_notifications_.fetch_add(1);
+                    uplink_last_notification_ms_.store(esp_log_timestamp());
                     callbacks_.on_send_queue_available();
                 }
             } else if (task->type == kAudioTaskTypeEncodeToTestingQueue) {
@@ -688,10 +714,18 @@ void AudioService::PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t
         // its input ringbuffer overflow and breaks barge-in. Dropping one old
         // frame is preferable to stalling the microphone pipeline.
         audio_encode_queue_.pop_front();
-        static uint32_t dropped_uplink_frames = 0;
-        if ((++dropped_uplink_frames % 25) == 1) {
-            ESP_LOGW(TAG, "上行编码队列满，丢弃旧帧: count=%lu",
-                     static_cast<unsigned long>(dropped_uplink_frames));
+        const uint32_t dropped_uplink_frames =
+            uplink_dropped_encode_frames_.fetch_add(1) + 1;
+        if ((dropped_uplink_frames % 25) == 1) {
+            ESP_LOGW(TAG,
+                     "上行编码队列满，丢弃旧帧: count=%lu, encode_q=%u, send_q=%u, "
+                     "afe=%lu, encoded=%lu, popped=%lu",
+                     static_cast<unsigned long>(dropped_uplink_frames),
+                     static_cast<unsigned>(audio_encode_queue_.size()),
+                     static_cast<unsigned>(audio_send_queue_.size()),
+                     static_cast<unsigned long>(uplink_afe_frames_.load()),
+                     static_cast<unsigned long>(uplink_encoded_packets_.load()),
+                     static_cast<unsigned long>(uplink_popped_packets_.load()));
         }
     }
     audio_queue_cv_.wait(lock, [this, &task]() {
@@ -846,13 +880,35 @@ std::unique_ptr<AudioStreamPacket> AudioService::PopPacketFromSendQueue() {
     }
     auto packet = std::move(audio_send_queue_.front());
     audio_send_queue_.pop_front();
+    uplink_popped_packets_.fetch_add(1);
+    uplink_last_popped_ms_.store(esp_log_timestamp());
     audio_queue_cv_.notify_all();
     return packet;
 }
 
-bool AudioService::HasPendingSendPackets() {
-    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
-    return !audio_send_queue_.empty();
+AudioUplinkDiagnostics AudioService::GetUplinkDiagnostics() {
+    AudioUplinkDiagnostics diagnostics;
+    {
+        std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+        diagnostics.upload_enabled = uplink_enabled_;
+        diagnostics.generation = uplink_generation_;
+        diagnostics.encode_queue = audio_encode_queue_.size();
+        diagnostics.send_queue = audio_send_queue_.size();
+    }
+    diagnostics.processor_running = IsAudioProcessorRunning();
+    diagnostics.mic_reads = uplink_mic_reads_.load();
+    diagnostics.afe_frames = uplink_afe_frames_.load();
+    diagnostics.encode_dequeued = uplink_encode_dequeued_.load();
+    diagnostics.encoded_packets = uplink_encoded_packets_.load();
+    diagnostics.send_notifications = uplink_send_notifications_.load();
+    diagnostics.popped_packets = uplink_popped_packets_.load();
+    diagnostics.dropped_encode_frames = uplink_dropped_encode_frames_.load();
+    diagnostics.last_mic_ms = uplink_last_mic_ms_.load();
+    diagnostics.last_afe_ms = uplink_last_afe_ms_.load();
+    diagnostics.last_encoded_ms = uplink_last_encoded_ms_.load();
+    diagnostics.last_notification_ms = uplink_last_notification_ms_.load();
+    diagnostics.last_popped_ms = uplink_last_popped_ms_.load();
+    return diagnostics;
 }
 
 void AudioService::EncodeWakeWord() {
@@ -939,10 +995,17 @@ void AudioService::PauseWakeWordDetection() {
 }
 
 void AudioService::EnableAudioUpload(bool enable) {
+    bool previous = false;
+    size_t encode_before = 0;
+    size_t send_before = 0;
+    uint32_t generation = 0;
     {
         std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+        previous = uplink_enabled_;
+        encode_before = audio_encode_queue_.size();
+        send_before = audio_send_queue_.size();
         uplink_enabled_ = enable;
-        ++uplink_generation_;
+        generation = ++uplink_generation_;
         if (!enable) {
             audio_encode_queue_.clear();
             audio_send_queue_.clear();
@@ -950,6 +1013,14 @@ void AudioService::EnableAudioUpload(bool enable) {
         }
         audio_queue_cv_.notify_all();
     }
+    ESP_LOGI(TAG,
+             "上行链路[本地开关]: %d->%d, generation=%lu, cleared=encode:%u/send:%u, "
+             "processor=%d",
+             previous ? 1 : 0, enable ? 1 : 0,
+             static_cast<unsigned long>(generation),
+             static_cast<unsigned>(enable ? 0 : encode_before),
+             static_cast<unsigned>(enable ? 0 : send_before),
+             IsAudioProcessorRunning() ? 1 : 0);
 }
 
 void AudioService::EnableVoiceProcessing(bool enable) {

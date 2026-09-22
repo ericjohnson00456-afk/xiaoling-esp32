@@ -42,11 +42,24 @@ void UiManager::SetTaskScheduler(std::function<void(std::function<void()>&&)> sc
     task_scheduler_ = std::move(scheduler);
 }
 
+void UiManager::SetUrgentTaskScheduler(
+        std::function<void(std::function<void()>&&)> scheduler) {
+    urgent_task_scheduler_ = std::move(scheduler);
+}
+
 void UiManager::Dispatch(std::function<void()>&& task) {
     if (task_scheduler_) {
         task_scheduler_(std::move(task));
     } else if (task) {
         task();
+    }
+}
+
+void UiManager::DispatchUrgent(std::function<void()>&& task) {
+    if (urgent_task_scheduler_) {
+        urgent_task_scheduler_(std::move(task));
+    } else {
+        Dispatch(std::move(task));
     }
 }
 

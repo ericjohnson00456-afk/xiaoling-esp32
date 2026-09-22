@@ -145,6 +145,9 @@ void Application::Initialize() {
     ui_manager.SetTaskScheduler([this](std::function<void()>&& task) {
         Schedule(std::move(task));
     });
+    ui_manager.SetUrgentTaskScheduler([this](std::function<void()>&& task) {
+        ScheduleUrgent(std::move(task));
+    });
 #if CONFIG_LSPLATFORM_BANNERS
     HomePresenter::GetInstance().SetWakeWordProvider([this]() {
         return audio_service_.GetWakeWordName();
@@ -286,7 +289,24 @@ void Application::Initialize() {
 
     AudioServiceCallbacks callbacks;
     callbacks.on_send_queue_available = [this]() {
-        xEventGroupSetBits(event_group_, MAIN_EVENT_SEND_AUDIO);
+        // This callback runs after Opus encoding, outside AudioService's queue
+        // lock. XiaolingConn::SendAudio only moves the packet into its bounded
+        // queue and wakes the network worker; it never performs a socket write.
+        // Keeping this handoff off the low-priority application/UI task is
+        // essential during TTS, where UI/subtitle work can delay that task for
+        // seconds and previously filled the 2.4 s AudioService send queue.
+        auto* connection = xiaoling_conn_.get();
+        if (connection == nullptr) {
+            return;
+        }
+        constexpr size_t kMaxDirectHandoffPackets = 8;
+        for (size_t i = 0; i < kMaxDirectHandoffPackets; ++i) {
+            auto packet = audio_service_.PopPacketFromSendQueue();
+            if (packet == nullptr) {
+                break;
+            }
+            connection->SendAudio(std::move(packet));
+        }
     };
     callbacks.on_wake_word_detected = [this](const std::string& wake_word) {
         xEventGroupSetBits(event_group_, MAIN_EVENT_WAKE_WORD_DETECTED);
@@ -398,9 +418,16 @@ void Application::Initialize() {
 }
 
 void Application::Run() {
+    // app_main also owns the serialized UI dispatcher. Priority 1 allowed
+    // continuous wake inference and network callbacks to postpone IAT/subtitle
+    // rendering for more than a second. Keep it below every realtime audio
+    // stage but above background subtitle/network maintenance.
+    constexpr UBaseType_t kApplicationUiPriority = 5;
+    vTaskPrioritySet(nullptr, kApplicationUiPriority);
+    ESP_LOGI(TAG, "应用/UI 调度优先级: %u",
+             static_cast<unsigned>(kApplicationUiPriority));
     const EventBits_t ALL_EVENTS =
         MAIN_EVENT_SCHEDULE |
-        MAIN_EVENT_SEND_AUDIO |
         MAIN_EVENT_WAKE_WORD_DETECTED |
         MAIN_EVENT_VAD_CHANGE |
         MAIN_EVENT_CLOCK_TICK |
@@ -412,7 +439,6 @@ void Application::Run() {
         MAIN_EVENT_STOP_LISTENING |
         MAIN_EVENT_ACTIVATION_DONE |
         MAIN_EVENT_STATE_CHANGED;
-
     while (true) {
         auto bits = xEventGroupWaitBits(event_group_, ALL_EVENTS, pdTRUE, pdFALSE, portMAX_DELAY);
 
@@ -451,30 +477,14 @@ void Application::Run() {
 
         if (bits & MAIN_EVENT_SCHEDULE) {
             std::unique_lock<std::mutex> lock(mutex_);
+            auto urgent_tasks = std::move(main_urgent_tasks_);
             auto tasks = std::move(main_tasks_);
             lock.unlock();
-            for (auto& task : tasks) {
+            for (auto& task : urgent_tasks) {
                 task();
             }
-        }
-
-        if (bits & MAIN_EVENT_SEND_AUDIO) {
-            // XiaolingConn performs WebSocket writes on its existing worker.
-            // Move a bounded burst off the codec queue without blocking UI.
-            constexpr size_t kMaxPacketsPerPass = 12;
-            for (size_t i = 0; i < kMaxPacketsPerPass; ++i) {
-                auto packet = audio_service_.PopPacketFromSendQueue();
-                if (!packet) {
-                    break;
-                }
-                if (xiaoling_conn_) {
-                    xiaoling_conn_->SendAudio(std::move(packet));
-                }
-            }
-
-            // EventGroup 位会合并；队列仍有积压时主动安排下一轮发送。
-            if (audio_service_.HasPendingSendPackets()) {
-                xEventGroupSetBits(event_group_, MAIN_EVENT_SEND_AUDIO);
+            for (auto& task : tasks) {
+                task();
             }
         }
 
@@ -493,6 +503,11 @@ void Application::Run() {
             clock_ticks_++;
             PublishWifiIcon();
             UiApp::UpdateStatusBar();
+
+            if (GetDeviceState() == kDeviceStateListening ||
+                GetDeviceState() == kDeviceStateSpeaking) {
+                LogUplinkDiagnostics("clock");
+            }
 
             if (GetDeviceState() == kDeviceStateListening && listening_started_at_us_ > 0) {
                 const int32_t timeout_ms = KvUser::GetIdleExitTimeoutMs();
@@ -516,6 +531,57 @@ void Application::Run() {
             }
         }
     }
+}
+
+void Application::LogUplinkDiagnostics(const char* phase) {
+    const auto audio = audio_service_.GetUplinkDiagnostics();
+    XiaolingUplinkDiagnostics network;
+    if (xiaoling_conn_) {
+        network = xiaoling_conn_->GetUplinkDiagnostics();
+    }
+    const uint32_t now_ms = esp_log_timestamp();
+    const auto age_ms = [now_ms](uint32_t timestamp_ms) -> uint32_t {
+        return timestamp_ms == 0 ? UINT32_MAX : now_ms - timestamp_ms;
+    };
+    ESP_LOGI(TAG,
+             "上行链路[%s]: state=%s, tts=%lu, processor=%d, local_upload=%d, "
+             "cloud_upload=%d, session=%d, connected=%d, gen=%lu, "
+             "q=encode:%u/send:%u/ws:%u, count=mic:%lu/afe:%lu/deq:%lu/enc:%lu/"
+             "notify:%lu/pop:%lu/ws_in:%lu/ws_out:%lu, reject=%lu, "
+             "drop=enc:%lu/ws:%lu, "
+             "age=mic:%lu/afe:%lu/enc:%lu/notify:%lu/pop:%lums, ws_batch=%lu/%lu, "
+             "ws_active=%d(seq=%lu,%ldms), ws_last=%ldms",
+             phase != nullptr ? phase : "unknown",
+             DeviceStatus::GetStateName(GetDeviceState()),
+             static_cast<unsigned long>(active_tts_session_id_),
+             audio.processor_running ? 1 : 0, audio.upload_enabled ? 1 : 0,
+             network.upload_enabled ? 1 : 0, network.session_active ? 1 : 0,
+             network.connected ? 1 : 0, static_cast<unsigned long>(audio.generation),
+             static_cast<unsigned>(audio.encode_queue),
+             static_cast<unsigned>(audio.send_queue),
+             static_cast<unsigned>(network.queue),
+             static_cast<unsigned long>(audio.mic_reads),
+             static_cast<unsigned long>(audio.afe_frames),
+             static_cast<unsigned long>(audio.encode_dequeued),
+             static_cast<unsigned long>(audio.encoded_packets),
+             static_cast<unsigned long>(audio.send_notifications),
+             static_cast<unsigned long>(audio.popped_packets),
+             static_cast<unsigned long>(network.enqueued_packets),
+             static_cast<unsigned long>(network.sent_frames),
+             static_cast<unsigned long>(network.rejected_packets),
+             static_cast<unsigned long>(audio.dropped_encode_frames),
+             static_cast<unsigned long>(network.dropped_packets),
+             static_cast<unsigned long>(age_ms(audio.last_mic_ms)),
+             static_cast<unsigned long>(age_ms(audio.last_afe_ms)),
+             static_cast<unsigned long>(age_ms(audio.last_encoded_ms)),
+             static_cast<unsigned long>(age_ms(audio.last_notification_ms)),
+             static_cast<unsigned long>(age_ms(audio.last_popped_ms)),
+             static_cast<unsigned long>(network.batches_started),
+             static_cast<unsigned long>(network.batches_completed),
+             network.send_in_progress ? 1 : 0,
+             static_cast<unsigned long>(network.active_sequence),
+             static_cast<long>(network.active_send_ms),
+             static_cast<long>(network.last_send_completed_ms));
 }
 
 void Application::HandleNetworkConnectedEvent() {
@@ -1429,7 +1495,7 @@ void Application::BeginWakeup(ListeningMode mode) {
     });
     if (iat_subscription_id_ == 0) {
         auto on_iat_text = [this](const XiaolingEvent& event) {
-            Schedule([this, text = event.text]() {
+            ScheduleUrgent([this, text = event.text]() {
                 if (text.empty() || iat_utterance_active_) {
                     return;
                 }
@@ -1441,11 +1507,25 @@ void Application::BeginWakeup(ListeningMode mode) {
                     listening_started_at_us_ = esp_timer_get_time();
                     ESP_LOGI(TAG, "收到 IAT，重置录音空闲计时");
                 }
+                const bool tts_active = active_tts_session_id_ != 0 ||
+                                        tts_waiting_for_playback_.load();
                 if (session_controller_.policy().allow_barge_in &&
-                    !audio_player_.IsWakeupPending() &&
-                    GetDeviceState() == kDeviceStateSpeaking && audio_player_.IsPlaying()) {
-                    // Keep the cloud session and stop only local TTS on real speech.
-                    audio_player_.StopNonMusic(PlaybackEndReason::kPreempted);
+                    !audio_player_.IsWakeupPending() && tts_active) {
+                    // Full duplex deliberately remains in the listening state
+                    // while TTS is playing, so DeviceStatus cannot be used as
+                    // the barge-in predicate. A non-empty IAT result is the
+                    // reliable proof that the user has started a new turn.
+                    ESP_LOGI(TAG,
+                             "非空 IAT 打断 TTS: session=%lu, waiting=%d, bytes=%u",
+                             static_cast<unsigned long>(active_tts_session_id_),
+                             tts_waiting_for_playback_.load() ? 1 : 0,
+                             static_cast<unsigned>(text.size()));
+                    if (xiaoling_conn_) {
+                        xiaoling_conn_->HandleIatBargeIn();
+                    }
+                    if (!audio_player_.StopNonMusic(PlaybackEndReason::kPreempted)) {
+                        ESP_LOGW(TAG, "非空 IAT 停止本地 TTS 失败");
+                    }
                 }
             });
         };
@@ -1699,6 +1779,17 @@ void Application::Schedule(std::function<void()>&& callback) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         main_tasks_.push_back(std::move(callback));
+    }
+    xEventGroupSetBits(event_group_, MAIN_EVENT_SCHEDULE);
+}
+
+void Application::ScheduleUrgent(std::function<void()>&& callback) {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        // Keep urgent tasks in FIFO order. In particular, the HomePresenter
+        // IAT update is subscribed before the application barge-in handler and
+        // must become visible before stopping GMF can block for pipeline drain.
+        main_urgent_tasks_.push_back(std::move(callback));
     }
     xEventGroupSetBits(event_group_, MAIN_EVENT_SCHEDULE);
 }

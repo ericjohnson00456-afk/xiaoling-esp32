@@ -39,7 +39,10 @@
 
 // lschat 的 opus-wb 使用 20 ms 分包，每包包含 320 个 16 kHz 样本。
 #define OPUS_FRAME_DURATION_MS 20
-#define MAX_ENCODE_TASKS_IN_QUEUE 2
+/* AEC output arrives every 20 ms. TTS decode/render and Wi-Fi callbacks can
+ * briefly delay the shared Opus task, so retain up to 160 ms of fresh PCM.
+ * The overflow path still drops the oldest frame to keep barge-in real-time. */
+#define MAX_ENCODE_TASKS_IN_QUEUE 8
 /* Keep the normal server-downlink queue small so interactive Opus playback
  * remains responsive. Network TTS uses a separate, deeper limit below. */
 #define MAX_PLAYBACK_TASKS_IN_QUEUE 8
@@ -57,7 +60,9 @@
 #define PLAYER_REBUFFER_TASKS 96
 #define MAX_DECODE_PACKETS_IN_QUEUE (2400 / OPUS_FRAME_DURATION_MS)
 #define MAX_SEND_PACKETS_IN_QUEUE (2400 / OPUS_FRAME_DURATION_MS)
-#define MAX_PROCESSED_WAKE_FRAMES_IN_QUEUE 4
+// Wake inference must never build a stale backlog while AEC/TTS are active.
+// Keep only the newest couple of frames; overflow drops the oldest one.
+#define MAX_PROCESSED_WAKE_FRAMES_IN_QUEUE 2
 #define AUDIO_TESTING_MAX_DURATION_MS 10000
 #define MAX_TIMESTAMPS_IN_QUEUE 3
 
@@ -102,6 +107,26 @@ struct DebugStatistics {
     uint32_t playback_count = 0;
 };
 
+struct AudioUplinkDiagnostics {
+    bool upload_enabled = false;
+    bool processor_running = false;
+    uint32_t generation = 0;
+    size_t encode_queue = 0;
+    size_t send_queue = 0;
+    uint32_t mic_reads = 0;
+    uint32_t afe_frames = 0;
+    uint32_t encode_dequeued = 0;
+    uint32_t encoded_packets = 0;
+    uint32_t send_notifications = 0;
+    uint32_t popped_packets = 0;
+    uint32_t dropped_encode_frames = 0;
+    uint32_t last_mic_ms = 0;
+    uint32_t last_afe_ms = 0;
+    uint32_t last_encoded_ms = 0;
+    uint32_t last_notification_ms = 0;
+    uint32_t last_popped_ms = 0;
+};
+
 class AudioService {
 public:
     AudioService();
@@ -138,7 +163,7 @@ public:
     void ClearPlaybackQueue();
     void WaitForPlaybackComplete();
     std::unique_ptr<AudioStreamPacket> PopPacketFromSendQueue();
-    bool HasPendingSendPackets();
+    AudioUplinkDiagnostics GetUplinkDiagnostics();
     void PlaySound(const std::string_view& sound);
     bool ReadAudioData(std::vector<int16_t>& data, int sample_rate, int samples);
     void ResetDecoder();
@@ -221,6 +246,21 @@ private:
     uint32_t uplink_generation_ = 0;
     bool uplink_enabled_ = false;
     bool device_aec_requested_ = false;
+
+    // Monotonic stage counters make it possible to locate an uplink stall
+    // without logging every 20 ms audio frame.
+    std::atomic<uint32_t> uplink_mic_reads_{0};
+    std::atomic<uint32_t> uplink_afe_frames_{0};
+    std::atomic<uint32_t> uplink_encode_dequeued_{0};
+    std::atomic<uint32_t> uplink_encoded_packets_{0};
+    std::atomic<uint32_t> uplink_send_notifications_{0};
+    std::atomic<uint32_t> uplink_popped_packets_{0};
+    std::atomic<uint32_t> uplink_dropped_encode_frames_{0};
+    std::atomic<uint32_t> uplink_last_mic_ms_{0};
+    std::atomic<uint32_t> uplink_last_afe_ms_{0};
+    std::atomic<uint32_t> uplink_last_encoded_ms_{0};
+    std::atomic<uint32_t> uplink_last_notification_ms_{0};
+    std::atomic<uint32_t> uplink_last_popped_ms_{0};
 
     esp_timer_handle_t audio_power_timer_ = nullptr;
     std::chrono::steady_clock::time_point last_input_time_;

@@ -143,7 +143,17 @@ int HomePresenter::Close(const UiNavScreen* screen, void* data) {
     presenter->last_emotion_.clear();
     presenter->last_chat_role_.clear();
     presenter->last_chat_text_.clear();
-    presenter->last_voice_text_revision_ = 0;
+    {
+        std::lock_guard<std::mutex> lock(presenter->iat_text_mutex_);
+        presenter->pending_iat_text_.clear();
+        presenter->pending_iat_received_us_ = 0;
+        presenter->iat_dispatch_pending_ = false;
+        ++presenter->last_voice_text_revision_;
+    }
+    presenter->iat_text_visible_ = false;
+    presenter->tts_progress_generation_.fetch_add(1);
+    presenter->latest_tts_audio_clock_ms_.store(0);
+    presenter->tts_progress_dispatch_pending_.store(false);
     return 0;
 }
 
@@ -168,12 +178,8 @@ void HomePresenter::SetPowerSaveMode(bool enabled) {
 void HomePresenter::SubscribeVoiceEvents() {
     auto& events = XiaolingEventBus::GetInstance();
     auto subscribe_text = [this, &events](XiaolingEventType type) {
-        voice_event_subscriptions_.push_back(events.Subscribe(type, [](const XiaolingEvent& event) {
-            UiManager::GetInstance().Dispatch([text = event.text]() {
-                if (!text.empty()) {
-                    HomePresenter::GetInstance().SetText(text);
-                }
-            });
+        voice_event_subscriptions_.push_back(events.Subscribe(type, [this](const XiaolingEvent& event) {
+            QueueIatText(event.text);
         }));
     };
     subscribe_text(XIAOLING_IAT_START);
@@ -190,11 +196,19 @@ void HomePresenter::SubscribeVoiceEvents() {
         }));
     voice_event_subscriptions_.push_back(events.Subscribe(
         XIAOLING_TTS_TXT_INTERRUPT, [this](const XiaolingEvent&) {
-            UiManager::GetInstance().Dispatch([this]() { OnTtsTextInterrupt(); });
+            UiManager::GetInstance().DispatchUrgent(
+                [this]() { OnTtsTextInterrupt(); });
         }));
     voice_event_subscriptions_.push_back(events.Subscribe(
         XIAOLING_TTS_OUTPUT_STARTED, [this](const XiaolingEvent&) {
-            UiManager::GetInstance().Dispatch([this]() { OnTtsPlaying(); });
+            const uint32_t generation = tts_progress_generation_.fetch_add(1) + 1;
+            latest_tts_audio_clock_ms_.store(0);
+            tts_progress_dispatch_pending_.store(false);
+            UiManager::GetInstance().DispatchUrgent([this, generation]() {
+                if (generation == tts_progress_generation_.load()) {
+                    OnTtsPlaying();
+                }
+            });
         }));
     voice_event_subscriptions_.push_back(events.Subscribe(
         XIAOLING_TTS_OUTPUT_PROGRESS, [this](const XiaolingEvent& event) {
@@ -206,13 +220,111 @@ void HomePresenter::SubscribeVoiceEvents() {
                     audio_clock_ms = static_cast<uint32_t>(value);
                 }
             }
-            UiManager::GetInstance().Dispatch(
-                [this, audio_clock_ms]() { OnTtsAudioProgress(audio_clock_ms); });
+            QueueTtsAudioProgress(audio_clock_ms);
         }));
     voice_event_subscriptions_.push_back(events.Subscribe(
         XIAOLING_TTS_STOPPED, [this](const XiaolingEvent&) {
-            UiManager::GetInstance().Dispatch([this]() { OnTtsStopped(); });
+            const uint32_t generation = tts_progress_generation_.fetch_add(1) + 1;
+            latest_tts_audio_clock_ms_.store(0);
+            tts_progress_dispatch_pending_.store(false);
+            UiManager::GetInstance().Dispatch([this, generation]() {
+                if (generation == tts_progress_generation_.load()) {
+                    OnTtsStopped();
+                }
+            });
         }));
+}
+
+void HomePresenter::QueueIatText(std::string text) {
+    if (text.empty()) {
+        return;
+    }
+    bool schedule = false;
+    {
+        std::lock_guard<std::mutex> lock(iat_text_mutex_);
+        pending_iat_text_ = std::move(text);
+        pending_iat_received_us_ = esp_timer_get_time();
+        ++last_voice_text_revision_;
+        if (!iat_dispatch_pending_) {
+            iat_dispatch_pending_ = true;
+            schedule = true;
+        }
+    }
+    if (schedule) {
+        UiManager::GetInstance().DispatchUrgent([this]() { DrainIatText(); });
+    }
+}
+
+void HomePresenter::DrainIatText() {
+    std::string text;
+    uint32_t revision = 0;
+    int64_t received_us = 0;
+    {
+        std::lock_guard<std::mutex> lock(iat_text_mutex_);
+        text = pending_iat_text_;
+        revision = last_voice_text_revision_;
+        received_us = pending_iat_received_us_;
+    }
+    if (!text.empty()) {
+        if (subtitle_audio_started_) {
+            // In full duplex DeviceStatus intentionally remains listening
+            // during TTS, so its state callback cannot restore this UI. Let
+            // the first real IAT take ownership immediately, before GMF stop
+            // waits for the HTTP/decode pipeline to drain.
+            ResetSubtitles(true);
+            SetStatus(Lang::Strings::LISTENING);
+            SetEmotion("聆听");
+            ESP_LOGI(TAG, "非空 IAT 已接管 TTS UI，字幕时钟停止");
+        }
+        iat_text_visible_ = true;
+        SetText(std::move(text));
+        const int64_t now_us = esp_timer_get_time();
+        const int64_t delay_ms = (now_us - received_us) / 1000;
+        if (delay_ms >= 100 && now_us - last_iat_delay_log_us_ >= 1000000) {
+            last_iat_delay_log_us_ = now_us;
+            ESP_LOGW(TAG, "IAT UI 更新延迟: %ldms", static_cast<long>(delay_ms));
+        }
+    }
+
+    bool reschedule = false;
+    {
+        std::lock_guard<std::mutex> lock(iat_text_mutex_);
+        if (revision == last_voice_text_revision_) {
+            iat_dispatch_pending_ = false;
+        } else {
+            reschedule = true;
+        }
+    }
+    if (reschedule) {
+        UiManager::GetInstance().DispatchUrgent([this]() { DrainIatText(); });
+    }
+}
+
+void HomePresenter::QueueTtsAudioProgress(uint32_t audio_clock_ms) {
+    uint32_t observed = latest_tts_audio_clock_ms_.load(std::memory_order_relaxed);
+    while (observed < audio_clock_ms &&
+           !latest_tts_audio_clock_ms_.compare_exchange_weak(
+               observed, audio_clock_ms, std::memory_order_release,
+               std::memory_order_relaxed)) {
+    }
+
+    bool expected = false;
+    if (!tts_progress_dispatch_pending_.compare_exchange_strong(expected, true)) {
+        return;
+    }
+    const uint32_t generation = tts_progress_generation_.load();
+    UiManager::GetInstance().DispatchUrgent([this, generation]() {
+        if (generation != tts_progress_generation_.load()) {
+            return;
+        }
+        const uint32_t handled_clock = latest_tts_audio_clock_ms_.load();
+        OnTtsAudioProgress(handled_clock);
+        tts_progress_dispatch_pending_.store(false);
+        if (generation == tts_progress_generation_.load() &&
+            latest_tts_audio_clock_ms_.load() > handled_clock) {
+            QueueTtsAudioProgress(latest_tts_audio_clock_ms_.load());
+        }
+    });
 }
 
 void HomePresenter::UnsubscribeVoiceEvents() {
@@ -239,6 +351,7 @@ void HomePresenter::OnTtsTextStart() {
     }
     const bool audio_started = subtitle_audio_started_;
     const uint32_t audio_clock_ms = subtitle_audio_clock_ms_;
+    iat_text_visible_ = false;
     ResetSubtitles(true);
     if (audio_started) {
         subtitle_audio_started_ = true;
@@ -343,7 +456,8 @@ void HomePresenter::OnTtsStopped() {
 }
 
 void HomePresenter::ScheduleSubtitle() {
-    if (!subtitle_audio_started_ || subtitle_index_ >= subtitle_segments_.size()) {
+    if (iat_text_visible_ || !subtitle_audio_started_ ||
+        subtitle_index_ >= subtitle_segments_.size()) {
         return;
     }
 
