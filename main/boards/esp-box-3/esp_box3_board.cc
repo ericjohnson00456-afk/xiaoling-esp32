@@ -41,6 +41,7 @@ class EspBox3Board : public WifiBoard {
 private:
     i2c_master_bus_handle_t i2c_bus_;
     Button boot_button_;
+    Button mute_button_;
     LcdDisplay* display_;
     AdcBatteryMonitor* battery_monitor_ = nullptr;
 
@@ -101,6 +102,20 @@ private:
         boot_button_.OnMultipleClickAtLeast([](uint8_t click_count) {
             Application::GetInstance().HandleButtonClick(click_count);
         }, 8);
+
+        // The top button drives a hardware latch: GPIO1 low means muted and
+        // GPIO1 high means unmuted. Muting physically blocks the microphone;
+        // after unmuting ES7210 must be opened again to resume its data stream.
+        mute_button_.OnPressDown([]() {
+            ESP_LOGI(TAG, "Microphone muted by hardware button");
+        });
+        mute_button_.OnPressUp([this]() {
+            ESP_LOGI(TAG, "Microphone unmuted by hardware button");
+            auto* codec = static_cast<BoxAudioCodec*>(GetAudioCodec());
+            if (!codec->ReinitializeInput()) {
+                ESP_LOGE(TAG, "Microphone recovery after unmute failed");
+            }
+        });
     }
 
     void InitializeIli9341Display() {
@@ -149,7 +164,9 @@ private:
     }
 
 public:
-    EspBox3Board() : boot_button_(BOOT_BUTTON_GPIO) {
+    EspBox3Board()
+        : boot_button_(BOOT_BUTTON_GPIO),
+          mute_button_(MIC_MUTE_BUTTON_GPIO) {
         InitializeI2c();
         InitializeSpi();
         InitializeIli9341Display();

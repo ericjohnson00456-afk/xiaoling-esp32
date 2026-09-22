@@ -36,6 +36,9 @@ public:
     virtual void SetOutputVolume(int volume) override;
     virtual void EnableInput(bool enable) override;
     virtual void EnableOutput(bool enable) override;
+    // ESP-BOX-3 gates the microphone in hardware. Re-open the ES7210 after the
+    // mute latch is released so recording resumes without a board reset.
+    bool ReinitializeInput();
     virtual size_t OutputDmaBufferBytes() const override {
         return AUDIO_CODEC_DMA_FRAME_NUM * 2 * sizeof(int32_t);
     }

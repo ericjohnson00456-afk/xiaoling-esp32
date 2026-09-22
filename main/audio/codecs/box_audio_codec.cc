@@ -209,6 +209,49 @@ void BoxAudioCodec::EnableInput(bool enable) {
     AudioCodec::EnableInput(enable);
 }
 
+bool BoxAudioCodec::ReinitializeInput() {
+    std::lock_guard<std::mutex> lock(data_if_mutex_);
+
+    // When the input is power-managed off, the next normal EnableInput(true)
+    // already performs a full open, so no recovery is needed here.
+    if (!input_enabled_) {
+        ESP_LOGI(TAG, "Microphone input is idle; it will initialize on next use");
+        return true;
+    }
+
+    int ret = esp_codec_dev_close(input_dev_);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to close microphone codec for recovery: %d", ret);
+        return false;
+    }
+
+    esp_codec_dev_sample_info_t fs = {
+        .bits_per_sample = 16,
+        .channel = 4,
+        .channel_mask = ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0),
+        .sample_rate = (uint32_t)output_sample_rate_,
+        .mclk_multiple = 0,
+    };
+    if (input_reference_) {
+        fs.channel_mask |= ESP_CODEC_DEV_MAKE_CHANNEL_MASK(1);
+    }
+
+    ret = esp_codec_dev_open(input_dev_, &fs);
+    if (ret == ESP_OK) {
+        ret = esp_codec_dev_set_in_channel_gain(
+            input_dev_, ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0), input_gain_);
+    }
+    if (ret != ESP_OK) {
+        // Let AudioService retry through its regular lazy-enable path.
+        input_enabled_ = false;
+        ESP_LOGE(TAG, "Failed to reinitialize microphone codec: %d", ret);
+        return false;
+    }
+
+    ESP_LOGI(TAG, "Microphone codec reinitialized after unmute");
+    return true;
+}
+
 void BoxAudioCodec::EnableOutput(bool enable) {
     std::lock_guard<std::mutex> lock(data_if_mutex_);
     if (enable == output_enabled_) {
@@ -232,6 +275,9 @@ void BoxAudioCodec::EnableOutput(bool enable) {
 }
 
 int BoxAudioCodec::Read(int16_t* dest, int samples) {
+    // The mute button may re-open ES7210 while AudioService is active. Keep the
+    // close/open sequence from racing an in-flight codec read.
+    std::lock_guard<std::mutex> lock(data_if_mutex_);
     if (input_enabled_) {
         ESP_ERROR_CHECK_WITHOUT_ABORT(esp_codec_dev_read(input_dev_, (void*)dest, samples * sizeof(int16_t)));
     }
