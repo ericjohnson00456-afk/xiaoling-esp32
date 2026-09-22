@@ -49,7 +49,12 @@ uint32_t TtsPlayer::PlayUrl(const std::string& url) {
     return PlayUrlInternal(url, false);
 }
 
-uint32_t TtsPlayer::PlayUrlInternal(const std::string& url, bool notify) {
+uint32_t TtsPlayer::PlayAlarmUrl(const std::string& url) {
+    return PlayUrlInternal(url, false, PlaybackChannel::kAlarm, 100);
+}
+
+uint32_t TtsPlayer::PlayUrlInternal(const std::string& url, bool notify,
+                                    PlaybackChannel channel, int priority) {
     if (!IsHttpUrl(url)) {
         ESP_LOGE(TAG, "拒绝无效的 TTS URL, bytes=%u", static_cast<unsigned>(url.size()));
         return 0;
@@ -63,9 +68,9 @@ uint32_t TtsPlayer::PlayUrlInternal(const std::string& url, bool notify) {
     PlaybackRequest request;
     request.session_id = allocate_session_();
     request.source_type = PlaybackSourceType::kUrl;
-    request.channel = PlaybackChannel::kTts;
+    request.channel = channel;
     request.source = url;
-    request.priority = 50;
+    request.priority = priority;
     return Submit(request, *engine_);
 }
 

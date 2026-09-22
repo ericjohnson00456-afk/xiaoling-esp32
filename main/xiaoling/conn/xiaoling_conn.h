@@ -47,6 +47,8 @@ struct XiaolingUplinkDiagnostics {
 // 小聆连接入口：负责鉴权、长连接、心跳、重连和语音模块接入。
 class XiaolingConn final {
 public:
+    using AlarmTtsCallback = std::function<void(bool, std::string)>;
+
     XiaolingConn();
     ~XiaolingConn();
 
@@ -70,6 +72,10 @@ public:
     void HandleIatBargeIn();
     void SendMcpMessage(const std::string& message);
     bool ResolveKuwoMusicUrl(const std::string& item_id, std::string& url);
+    bool RequestAlarmTtsUrl(const std::string& text, AlarmTtsCallback callback);
+    void CancelAlarmTtsRequest();
+    bool FetchAlarmList(std::string& response_body);
+    bool ResolveCustomAlarmDate(const std::string& alarm_id, std::string& date);
     void SetNarrowbandMode(bool enabled);
 
     int server_sample_rate() const;
@@ -129,8 +135,21 @@ private:
     // Session/control JSON must never wait behind a backlog of realtime AEC
     // frames. Producers only enqueue; the connection task sends this queue
     // before the audio queue under the same WebSocket serialization lock.
+    struct ControlFrame {
+        bool binary = false;
+        std::string payload;
+    };
     std::mutex control_mutex_;
-    std::deque<std::string> control_queue_;
+    std::deque<ControlFrame> control_queue_;
+
+    struct PendingAlarmTts {
+        std::string rid;
+        AlarmTtsCallback callback;
+        bool url_delivered = false;
+    };
+    std::mutex alarm_tts_mutex_;
+    PendingAlarmTts pending_alarm_tts_;
+    std::deque<std::string> ignored_alarm_tts_rids_;
 
     mutable std::mutex auth_mutex_;
     std::string access_token_;
@@ -164,6 +183,8 @@ private:
 
     bool SendText(const std::string& text);
     bool SendBinary(const uint8_t* data, size_t size);
+    bool HandleAlarmTtsMessage(const cJSON* root);
+    void FailPendingAlarmTtsRequest();
     std::string BuildWebSocketUrl() const;
     void HandleIncomingText(const std::string& text);
     bool IsCurrentSessionMessage(const cJSON* root) const;

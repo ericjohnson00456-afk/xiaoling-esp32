@@ -3,12 +3,26 @@
 #include <esp_err.h>
 #include <esp_log.h>
 #include <esp_netif_sntp.h>
+#include <esp_sntp.h>
 
 #include <ctime>
+#include <mutex>
 
 #define TAG "TimeSync"
 
 namespace TimeSync {
+
+namespace {
+
+constexpr uint32_t kSyncIntervalMs = 60U * 60U * 1000U;
+std::mutex s_sync_mutex;
+bool s_sntp_initialized = false;
+
+void OnTimeSynchronized(struct timeval*) {
+    ESP_LOGI(TAG, "SNTP 周期校时完成");
+}
+
+}  // namespace
 
 bool IsSystemTimeValid() {
     const auto now = std::time(nullptr);
@@ -17,29 +31,40 @@ bool IsSystemTimeValid() {
 }
 
 bool SyncSystemTime() {
-    if (IsSystemTimeValid()) {
-        ESP_LOGI(TAG, "系统时间已经有效，无需重复校时");
+    std::lock_guard<std::mutex> lock(s_sync_mutex);
+
+    bool first_start = false;
+    if (!s_sntp_initialized) {
+        esp_sntp_set_sync_interval(kSyncIntervalMs);
+        esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG("ntp.aliyun.com");
+        config.sync_cb = OnTimeSynchronized;
+        const auto init_result = esp_netif_sntp_init(&config);
+        if (init_result != ESP_OK && init_result != ESP_ERR_INVALID_STATE) {
+            ESP_LOGE(TAG, "SNTP 初始化失败: %s", esp_err_to_name(init_result));
+            return false;
+        }
+        s_sntp_initialized = true;
+        first_start = true;
+        ESP_LOGI(TAG, "SNTP 常驻校时已启动，周期=%u ms",
+                 static_cast<unsigned>(kSyncIntervalMs));
+    }
+
+    if (!first_start && IsSystemTimeValid()) {
         return true;
     }
 
-    esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG("ntp.aliyun.com");
-    const auto init_result = esp_netif_sntp_init(&config);
-    const bool owns_sntp = init_result == ESP_OK;
-    if (init_result != ESP_OK && init_result != ESP_ERR_INVALID_STATE) {
-        ESP_LOGE(TAG, "SNTP 初始化失败: %s", esp_err_to_name(init_result));
-        return false;
-    }
-
     const auto sync_result = esp_netif_sntp_sync_wait(pdMS_TO_TICKS(10000));
-    if (owns_sntp) {
-        esp_netif_sntp_deinit();
-    }
-    if (sync_result != ESP_OK || !IsSystemTimeValid()) {
+    if (sync_result != ESP_OK) {
         ESP_LOGE(TAG, "SNTP 校时失败: %s", esp_err_to_name(sync_result));
+        // 服务保持运行并会自动重试；RTC 已有可信时间时不阻断启动链路。
+        return IsSystemTimeValid();
+    }
+    if (!IsSystemTimeValid()) {
+        ESP_LOGE(TAG, "SNTP 返回成功，但系统时间仍无效");
         return false;
     }
 
-    ESP_LOGI(TAG, "SNTP 校时完成");
+    ESP_LOGI(TAG, "SNTP 首次校时完成，后续每小时自动校准");
     return true;
 }
 

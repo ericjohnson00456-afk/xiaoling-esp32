@@ -84,6 +84,7 @@ bool XiaolingConn::Connect() {
 void XiaolingConn::Disconnect() {
     ClearUplinkQueue();
     ClearControlQueue();
+    FailPendingAlarmTtsRequest();
     if (voice_ != nullptr) {
         voice_->Reset();
     }
@@ -356,23 +357,29 @@ void XiaolingConn::ClearControlQueue() {
 }
 
 bool XiaolingConn::SendPendingControl() {
-    std::string text;
+    ControlFrame frame;
     {
         std::lock_guard<std::mutex> lock(control_mutex_);
         if (control_queue_.empty()) {
             return false;
         }
-        text = std::move(control_queue_.front());
+        frame = std::move(control_queue_.front());
         control_queue_.pop_front();
     }
 
     bool sent = false;
     {
         std::lock_guard<std::mutex> lock(websocket_mutex_);
-        sent = websocket_ != nullptr && websocket_->SendText(text);
+        sent = websocket_ != nullptr &&
+               (frame.binary
+                    ? websocket_->SendBinary(
+                          reinterpret_cast<const uint8_t*>(frame.payload.data()),
+                          frame.payload.size())
+                    : websocket_->SendText(frame.payload));
     }
     if (!sent) {
-        ESP_LOGW(TAG, "WebSocket 控制消息发送失败，触发链路重连");
+        ESP_LOGW(TAG, "WebSocket %s控制消息发送失败，触发链路重连",
+                 frame.binary ? "二进制" : "文本");
         HandleTransportDisconnected(generation_.load());
     }
     return true;
@@ -639,6 +646,7 @@ void XiaolingConn::HandleTransportDisconnected(uint32_t generation) {
     session_active_ = false;
     ClearUplinkQueue();
     ClearControlQueue();
+    FailPendingAlarmTtsRequest();
     if (voice_ != nullptr) {
         voice_->Reset();
     }

@@ -128,6 +128,11 @@ public:
     void PlayLocalizedAudio(const char* name);
     void PlayTone(uint16_t tone_id);
     uint32_t StartAlarmTone(uint16_t tone_id);
+    uint32_t StartAlarmTtsUrl(const std::string& url);
+    bool RequestAlarmTtsUrl(const std::string& text);
+    void CancelAlarmTtsRequest();
+    bool FetchCloudAlarmList(std::string& response_body);
+    bool ResolveCustomAlarmDate(const std::string& alarm_id, std::string& date);
     void StopAlarmTone();
     AudioService& GetAudioService() { return audio_service_; }
     AudioPlayer& GetAudioPlayer() { return audio_player_; }
@@ -152,6 +157,7 @@ private:
     std::mutex mutex_;
     std::deque<std::function<void()>> main_urgent_tasks_;
     std::deque<std::function<void()>> main_tasks_;
+    std::mutex xiaoling_conn_mutex_;
     std::unique_ptr<XiaolingConn> xiaoling_conn_;
     EventGroupHandle_t event_group_ = nullptr;
     esp_timer_handle_t clock_timer_handle_ = nullptr;
@@ -188,6 +194,8 @@ private:
 #endif // CONFIG_LSPLATFORM
 
     bool aborted_ = false;
+
+    void PrepareAlarmPlayback();
     bool assets_version_checked_ = false;
     std::atomic_bool ota_confirmation_pending_{false};
     std::atomic_int ota_confirmation_decision_{0};

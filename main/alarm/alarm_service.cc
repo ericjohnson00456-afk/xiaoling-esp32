@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -15,6 +16,9 @@
 
 #include <esp_log.h>
 #include <nvs.h>
+#include <cJSON.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 namespace {
 
@@ -28,6 +32,7 @@ constexpr size_t kMaxIdLength = 31;
 constexpr size_t kMaxTextLength = 384;
 constexpr int64_t kChinaOffsetSeconds = 8 * 60 * 60;
 constexpr int64_t kRingTimeoutSeconds = 15 * 60;
+constexpr int64_t kTtsRequestTimeoutSeconds = 10;
 // Match the source implementation's maximum one-shot software timer period.
 // Longer alarms remain persisted and become active when they enter this window.
 constexpr int64_t kCountdownWindowSeconds = 24 * 60 * 60;
@@ -105,6 +110,73 @@ bool IsTerminal(const PlaybackEvent& event) {
     return event.state == PlaybackState::kCompleted ||
            event.state == PlaybackState::kStopped ||
            event.state == PlaybackState::kFailed;
+}
+
+bool ReadCloudId(const cJSON* item, std::string& id) {
+    const auto* value = cJSON_GetObjectItemCaseSensitive(item, "id");
+    if (cJSON_IsString(value) && value->valuestring != nullptr &&
+        value->valuestring[0] != '\0') {
+        id = value->valuestring;
+        return true;
+    }
+    constexpr double kMaxExactJsonInteger = 9007199254740991.0;
+    if (!cJSON_IsNumber(value) || !std::isfinite(value->valuedouble) ||
+        value->valuedouble < 1.0 || value->valuedouble > kMaxExactJsonInteger ||
+        std::trunc(value->valuedouble) != value->valuedouble) {
+        return false;
+    }
+    char buffer[32] = {};
+    std::snprintf(buffer, sizeof(buffer), "%.0f", value->valuedouble);
+    id = buffer;
+    return true;
+}
+
+bool ParseCloudAlarm(const cJSON* item, AlarmSpec& spec, std::string& error) {
+    if (!cJSON_IsObject(item) || !ReadCloudId(item, spec.id)) {
+        error = "云端闹钟 id 无效";
+        return false;
+    }
+    const auto* type = cJSON_GetObjectItemCaseSensitive(item, "alarm_type");
+    if (!cJSON_IsString(type) || type->valuestring == nullptr ||
+        !AlarmService::ParseType(type->valuestring, spec.type)) {
+        error = "云端闹钟类型无效";
+        return false;
+    }
+    const auto* calendar = cJSON_GetObjectItemCaseSensitive(item, "calendar_type");
+    if (cJSON_IsString(calendar) && calendar->valuestring != nullptr) {
+        spec.calendar = calendar->valuestring;
+    }
+    const auto* time = cJSON_GetObjectItemCaseSensitive(item, "time");
+    if (!cJSON_IsString(time) || time->valuestring == nullptr ||
+        !AlarmService::ParseTime(time->valuestring, spec.hour, spec.minute, spec.second)) {
+        error = "云端闹钟时间无效";
+        return false;
+    }
+    const auto* date = cJSON_GetObjectItemCaseSensitive(item, "date");
+    if (cJSON_IsString(date) && date->valuestring != nullptr && date->valuestring[0] != '\0' &&
+        !AlarmService::ParseDate(date->valuestring, spec.year, spec.month, spec.day)) {
+        error = "云端闹钟日期无效";
+        return false;
+    }
+    const auto* text = cJSON_GetObjectItemCaseSensitive(item, "text");
+    if (cJSON_IsString(text) && text->valuestring != nullptr) spec.text = text->valuestring;
+    const auto* holiday = cJSON_GetObjectItemCaseSensitive(item, "holiday_name");
+    if (cJSON_IsString(holiday) && holiday->valuestring != nullptr) {
+        spec.holiday_name = holiday->valuestring;
+    }
+    const auto* day_of_week = cJSON_GetObjectItemCaseSensitive(item, "day_of_week");
+    const auto* day_of_month = cJSON_GetObjectItemCaseSensitive(item, "day_of_month");
+    const auto* month_of_year = cJSON_GetObjectItemCaseSensitive(item, "month_of_year");
+    if (cJSON_IsNumber(day_of_week)) spec.day_of_week = day_of_week->valueint;
+    if (cJSON_IsNumber(day_of_month)) spec.day_of_month = day_of_month->valueint;
+    if (cJSON_IsNumber(month_of_year)) spec.month_of_year = month_of_year->valueint;
+    const auto* snooze_enabled = cJSON_GetObjectItemCaseSensitive(item, "snooze_enabled");
+    const auto* snooze_interval = cJSON_GetObjectItemCaseSensitive(item, "snooze_interval");
+    const auto* snooze_count = cJSON_GetObjectItemCaseSensitive(item, "snooze_count");
+    if (cJSON_IsBool(snooze_enabled)) spec.snooze_enabled = cJSON_IsTrue(snooze_enabled);
+    if (cJSON_IsNumber(snooze_interval)) spec.snooze_interval = snooze_interval->valueint;
+    if (cJSON_IsNumber(snooze_count)) spec.snooze_count = snooze_count->valueint;
+    return true;
 }
 
 }  // namespace
@@ -225,10 +297,6 @@ bool AlarmService::BuildAlarm(const AlarmSpec& spec, int64_t now, AlarmSnapshot&
         error = "当前固件尚未接入农历转换服务";
         return false;
     }
-    if (spec.type == AlarmType::kCustom) {
-        error = "当前固件尚未接入 CUSTOM 下一日期服务";
-        return false;
-    }
     if (!spec.holiday_name.empty()) {
         error = "当前固件尚未接入法定节假日日期服务";
         return false;
@@ -280,6 +348,23 @@ bool AlarmService::BuildAlarm(const AlarmSpec& spec, int64_t now, AlarmSnapshot&
 int64_t AlarmService::CalculateNext(const AlarmSpec& spec, int64_t after) const {
     int year = 0, month = 0, day = 0, hour = 0, minute = 0, second = 0, weekday = 0;
     LocalDateTime(after, year, month, day, hour, minute, second, weekday);
+    if (spec.type == AlarmType::kCustom) {
+        std::string date;
+        int next_year = 0, next_month = 0, next_day = 0;
+        if (!Application::GetInstance().ResolveCustomAlarmDate(spec.id, date) ||
+            !ParseDate(date, next_year, next_month, next_day)) {
+            ESP_LOGW(kTag, "CUSTOM 闹钟无法取得下次日期: id=%s", spec.id.c_str());
+            return 0;
+        }
+        const int64_t candidate = CivilToTimestamp(next_year, next_month, next_day,
+                                                   spec.hour, spec.minute, spec.second);
+        if (candidate <= after) {
+            ESP_LOGW(kTag, "CUSTOM 闹钟接口返回了已过期日期: id=%s date=%s",
+                     spec.id.c_str(), date.c_str());
+            return 0;
+        }
+        return candidate;
+    }
     if (spec.type == AlarmType::kOnce) {
         return CivilToTimestamp(spec.year, spec.month, spec.day, spec.hour, spec.minute, spec.second);
     }
@@ -363,7 +448,22 @@ void AlarmService::Tick() {
     }
     if (ringing_) {
         if (now - ring_started_at_ >= kRingTimeoutSeconds) Stop();
-        else if (tone_session_id_ == 0) tone_session_id_ = Application::GetInstance().StartAlarmTone(kAlarmToneId);
+        else if (ring_phase_ == RingPhase::kWaitingTtsUrl) {
+            if (now >= tts_request_deadline_) {
+                ESP_LOGW(kTag, "等待闹钟 TTS URL 超时，降级为循环铃声");
+                Application::GetInstance().CancelAlarmTtsRequest();
+                BeginLoopTone();
+            }
+        } else if (tone_session_id_ == 0) {
+            if (ring_phase_ == RingPhase::kInitialTone) {
+                tone_session_id_ = Application::GetInstance().StartAlarmTone(kAlarmToneId);
+                if (tone_session_id_ == 0) BeginAlarmTts();
+            } else if (ring_phase_ == RingPhase::kTts) {
+                BeginLoopTone();
+            } else if (ring_phase_ == RingPhase::kLoopTone) {
+                tone_session_id_ = Application::GetInstance().StartAlarmTone(kAlarmToneId);
+            }
+        }
         return;
     }
     auto due = alarms_.end();
@@ -381,10 +481,59 @@ void AlarmService::StartRinging(const AlarmSnapshot& alarm, int64_t now) {
     ringing_ = true;
     current_pre_advanced_ = !alarm.spec.snooze_enabled;
     ring_started_at_ = now;
+    ring_phase_ = RingPhase::kInitialTone;
     tone_session_id_ = Application::GetInstance().StartAlarmTone(kAlarmToneId);
+    if (tone_session_id_ == 0) BeginAlarmTts();
     if (current_pre_advanced_) AdvanceOrRemove(alarm.spec.id, now);
     AlarmRingPresenter::GetInstance().ShowAlarm(current_alarm_);
     ESP_LOGI(kTag, "闹钟响铃: id=%s, text=%s", alarm.spec.id.c_str(), alarm.spec.text.c_str());
+}
+
+void AlarmService::BeginAlarmTts() {
+    tone_session_id_ = 0;
+    if (current_alarm_.spec.text.empty()) {
+        ESP_LOGI(kTag, "闹钟无提醒文本，跳过 TTS");
+        BeginLoopTone();
+        return;
+    }
+    const std::string prompt = "你有一个 " + current_alarm_.spec.text +
+                               " 的提醒, 请不要忘记哦!";
+    ring_phase_ = RingPhase::kWaitingTtsUrl;
+    tts_request_deadline_ = std::time(nullptr) + kTtsRequestTimeoutSeconds;
+    if (!Application::GetInstance().RequestAlarmTtsUrl(prompt)) {
+        ESP_LOGW(kTag, "闹钟 TTS 请求提交失败，降级为循环铃声");
+        BeginLoopTone();
+        return;
+    }
+    ESP_LOGI(kTag, "闹钟播放阶段: 等待提醒文本 TTS URL");
+}
+
+void AlarmService::BeginLoopTone() {
+    ring_phase_ = RingPhase::kLoopTone;
+    tts_request_deadline_ = 0;
+    tone_session_id_ = Application::GetInstance().StartAlarmTone(kAlarmToneId);
+    ESP_LOGI(kTag, "闹钟播放阶段: 循环铃声, session=%lu",
+             static_cast<unsigned long>(tone_session_id_));
+}
+
+void AlarmService::HandleTtsUrl(bool success, std::string url) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    if (!ringing_ || ring_phase_ != RingPhase::kWaitingTtsUrl) {
+        return;
+    }
+    tts_request_deadline_ = 0;
+    if (!success || url.empty()) {
+        ESP_LOGW(kTag, "闹钟 TTS URL 获取失败，降级为循环铃声");
+        BeginLoopTone();
+        return;
+    }
+    ring_phase_ = RingPhase::kTts;
+    tone_session_id_ = Application::GetInstance().StartAlarmTtsUrl(url);
+    ESP_LOGI(kTag, "闹钟播放阶段: 提醒文本 TTS, session=%lu",
+             static_cast<unsigned long>(tone_session_id_));
+    if (tone_session_id_ == 0) {
+        BeginLoopTone();
+    }
 }
 
 bool AlarmService::IsRinging() const {
@@ -439,9 +588,12 @@ void AlarmService::Stop(bool show_toast) {
 
 void AlarmService::FinishRinging(bool advance_schedule) {
     const std::string id = current_alarm_.spec.id;
-    Application::GetInstance().StopAlarmTone();
     ringing_ = false;
+    ring_phase_ = RingPhase::kNone;
+    tts_request_deadline_ = 0;
     tone_session_id_ = 0;
+    Application::GetInstance().CancelAlarmTtsRequest();
+    Application::GetInstance().StopAlarmTone();
     if (advance_schedule) AdvanceOrRemove(id, std::time(nullptr));
     current_pre_advanced_ = false;
     AlarmRingPresenter::GetInstance().Dismiss();
@@ -465,9 +617,118 @@ void AlarmService::HandlePlaybackEvent(const PlaybackEvent& event) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (!ringing_ || event.session_id != tone_session_id_ || !IsTerminal(event)) return;
     tone_session_id_ = 0;
-    if (event.state == PlaybackState::kCompleted || event.state == PlaybackState::kFailed) {
-        tone_session_id_ = Application::GetInstance().StartAlarmTone(kAlarmToneId);
+    if (event.state == PlaybackState::kStopped) {
+        return;
     }
+    switch (ring_phase_) {
+        case RingPhase::kInitialTone:
+            ESP_LOGI(kTag, "闹钟首轮提示音结束，开始请求提醒文本 TTS");
+            BeginAlarmTts();
+            break;
+        case RingPhase::kTts:
+            ESP_LOGI(kTag, "闹钟提醒文本 TTS 结束，进入循环铃声");
+            BeginLoopTone();
+            break;
+        case RingPhase::kLoopTone:
+            tone_session_id_ = Application::GetInstance().StartAlarmTone(kAlarmToneId);
+            break;
+        case RingPhase::kWaitingTtsUrl:
+        case RingPhase::kNone:
+            break;
+    }
+}
+
+void AlarmService::RequestCloudSync() {
+    bool expected = false;
+    if (!cloud_sync_in_progress_.compare_exchange_strong(expected, true)) {
+        ESP_LOGI(kTag, "云端闹钟同步已在进行，跳过重复请求");
+        return;
+    }
+    const BaseType_t created = xTaskCreate(
+        [](void* arg) {
+            auto* service = static_cast<AlarmService*>(arg);
+            bool success = false;
+            for (int attempt = 1; attempt <= 3 && !success; ++attempt) {
+                success = service->SyncFromCloud();
+                if (!success && attempt < 3) {
+                    ESP_LOGW(kTag, "云端闹钟同步失败，第 %d/3 次，稍后重试", attempt);
+                    vTaskDelay(pdMS_TO_TICKS(static_cast<uint32_t>(attempt) * 3000U));
+                }
+            }
+            service->cloud_sync_in_progress_.store(false);
+            ESP_LOGI(kTag, "云端闹钟同步%s", success ? "完成" : "失败，保留本地列表");
+            vTaskDelete(nullptr);
+        },
+        "alarm_cloud_sync", 8192, this, 4, nullptr);
+    if (created != pdPASS) {
+        cloud_sync_in_progress_.store(false);
+        ESP_LOGE(kTag, "创建云端闹钟同步任务失败");
+    }
+}
+
+bool AlarmService::SyncFromCloud() {
+    std::string response;
+    if (!Application::GetInstance().FetchCloudAlarmList(response)) {
+        return false;
+    }
+    cJSON* root = cJSON_ParseWithLength(response.data(), response.size());
+    if (root == nullptr) {
+        ESP_LOGE(kTag, "云端闹钟列表不是有效 JSON");
+        return false;
+    }
+    const auto* code = cJSON_GetObjectItemCaseSensitive(root, "code");
+    const bool code_ok = (cJSON_IsNumber(code) && code->valueint == 0) ||
+                         (cJSON_IsString(code) && code->valuestring != nullptr &&
+                          std::strcmp(code->valuestring, "0") == 0);
+    const auto* data = cJSON_GetObjectItemCaseSensitive(root, "data");
+    if (!code_ok || !cJSON_IsArray(data)) {
+        ESP_LOGE(kTag, "云端闹钟列表业务响应无效");
+        cJSON_Delete(root);
+        return false;
+    }
+
+    const int64_t now = std::time(nullptr);
+    std::vector<AlarmSnapshot> cloud_alarms;
+    const int count = cJSON_GetArraySize(data);
+    cloud_alarms.reserve(static_cast<size_t>(std::max(0, count)));
+    for (int i = 0; i < count && cloud_alarms.size() < kMaxAlarms; ++i) {
+        AlarmSpec spec;
+        std::string error;
+        if (!ParseCloudAlarm(cJSON_GetArrayItem(data, i), spec, error)) {
+            ESP_LOGW(kTag, "跳过第 %d 个云端闹钟: %s", i, error.c_str());
+            continue;
+        }
+        AlarmSnapshot alarm;
+        if (!BuildAlarm(spec, now, alarm, error)) {
+            ESP_LOGW(kTag, "跳过云端闹钟 id=%s: %s", spec.id.c_str(), error.c_str());
+            continue;
+        }
+        const auto duplicate = std::find_if(
+            cloud_alarms.begin(), cloud_alarms.end(),
+            [&spec](const AlarmSnapshot& existing) { return existing.spec.id == spec.id; });
+        if (duplicate == cloud_alarms.end()) {
+            cloud_alarms.push_back(std::move(alarm));
+        } else {
+            *duplicate = std::move(alarm);
+        }
+    }
+    cJSON_Delete(root);
+
+    {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        auto previous_alarms = alarms_;
+        alarms_ = std::move(cloud_alarms);
+        if (!Save()) {
+            alarms_ = std::move(previous_alarms);
+            ESP_LOGE(kTag, "云端闹钟列表写入 NVS 失败");
+            return false;
+        }
+        time_reconciled_ = true;
+        UiApp::SetAlarmActive(HasActiveCountdown());
+        ESP_LOGI(kTag, "已按云端列表更新本地闹钟，共 %u 个",
+                 static_cast<unsigned>(alarms_.size()));
+    }
+    return true;
 }
 
 bool AlarmService::Load() {

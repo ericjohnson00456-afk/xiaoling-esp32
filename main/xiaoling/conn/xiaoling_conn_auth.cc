@@ -11,6 +11,7 @@
 
 #include <cctype>
 #include <cstdio>
+#include <cstring>
 #include <ctime>
 #include <utility>
 #include <vector>
@@ -86,6 +87,34 @@ bool PostJsonForToken(const std::string& url, const std::string& body,
     return true;
 }
 
+bool GetJsonWithHeaders(
+    const std::string& url,
+    const std::vector<std::pair<std::string, std::string>>& headers,
+    int& status_code, std::string& response_body, int timeout_ms) {
+    auto network = Board::GetInstance().GetNetwork();
+    if (network == nullptr) {
+        return false;
+    }
+    auto http = network->CreateHttp(0);
+    if (http == nullptr) {
+        return false;
+    }
+    http->SetHeader("Content-Type", "application/json");
+    for (const auto& [name, value] : headers) {
+        http->SetHeader(name.c_str(), value.c_str());
+    }
+    if (timeout_ms > 0) {
+        http->SetTimeout(timeout_ms);
+    }
+    if (!http->Open("GET", url)) {
+        return false;
+    }
+    status_code = http->GetStatusCode();
+    response_body = http->ReadAll();
+    http->Close();
+    return true;
+}
+
 }  // 匿名命名空间
 
 bool XiaolingConn::EnsureAuthenticated() {
@@ -148,6 +177,84 @@ bool XiaolingConn::ResolveKuwoMusicUrl(const std::string& item_id, std::string& 
     }
     cJSON_Delete(root);
     return !url.empty();
+}
+
+bool XiaolingConn::FetchAlarmList(std::string& response_body) {
+    response_body.clear();
+    if (!EnsureAuthenticated()) {
+        return false;
+    }
+    const std::vector<std::pair<std::string, std::string>> headers = {
+        {"Authorization", NormalizeBearerToken(LoadAccessToken())},
+        {"x-product-id", SystemInfo::GetProductId()},
+        {"x-device-id", SystemInfo::GetCloudDeviceId()},
+    };
+    int status_code = 0;
+    const std::string endpoint =
+        std::string("https://") + XiaolingConfig::GetHost() + "/v1/alarm_clocks";
+    if (!GetJsonWithHeaders(endpoint, headers, status_code, response_body, 10000) ||
+        status_code < 200 || status_code >= 300) {
+        ESP_LOGW(TAG, "同步云端闹钟列表失败: status=%d", status_code);
+        response_body.clear();
+        return false;
+    }
+    return true;
+}
+
+bool XiaolingConn::ResolveCustomAlarmDate(const std::string& alarm_id,
+                                          std::string& date) {
+    date.clear();
+    if (alarm_id.empty() || !EnsureAuthenticated()) {
+        return false;
+    }
+    cJSON* request = cJSON_CreateObject();
+    if (request == nullptr) {
+        return false;
+    }
+    cJSON_AddStringToObject(request, "type", "custom");
+    cJSON_AddStringToObject(request, "id", alarm_id.c_str());
+    char* request_text = cJSON_PrintUnformatted(request);
+    cJSON_Delete(request);
+    if (request_text == nullptr) {
+        return false;
+    }
+    const std::string request_body(request_text);
+    cJSON_free(request_text);
+
+    const std::vector<std::pair<std::string, std::string>> headers = {
+        {"Authorization", NormalizeBearerToken(LoadAccessToken())},
+        {"x-product-id", SystemInfo::GetProductId()},
+        {"x-device-id", SystemInfo::GetCloudDeviceId()},
+    };
+    int status_code = 0;
+    std::string response_body;
+    const std::string endpoint =
+        std::string("https://") + XiaolingConfig::GetHost() + "/v1/date/transition";
+    if (!PostJsonForToken(endpoint, request_body, headers, status_code, response_body, 10000) ||
+        status_code < 200 || status_code >= 300) {
+        ESP_LOGW(TAG, "查询 CUSTOM 闹钟下次日期失败: id=%s status=%d",
+                 alarm_id.c_str(), status_code);
+        return false;
+    }
+
+    cJSON* root = cJSON_ParseWithLength(response_body.data(), response_body.size());
+    if (root == nullptr) {
+        return false;
+    }
+    const auto* code = cJSON_GetObjectItemCaseSensitive(root, "code");
+    const bool success = (cJSON_IsNumber(code) && code->valueint == 0) ||
+                         (cJSON_IsString(code) && code->valuestring != nullptr &&
+                          std::strcmp(code->valuestring, "0") == 0);
+    const auto* value = cJSON_GetObjectItemCaseSensitive(root, "date");
+    if (success && cJSON_IsString(value) && value->valuestring != nullptr) {
+        date = value->valuestring;
+    }
+    cJSON_Delete(root);
+    if (date.empty()) {
+        ESP_LOGW(TAG, "CUSTOM 闹钟下次日期响应无效: id=%s", alarm_id.c_str());
+        return false;
+    }
+    return true;
 }
 
 bool XiaolingConn::Authenticate(const std::string& extra_code) {

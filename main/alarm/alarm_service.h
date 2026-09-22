@@ -3,6 +3,7 @@
 #include "player/core/playback_event.h"
 
 #include <cstdint>
+#include <atomic>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -64,6 +65,8 @@ public:
     void Snooze();
     void Stop(bool show_toast = false);
     void HandlePlaybackEvent(const PlaybackEvent& event);
+    void HandleTtsUrl(bool success, std::string url);
+    void RequestCloudSync();
 
     static const char* TypeName(AlarmType type);
     static bool ParseType(const std::string& value, AlarmType& type);
@@ -81,6 +84,9 @@ private:
     bool Load();
     bool Save() const;
     void StartRinging(const AlarmSnapshot& alarm, int64_t now);
+    void BeginAlarmTts();
+    void BeginLoopTone();
+    bool SyncFromCloud();
     void FinishRinging(bool advance_schedule);
     void AdvanceOrRemove(const std::string& id, int64_t after);
     int FindIndex(const std::string& id) const;
@@ -88,10 +94,20 @@ private:
     std::vector<AlarmSnapshot> alarms_;
     bool initialized_ = false;
     bool ringing_ = false;
+    enum class RingPhase : uint8_t {
+        kNone,
+        kInitialTone,
+        kWaitingTtsUrl,
+        kTts,
+        kLoopTone,
+    };
+    RingPhase ring_phase_ = RingPhase::kNone;
     bool current_pre_advanced_ = false;
     AlarmSnapshot current_alarm_;
     int64_t ring_started_at_ = 0;
     uint32_t tone_session_id_ = 0;
+    int64_t tts_request_deadline_ = 0;
     bool time_reconciled_ = false;
+    std::atomic_bool cloud_sync_in_progress_{false};
     mutable std::recursive_mutex mutex_;
 };

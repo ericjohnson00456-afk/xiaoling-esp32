@@ -960,6 +960,8 @@ void Application::InitializeXiaolingConn() {
         DismissAlert();
         board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
         UiApp::SetDuplexVisible(true);
+        // 鉴权和 WS 协议握手都已完成，此时 JWT/PID/DID 可用于云端全量对账。
+        AlarmService::GetInstance().RequestCloudSync();
         if (xiaoling_conn_->server_sample_rate() != codec->output_sample_rate()) {
             ESP_LOGW(TAG, "服务端采样率 %d 与设备输出采样率 %d 不一致",
                      xiaoling_conn_->server_sample_rate(), codec->output_sample_rate());
@@ -2059,6 +2061,24 @@ void Application::PlayTone(uint16_t tone_id) {
 }
 
 uint32_t Application::StartAlarmTone(uint16_t tone_id) {
+    PrepareAlarmPlayback();
+    const uint32_t session_id = audio_player_.PlayAlarmTone(tone_id);
+    if (session_id == 0) {
+        ESP_LOGW(TAG, "闹钟提示音播放失败: id=%u", static_cast<unsigned>(tone_id));
+    }
+    return session_id;
+}
+
+uint32_t Application::StartAlarmTtsUrl(const std::string& url) {
+    PrepareAlarmPlayback();
+    const uint32_t session_id = audio_player_.PlayAlarmTtsUrl(url);
+    if (session_id == 0) {
+        ESP_LOGW(TAG, "闹钟 TTS URL 播放失败");
+    }
+    return session_id;
+}
+
+void Application::PrepareAlarmPlayback() {
     const bool already_ringing = playback_intents_.Contains(PlaybackIntent::kAlarm);
     if (!already_ringing) {
         alarm_resume_music_ = audio_player_.IsMusicPlaying() &&
@@ -2080,11 +2100,39 @@ uint32_t Application::StartAlarmTone(uint16_t tone_id) {
         }
     }
     playback_intents_.Push(PlaybackIntent::kAlarm);
-    const uint32_t session_id = audio_player_.PlayAlarmTone(tone_id);
-    if (session_id == 0) {
-        ESP_LOGW(TAG, "闹钟提示音播放失败: id=%u", static_cast<unsigned>(tone_id));
+}
+
+bool Application::RequestAlarmTtsUrl(const std::string& text) {
+    std::lock_guard<std::mutex> lock(xiaoling_conn_mutex_);
+    if (xiaoling_conn_ == nullptr) {
+        return false;
     }
-    return session_id;
+    return xiaoling_conn_->RequestAlarmTtsUrl(
+        text, [](bool success, std::string url) {
+            auto& app = Application::GetInstance();
+            app.Schedule([success, url = std::move(url)]() mutable {
+                AlarmService::GetInstance().HandleTtsUrl(success, std::move(url));
+            });
+        });
+}
+
+void Application::CancelAlarmTtsRequest() {
+    std::lock_guard<std::mutex> lock(xiaoling_conn_mutex_);
+    if (xiaoling_conn_ != nullptr) {
+        xiaoling_conn_->CancelAlarmTtsRequest();
+    }
+}
+
+bool Application::FetchCloudAlarmList(std::string& response_body) {
+    std::lock_guard<std::mutex> lock(xiaoling_conn_mutex_);
+    return xiaoling_conn_ != nullptr && xiaoling_conn_->FetchAlarmList(response_body);
+}
+
+bool Application::ResolveCustomAlarmDate(const std::string& alarm_id,
+                                         std::string& date) {
+    std::lock_guard<std::mutex> lock(xiaoling_conn_mutex_);
+    return xiaoling_conn_ != nullptr &&
+           xiaoling_conn_->ResolveCustomAlarmDate(alarm_id, date);
 }
 
 void Application::StopAlarmTone() {
@@ -2131,6 +2179,7 @@ void Application::PlayOtaTone(uint16_t tone_id, uint8_t repeat_count) {
 
 void Application::ResetXiaolingConn() {
     Schedule([this]() {
+        std::lock_guard<std::mutex> lock(xiaoling_conn_mutex_);
         // Close audio channel if opened
         if (xiaoling_conn_ && xiaoling_conn_->IsConnected()) {
             xiaoling_conn_->Disconnect();

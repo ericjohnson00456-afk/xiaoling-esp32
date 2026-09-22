@@ -9,6 +9,7 @@
 #include <cJSON.h>
 #include <esp_app_desc.h>
 #include <esp_log.h>
+#include <esp_random.h>
 #include "base64_codec.h"
 
 #include <algorithm>
@@ -131,12 +132,162 @@ bool XiaolingConn::SendText(const std::string& text) {
                      static_cast<unsigned>(control_queue_.size()));
             return false;
         }
-        control_queue_.push_back(text);
+        control_queue_.push_back(ControlFrame{false, text});
     }
     if (task_handle_ != nullptr) {
         xTaskNotifyGive(task_handle_);
     }
     return true;
+}
+
+bool XiaolingConn::RequestAlarmTtsUrl(const std::string& text,
+                                      AlarmTtsCallback callback) {
+    if (text.empty() || !callback || !IsConnected()) {
+        return false;
+    }
+
+    uint32_t request_id = esp_random();
+    if (request_id == 0) request_id = 1;
+    const std::string rid = std::to_string(static_cast<unsigned long>(request_id));
+
+    cJSON* root = cJSON_CreateObject();
+    cJSON* params = root != nullptr ? cJSON_AddObjectToObject(root, "params") : nullptr;
+    cJSON* features = params != nullptr ? cJSON_AddArrayToObject(params, "features") : nullptr;
+    cJSON* nlu = params != nullptr ? cJSON_AddObjectToObject(params, "nlu_properties") : nullptr;
+    cJSON* custom = nlu != nullptr ? cJSON_AddObjectToObject(nlu, "custom") : nullptr;
+    if (root == nullptr || params == nullptr || features == nullptr || nlu == nullptr ||
+        custom == nullptr) {
+        cJSON_Delete(root);
+        return false;
+    }
+    cJSON_AddStringToObject(root, "action", "start");
+    cJSON_AddStringToObject(params, "data_type", "text");
+    cJSON_AddItemToArray(features, cJSON_CreateString("tts"));
+    cJSON_AddStringToObject(custom, "rid", rid.c_str());
+    const std::string start_message = JsonToString(root);
+    cJSON_Delete(root);
+    if (start_message.empty()) {
+        return false;
+    }
+
+    std::string text_frame = text;
+    text_frame.push_back('\0');
+    {
+        std::lock_guard<std::mutex> lock(alarm_tts_mutex_);
+        if (!pending_alarm_tts_.rid.empty()) {
+            ESP_LOGW(TAG, "已有闹钟 TTS 请求正在等待: rid=%s",
+                     pending_alarm_tts_.rid.c_str());
+            return false;
+        }
+        pending_alarm_tts_ = PendingAlarmTts{rid, std::move(callback), false};
+    }
+    {
+        std::lock_guard<std::mutex> lock(control_mutex_);
+        if (control_queue_.size() + 2 > kMaxControlMessages) {
+            std::lock_guard<std::mutex> tts_lock(alarm_tts_mutex_);
+            pending_alarm_tts_ = {};
+            ESP_LOGE(TAG, "WebSocket 控制队列空间不足，无法请求闹钟 TTS");
+            return false;
+        }
+        // 两帧在同一次加锁内入队，确保文本二进制帧不会越过 start。
+        control_queue_.push_back(ControlFrame{false, start_message});
+        control_queue_.push_back(ControlFrame{true, std::move(text_frame)});
+    }
+    LogTextFrame("TX", start_message);
+    ESP_LOGI(TAG, "已提交闹钟 TTS 文本会话: rid=%s, text_bytes=%u", rid.c_str(),
+             static_cast<unsigned>(text.size()));
+    if (task_handle_ != nullptr) {
+        xTaskNotifyGive(task_handle_);
+    }
+    return true;
+}
+
+void XiaolingConn::CancelAlarmTtsRequest() {
+    std::lock_guard<std::mutex> lock(alarm_tts_mutex_);
+    if (pending_alarm_tts_.rid.empty()) {
+        return;
+    }
+    ignored_alarm_tts_rids_.push_back(pending_alarm_tts_.rid);
+    while (ignored_alarm_tts_rids_.size() > 4) {
+        ignored_alarm_tts_rids_.pop_front();
+    }
+    pending_alarm_tts_ = {};
+}
+
+bool XiaolingConn::HandleAlarmTtsMessage(const cJSON* root) {
+    const std::string rid = ReadRequestId(root);
+    if (rid.empty()) {
+        return false;
+    }
+    const auto* action_item = cJSON_GetObjectItemCaseSensitive(root, "action");
+    const char* action = cJSON_IsString(action_item) ? action_item->valuestring : nullptr;
+    if (action == nullptr) {
+        return false;
+    }
+
+    AlarmTtsCallback callback;
+    bool callback_success = false;
+    std::string url;
+    bool matched = false;
+    const bool terminal = std::strcmp(action, "finish") == 0 ||
+                          std::strcmp(action, "closed") == 0 ||
+                          std::strcmp(action, "error") == 0;
+    {
+        std::lock_guard<std::mutex> lock(alarm_tts_mutex_);
+        if (pending_alarm_tts_.rid == rid) {
+            matched = true;
+            if (std::strcmp(action, "result") == 0 && !pending_alarm_tts_.url_delivered) {
+                const auto* data = cJSON_GetObjectItemCaseSensitive(root, "data");
+                const auto* sub = cJSON_IsObject(data)
+                                      ? cJSON_GetObjectItemCaseSensitive(data, "sub")
+                                      : nullptr;
+                const auto* content = cJSON_IsObject(data)
+                                          ? cJSON_GetObjectItemCaseSensitive(data, "content")
+                                          : nullptr;
+                if (cJSON_IsString(sub) && sub->valuestring != nullptr &&
+                    std::strcmp(sub->valuestring, "tts") == 0 &&
+                    cJSON_IsString(content) && content->valuestring != nullptr &&
+                    Base64Codec::Decode(content->valuestring, url) && !url.empty() &&
+                    std::memchr(url.data(), '\0', url.size()) == nullptr) {
+                    pending_alarm_tts_.url_delivered = true;
+                    callback_success = true;
+                    callback = std::move(pending_alarm_tts_.callback);
+                }
+            }
+            if (terminal) {
+                if (!pending_alarm_tts_.url_delivered) {
+                    callback = std::move(pending_alarm_tts_.callback);
+                }
+                pending_alarm_tts_ = {};
+            }
+        } else {
+            const auto ignored = std::find(ignored_alarm_tts_rids_.begin(),
+                                           ignored_alarm_tts_rids_.end(), rid);
+            if (ignored != ignored_alarm_tts_rids_.end()) {
+                matched = true;
+                if (terminal) {
+                    ignored_alarm_tts_rids_.erase(ignored);
+                }
+            }
+        }
+    }
+    if (callback) {
+        callback(callback_success, std::move(url));
+    }
+    return matched;
+}
+
+void XiaolingConn::FailPendingAlarmTtsRequest() {
+    AlarmTtsCallback callback;
+    {
+        std::lock_guard<std::mutex> lock(alarm_tts_mutex_);
+        callback = std::move(pending_alarm_tts_.callback);
+        pending_alarm_tts_ = {};
+        ignored_alarm_tts_rids_.clear();
+    }
+    if (callback) {
+        callback(false, {});
+    }
 }
 
 void XiaolingConn::SendMcpMessage(const std::string& message) {
@@ -169,8 +320,10 @@ void XiaolingConn::HandleIncomingText(const std::string& text) {
     LogTextFrame("RX", text);
 
     const auto* action = cJSON_GetObjectItemCaseSensitive(root, "action");
+    const bool alarm_tts_message = HandleAlarmTtsMessage(root);
     const bool current_session = IsCurrentSessionMessage(root);
-    if (cJSON_IsString(action) && action->valuestring != nullptr && current_session) {
+    if (!alarm_tts_message && cJSON_IsString(action) && action->valuestring != nullptr &&
+        current_session) {
         if (voice_ != nullptr) {
             voice_->HandleMessage(root);
         }
@@ -204,7 +357,7 @@ void XiaolingConn::HandleIncomingText(const std::string& text) {
         }
     }
 
-    if (on_incoming_json_ && current_session) {
+    if (!alarm_tts_message && on_incoming_json_ && current_session) {
         on_incoming_json_(root);
     }
     cJSON_Delete(root);

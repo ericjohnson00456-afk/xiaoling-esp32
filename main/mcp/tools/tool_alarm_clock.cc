@@ -89,7 +89,7 @@ MCP_REGISTER_TOOL(RegisterAlarmClock, McpToolGroup::kCommon, 150) {
       "ls.built_in.alarm_clock",
       "智能闹钟与提醒管理系统。当前端侧支持公历单次、每天、每周、每月和每年提醒；"
       "WORKDAY/WEEKEND 暂按周一至周五/周六周日计算，不包含法定节假日和调休。"
-      "农历、法定节假日和 CUSTOM 参数保留协议兼容，但在日期云服务接入前会明确返回不支持。"
+      "CUSTOM 类型通过日期云服务查询下一次触发日期；农历和法定节假日日期转换暂未接入。"
       "核心准则：1.【禁止猜测时间】若用户仅提供'下午'、'早晨'、'待会'、'以后'等模糊时段，"
       "或未提及具体时间，严禁私自编造时间点，此时必须放弃调用函数，转而向用户询问具体几点几分。"
       "2. 识别到特定节日必须填充 holiday_name；"
@@ -102,7 +102,7 @@ MCP_REGISTER_TOOL(RegisterAlarmClock, McpToolGroup::kCommon, 150) {
                    JsonSchema{R"({"type":"string","enum":["CREATE","DELETE","UPDATE","QUERY"],"description":"操作类型：CREATE(新建), DELETE(删除), UPDATE(修改), QUERY(查询)。"})"},
                    true),
           Property("alarm_type", kPropertyTypeJson,
-                   JsonSchema{R"({"type":"string","enum":["ONCE","DAILY","WEEKLY","WORKDAY","WEEKEND","MONTHLY","YEARLY","CUSTOM"],"description":"循环策略。节日提醒固定使用 YEARLY。CUSTOM 类型必须提供 date 参数，触发后通过API查询下次时间。"})"},
+                   JsonSchema{R"({"type":"string","enum":["ONCE","DAILY","WEEKLY","WORKDAY","WEEKEND","MONTHLY","YEARLY","CUSTOM"],"description":"循环策略。节日提醒固定使用 YEARLY。CUSTOM 类型由日期云服务根据 id 查询下一次触发日期。"})"},
                    false),
           Property("holiday_name", kPropertyTypeJson,
                    JsonSchema{R"({"type":"string","description":"节日名称（如'中秋节'、'母亲节'）。若用户提及节日，此项必填。"})"},

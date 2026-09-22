@@ -196,6 +196,17 @@ uint32_t AudioPlayer::PlayAlarmTone(uint16_t tone_id) {
     return tone_channel_->PlayAlarm(tone_id);
 }
 
+uint32_t AudioPlayer::PlayAlarmTtsUrl(const std::string& url) {
+    if (engine_ == nullptr || tts_channel_ == nullptr || wakeup_in_progress_) {
+        ESP_LOGW(TAG, "播放器不可用或唤醒提示音正在播放");
+        return 0;
+    }
+    if (!PauseMusic() || !StopNonMusic(PlaybackEndReason::kPreempted)) {
+        return 0;
+    }
+    return tts_channel_->PlayAlarmUrl(url);
+}
+
 void AudioPlayer::PlayWakeup(std::function<void(bool)> completion) {
     wakeup_in_progress_ = true;
     if (!PauseMusic() || !StopNonMusic(PlaybackEndReason::kPreempted)) {
