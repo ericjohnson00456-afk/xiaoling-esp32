@@ -11,7 +11,7 @@
 #include "soc/io_mux_reg.h"
 #include "hal/rtc_io_hal.h"
 #include "hal/gpio_ll.h"
-#include "settings.h"
+#include "shell/cmd/kv/kv_user.h"
 #include "config.h"
 
 static const char TAG[] = "AdcPdmAudioCodec";
@@ -228,12 +228,7 @@ int AdcPdmAudioCodec::Write(const int16_t* data, int samples) {
 }
 
 void AdcPdmAudioCodec::Start() {
-    Settings settings("audio", false);
-    output_volume_ = settings.GetInt("output_volume", output_volume_);
-    if (output_volume_ <= 0) {
-        ESP_LOGW(TAG, "Output volume value (%d) is too small, setting to default (10)", output_volume_);
-        output_volume_ = 10;
-    }
+    output_volume_ = KvUser::GetVolume();
 
     EnableInput(true);
     EnableOutput(true);

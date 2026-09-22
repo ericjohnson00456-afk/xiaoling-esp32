@@ -1,6 +1,7 @@
 #include "backlight.h"
-#include "settings.h"
+#include "shell/cmd/kv/kv_user.h"
 
+#include <algorithm>
 #include <esp_log.h>
 #include <driver/ledc.h>
 
@@ -30,17 +31,7 @@ Backlight::~Backlight() {
 }
 
 void Backlight::RestoreBrightness() {
-    // Load brightness from settings
-    Settings settings("display");  
-    int saved_brightness = settings.GetInt("brightness", 75);
-    
-    // 检查亮度值是否为0或过小，设置默认值
-    if (saved_brightness <= 0) {
-        ESP_LOGW(TAG, "Brightness value (%d) is too small, setting to default (10)", saved_brightness);
-        saved_brightness = 10;  // 设置一个较低的默认值
-    }
-    
-    SetBrightness(saved_brightness);
+    SetBrightness(static_cast<uint8_t>(KvUser::GetBrightness()));
 }
 
 void Backlight::SetBrightness(uint8_t brightness, bool permanent) {
@@ -48,13 +39,13 @@ void Backlight::SetBrightness(uint8_t brightness, bool permanent) {
         brightness = 100;
     }
 
-    if (brightness_ == brightness) {
-        return;
+    if (permanent) {
+        brightness = std::max<uint8_t>(brightness, KvUser::GetMinBrightness());
+        KvUser::SetBrightness(brightness);
     }
 
-    if (permanent) {
-        Settings settings("display", true);
-        settings.SetInt("brightness", brightness);
+    if (brightness_ == brightness && target_brightness_ == brightness) {
+        return;
     }
 
     target_brightness_ = brightness;
@@ -118,4 +109,3 @@ void PwmBacklight::SetBrightnessImpl(uint8_t brightness) {
     ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, duty_cycle);
     ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
 }
-

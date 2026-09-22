@@ -1,6 +1,6 @@
 #include "audio_codec.h"
 #include "board.h"
-#include "settings.h"
+#include "shell/cmd/kv/kv_user.h"
 
 #include <esp_log.h>
 #include <cstring>
@@ -27,17 +27,7 @@ bool AudioCodec::InputData(std::vector<int16_t>& data) {
 }
 
 void AudioCodec::Start() {
-    Settings settings("audio", false);
-    output_volume_ = settings.GetInt("output_volume", output_volume_);
-    if (output_volume_ <= 0) {
-#ifdef CONFIG_LSPLATFORM
-        ESP_LOGW(TAG, "Output volume value (%d) is too small, setting to default (50)", output_volume_);
-        output_volume_ = 50;
-#else // !CONFIG_LSPLATFORM
-        ESP_LOGW(TAG, "Output volume value (%d) is too small, setting to default (10)", output_volume_);
-        output_volume_ = 10;
-#endif // CONFIG_LSPLATFORM
-    }
+    output_volume_ = KvUser::GetVolume();
 
     if (tx_handle_ != nullptr) {
         ESP_ERROR_CHECK(i2s_channel_enable(tx_handle_));
@@ -56,8 +46,7 @@ void AudioCodec::SetOutputVolume(int volume) {
     output_volume_ = volume;
     ESP_LOGI(TAG, "Set output volume to %d", output_volume_);
     
-    Settings settings("audio", true);
-    settings.SetInt("output_volume", output_volume_);
+    KvUser::SetVolume(output_volume_);
 }
 
 void AudioCodec::SetInputGain(float gain) {

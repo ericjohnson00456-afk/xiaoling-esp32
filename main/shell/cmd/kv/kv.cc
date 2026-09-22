@@ -1,11 +1,15 @@
 #include "kv_user.h"
 
 #include "application.h"
+#include "audio_codec.h"
+#include "backlight.h"
+#include "board.h"
 #include "settings.h"
 #include "ui/ui_app.h"
 #include "xiaoling/session/session_core.h"
 
 #include <cerrno>
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -102,6 +106,10 @@ enum class UserIntKey {
     UiLanguage,
     FullDuplexTimeoutMs,
     IdleExitTimeoutMs,
+    Volume,
+    MinVolume,
+    Brightness,
+    MinBrightness,
 };
 
 UserIntKey ParseUserIntKey(const char* logical_key) {
@@ -112,6 +120,10 @@ UserIntKey ParseUserIntKey(const char* logical_key) {
         return UserIntKey::FullDuplexTimeoutMs;
     }
     if (std::strcmp(logical_key, KvUser::kIdleExitTimeoutMs) == 0) return UserIntKey::IdleExitTimeoutMs;
+    if (std::strcmp(logical_key, KvUser::kVolume) == 0) return UserIntKey::Volume;
+    if (std::strcmp(logical_key, KvUser::kMinVolume) == 0) return UserIntKey::MinVolume;
+    if (std::strcmp(logical_key, KvUser::kBrightness) == 0) return UserIntKey::Brightness;
+    if (std::strcmp(logical_key, KvUser::kMinBrightness) == 0) return UserIntKey::MinBrightness;
     return UserIntKey::None;
 }
 
@@ -125,6 +137,11 @@ bool IsValidUserIntValue(UserIntKey key, int32_t value) {
             return value >= 0;
         case UserIntKey::IdleExitTimeoutMs:
             return value >= 0;
+        case UserIntKey::Volume:
+        case UserIntKey::MinVolume:
+        case UserIntKey::Brightness:
+        case UserIntKey::MinBrightness:
+            return value >= 0 && value <= 100;
         case UserIntKey::None:
             return false;
     }
@@ -149,6 +166,43 @@ void SetUserIntValue(UserIntKey key, int32_t value) {
         case UserIntKey::IdleExitTimeoutMs:
             KvUser::SetIdleExitTimeoutMs(value);
             break;
+        case UserIntKey::Volume: {
+            const int32_t effective_value = std::max(value, KvUser::GetMinVolume());
+            auto* codec = Board::GetInstance().GetAudioCodec();
+            if (codec != nullptr) {
+                codec->SetOutputVolume(effective_value);
+            } else {
+                KvUser::SetVolume(effective_value);
+            }
+            break;
+        }
+        case UserIntKey::MinVolume: {
+            KvUser::SetMinVolume(value);
+            auto* codec = Board::GetInstance().GetAudioCodec();
+            if (codec != nullptr && codec->output_volume() < value) {
+                codec->SetOutputVolume(value);
+            }
+            break;
+        }
+        case UserIntKey::Brightness: {
+            const int32_t effective_value = std::max(value, KvUser::GetMinBrightness());
+            auto* backlight = Board::GetInstance().GetBacklight();
+            if (backlight != nullptr) {
+                backlight->SetBrightness(static_cast<uint8_t>(effective_value), true);
+            } else {
+                KvUser::SetBrightness(effective_value);
+            }
+            break;
+        }
+        case UserIntKey::MinBrightness: {
+            const int32_t current_brightness = KvUser::GetBrightness();
+            KvUser::SetMinBrightness(value);
+            auto* backlight = Board::GetInstance().GetBacklight();
+            if (backlight != nullptr && current_brightness < value) {
+                backlight->SetBrightness(static_cast<uint8_t>(value), true);
+            }
+            break;
+        }
         case UserIntKey::None:
             break;
     }
@@ -160,6 +214,10 @@ int32_t GetUserIntValue(UserIntKey key) {
         case UserIntKey::UiLanguage: return KvUser::GetUiLanguage();
         case UserIntKey::FullDuplexTimeoutMs: return KvUser::GetFullDuplexTimeoutMs();
         case UserIntKey::IdleExitTimeoutMs: return KvUser::GetIdleExitTimeoutMs();
+        case UserIntKey::Volume: return KvUser::GetVolume();
+        case UserIntKey::MinVolume: return KvUser::GetMinVolume();
+        case UserIntKey::Brightness: return KvUser::GetBrightness();
+        case UserIntKey::MinBrightness: return KvUser::GetMinBrightness();
         case UserIntKey::None: return -1;
     }
     return -1;
@@ -171,6 +229,10 @@ const char* UserIntKeyName(UserIntKey key) {
         case UserIntKey::UiLanguage: return KvUser::kUiLanguage;
         case UserIntKey::FullDuplexTimeoutMs: return KvUser::kFullDuplexTimeoutMs;
         case UserIntKey::IdleExitTimeoutMs: return KvUser::kIdleExitTimeoutMs;
+        case UserIntKey::Volume: return KvUser::kVolume;
+        case UserIntKey::MinVolume: return KvUser::kMinVolume;
+        case UserIntKey::Brightness: return KvUser::kBrightness;
+        case UserIntKey::MinBrightness: return KvUser::kMinBrightness;
         case UserIntKey::None: return "";
     }
     return "";
@@ -340,7 +402,7 @@ int HandleSet(int argc, char** argv) {
                     }
                     SetUserIntValue(user_key, value);
                     std::printf("flash set %s=%ld success\n", UserIntKeyName(user_key),
-                                 static_cast<long>(value));
+                                 static_cast<long>(GetUserIntValue(user_key)));
                     return 0;
                 }
             }
@@ -381,7 +443,7 @@ int HandleSet(int argc, char** argv) {
             }
             SetUserIntValue(user_key, value);
             std::printf("flash set %s=%ld success\n", UserIntKeyName(user_key),
-                         static_cast<long>(value));
+                         static_cast<long>(GetUserIntValue(user_key)));
             return 0;
         }
         KvOta::UpdateType type;
@@ -646,6 +708,48 @@ int32_t GetIdleExitTimeoutMs() {
 void SetIdleExitTimeoutMs(int32_t value) {
     Settings settings(KvUser::kNamespace, true);
     settings.SetInt("idle_timeout", value);
+}
+
+int32_t GetMinVolume() {
+    Settings settings(KvUser::kNamespace, false);
+    return std::clamp(settings.GetInt("min_volume", kDefaultMinVolume), int32_t{0}, int32_t{100});
+}
+
+void SetMinVolume(int32_t value) {
+    Settings settings(KvUser::kNamespace, true);
+    settings.SetInt("min_volume", std::clamp(value, int32_t{0}, int32_t{100}));
+}
+
+int32_t GetVolume() {
+    Settings settings(KvUser::kNamespace, false);
+    return std::clamp(settings.GetInt("volume", kDefaultVolume), GetMinVolume(), int32_t{100});
+}
+
+void SetVolume(int32_t value) {
+    Settings settings(KvUser::kNamespace, true);
+    settings.SetInt("volume", std::clamp(value, GetMinVolume(), int32_t{100}));
+}
+
+int32_t GetMinBrightness() {
+    Settings settings(KvUser::kNamespace, false);
+    return std::clamp(settings.GetInt("min_brightness", kDefaultMinBrightness),
+                      int32_t{0}, int32_t{100});
+}
+
+void SetMinBrightness(int32_t value) {
+    Settings settings(KvUser::kNamespace, true);
+    settings.SetInt("min_brightness", std::clamp(value, int32_t{0}, int32_t{100}));
+}
+
+int32_t GetBrightness() {
+    Settings settings(KvUser::kNamespace, false);
+    return std::clamp(settings.GetInt("brightness", kDefaultBrightness),
+                      GetMinBrightness(), int32_t{100});
+}
+
+void SetBrightness(int32_t value) {
+    Settings settings(KvUser::kNamespace, true);
+    settings.SetInt("brightness", std::clamp(value, GetMinBrightness(), int32_t{100}));
 }
 
 }  // namespace KvUser
