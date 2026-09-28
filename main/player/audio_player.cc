@@ -1,5 +1,6 @@
 #include "audio_player.h"
 
+#include "channels/alarm_player.h"
 #include "channels/tone_player.h"
 #include "channels/tts_player.h"
 #include "channels/music_player.h"
@@ -33,6 +34,9 @@ bool AudioPlayer::Initialize(AudioService* audio_service) {
         return next_session_id_.fetch_add(1);
     });
     tts_channel_ = std::make_unique<TtsPlayer>(*engine_, [this]() {
+        return next_session_id_.fetch_add(1);
+    });
+    alarm_channel_ = std::make_unique<AlarmPlayer>(*engine_, [this]() {
         return next_session_id_.fetch_add(1);
     });
     tts_channel_->SetUrlCallback([this]() {
@@ -336,25 +340,25 @@ uint32_t AudioPlayer::PlayTone(uint16_t tone_id) {
 }
 
 uint32_t AudioPlayer::PlayAlarmTone(uint16_t tone_id) {
-    if (engine_ == nullptr || tone_channel_ == nullptr || wakeup_in_progress_) {
+    if (engine_ == nullptr || alarm_channel_ == nullptr || wakeup_in_progress_) {
         ESP_LOGW(TAG, "播放器不可用或唤醒提示音正在播放");
         return 0;
     }
     if (!PauseMusic() || !StopNonMusic(PlaybackEndReason::kPreempted)) {
         return 0;
     }
-    return tone_channel_->PlayAlarm(tone_id);
+    return alarm_channel_->PlayTone(tone_id);
 }
 
 uint32_t AudioPlayer::PlayAlarmTtsUrl(const std::string& url) {
-    if (engine_ == nullptr || tts_channel_ == nullptr || wakeup_in_progress_) {
+    if (engine_ == nullptr || alarm_channel_ == nullptr || wakeup_in_progress_) {
         ESP_LOGW(TAG, "播放器不可用或唤醒提示音正在播放");
         return 0;
     }
     if (!PauseMusic() || !StopNonMusic(PlaybackEndReason::kPreempted)) {
         return 0;
     }
-    return tts_channel_->PlayAlarmUrl(url);
+    return alarm_channel_->PlayUrl(url);
 }
 
 void AudioPlayer::PlayWakeup(std::function<void(bool)> completion) {
@@ -446,6 +450,9 @@ void AudioPlayer::DispatchPlaybackEvent(const PlaybackEvent& event) {
     if (tts_channel_ != nullptr && event.channel == tts_channel_->Type()) {
         tts_channel_->OnEvent(event);
     }
+    if (alarm_channel_ != nullptr && event.channel == alarm_channel_->Type()) {
+        alarm_channel_->OnEvent(event);
+    }
     if (music_channel_ != nullptr && event.channel == music_channel_->Type()) {
         music_channel_->OnEvent(event);
         if (event.state == PlaybackState::kFailed) {
@@ -492,6 +499,12 @@ bool AudioPlayer::PauseMusic() {
 void AudioPlayer::SetEventCallback(EventCallback callback) {
     std::lock_guard<std::mutex> lock(callback_mutex_);
     event_callback_ = std::move(callback);
+}
+
+void AudioPlayer::SetAlarmEventCallback(EventCallback callback) {
+    if (alarm_channel_ != nullptr) {
+        alarm_channel_->SetEventCallback(std::move(callback));
+    }
 }
 
 void AudioPlayer::SetTtsUrlCallback(TtsUrlCallback callback) {

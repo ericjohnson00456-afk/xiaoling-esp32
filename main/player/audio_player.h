@@ -16,6 +16,7 @@ class PlayerEngine;
 class TonePlayer;
 class TtsPlayer;
 class MusicPlayer;
+class AlarmPlayer;
 
 class AudioPlayer {
 public:
@@ -57,6 +58,7 @@ public:
     bool ResumeMusic();
     void DispatchPlaybackEvent(const PlaybackEvent& event);
     void SetEventCallback(EventCallback callback);
+    void SetAlarmEventCallback(EventCallback callback);
     void SetTtsUrlCallback(TtsUrlCallback callback);
 
 private:
@@ -80,6 +82,7 @@ private:
     std::unique_ptr<PlayerEngine> music_engine_;
     std::unique_ptr<TonePlayer> tone_channel_;
     std::unique_ptr<TtsPlayer> tts_channel_;
+    std::unique_ptr<AlarmPlayer> alarm_channel_;
     std::unique_ptr<MusicPlayer> music_channel_;
     mutable std::mutex music_list_mutex_;
     std::vector<MusicListItem> music_list_;

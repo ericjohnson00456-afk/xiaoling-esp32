@@ -1,5 +1,4 @@
 #include "application.h"
-#include "alarm/alarm_service.h"
 #include "board.h"
 #include "display/display.h"
 #include "system/system_info.h"
@@ -17,6 +16,7 @@
 #include "ui/screens/qrcode/qrcode_presenter.h"
 #include "xiaoling/xiaoling_events.h"
 #include "player/resource/localized_audio.h"
+#include "player/intents/alarm_intent.h"
 #include "player/intents/music_intent.h"
 #include "player/intents/voice_session_intent.h"
 #include "shell/cmd/kv/kv_user.h"
@@ -390,10 +390,12 @@ void Application::Initialize() {
                    (active_tts_session_id_ != 0 ||
                     tts_waiting_for_playback_.load());
         }));
+    playback_intents_.SetHandlers(
+        PlaybackIntent::kAlarm,
+        CreateAlarmIntentHandlers());
     audio_player_.SetEventCallback([this](const PlaybackEvent& event) {
         Schedule([this, event]() {
             audio_player_.DispatchPlaybackEvent(event);
-            AlarmService::GetInstance().HandlePlaybackEvent(event);
             if (event.channel != PlaybackChannel::kTts) {
                 return;
             }
@@ -568,8 +570,8 @@ void Application::Initialize() {
         xEventGroupSetBits(event_group_, MAIN_EVENT_STATE_CHANGED);
     });
 
-    // 本地闹钟不依赖云端鉴权；NVS 就绪后立即恢复，校时完成后自动开始调度。
-    AlarmService::GetInstance().Initialize();
+    // 闹钟的恢复、播放、时钟及云端同步钩子统一在 application_alarm.cc 安装。
+    InitializeAlarm();
 
     // 启动时钟定时器，用于更新状态栏。
     esp_timer_start_periodic(clock_timer_handle_, 1000000);
@@ -749,7 +751,9 @@ void Application::ProcessMainEvents(EventBits_t bits) {
 
     if (bits & MAIN_EVENT_CLOCK_TICK) {
         clock_ticks_++;
-        AlarmService::GetInstance().Tick();
+        if (alarm_flow_.on_clock_tick) {
+            alarm_flow_.on_clock_tick();
+        }
         PublishWifiIcon();
         UiApp::UpdateStatusBar();
 
@@ -945,8 +949,6 @@ void Application::InitializeXiaolingConn() {
         DismissAlert();
         board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
         UiApp::SetDuplexVisible(true);
-        // 鉴权和 WS 协议握手都已完成，此时 JWT/PID/DID 可用于云端全量对账。
-        AlarmService::GetInstance().RequestCloudSync();
         if (xiaoling_conn_->server_sample_rate() != codec->output_sample_rate()) {
             ESP_LOGW(TAG, "服务端采样率 %d 与设备输出采样率 %d 不一致",
                      xiaoling_conn_->server_sample_rate(), codec->output_sample_rate());
@@ -1251,9 +1253,8 @@ void Application::HandleStopListeningEvent() {
 }
 
 void Application::HandleWakeWordDetectedEvent() {
-    // 唤醒词先关闭当前闹钟，再继续正常唤醒会话。
-    if (AlarmService::GetInstance().IsRinging()) {
-        AlarmService::GetInstance().Stop();
+    if (alarm_flow_.on_wake_word) {
+        alarm_flow_.on_wake_word();
     }
     if (exit_requested_.load() &&
         (tts_waiting_for_playback_.load() || audio_player_.IsPlaying())) {
@@ -2160,96 +2161,6 @@ void Application::PlayActivationAudio(uint16_t id) {
 void Application::PlayTone(uint16_t tone_id) {
     if (audio_player_.PlayTone(tone_id) == 0) {
         ESP_LOGW(TAG, "ROMFS tone 播放失败: id=%u", static_cast<unsigned>(tone_id));
-    }
-}
-
-uint32_t Application::StartAlarmTone(uint16_t tone_id) {
-    PrepareAlarmPlayback();
-    const uint32_t session_id = audio_player_.PlayAlarmTone(tone_id);
-    if (session_id == 0) {
-        ESP_LOGW(TAG, "闹钟提示音播放失败: id=%u", static_cast<unsigned>(tone_id));
-    }
-    return session_id;
-}
-
-uint32_t Application::StartAlarmTtsUrl(const std::string& url) {
-    PrepareAlarmPlayback();
-    const uint32_t session_id = audio_player_.PlayAlarmTtsUrl(url);
-    if (session_id == 0) {
-        ESP_LOGW(TAG, "闹钟 TTS URL 播放失败");
-    }
-    return session_id;
-}
-
-void Application::PrepareAlarmPlayback() {
-    const bool already_ringing = playback_intents_.Contains(PlaybackIntent::kAlarm);
-    if (!already_ringing) {
-        alarm_resume_music_ = audio_player_.IsMusicPlaying() &&
-                              !playback_intents_.Contains(PlaybackIntent::kMusic);
-        if (auto* codec = Board::GetInstance().GetAudioCodec(); codec != nullptr) {
-            const int minimum_ring_volume = KvUser::GetMinAlarmVolume();
-            const int current_volume = codec->output_volume();
-            if (current_volume < minimum_ring_volume) {
-                alarm_previous_volume_ = current_volume;
-                codec->SetOutputVolumeTemporary(minimum_ring_volume);
-                ESP_LOGI(TAG, "闹钟临时音量: %d -> %d", current_volume,
-                         minimum_ring_volume);
-            } else {
-                // 配置值是音量下限，并非固定的响铃音量。
-                alarm_previous_volume_ = -1;
-                ESP_LOGI(TAG, "闹钟保持当前音量: %d (minimum=%d)", current_volume,
-                         minimum_ring_volume);
-            }
-        }
-    }
-    playback_intents_.Push(PlaybackIntent::kAlarm);
-}
-
-bool Application::RequestAlarmTtsUrl(const std::string& text) {
-    std::lock_guard<std::mutex> lock(xiaoling_conn_mutex_);
-    if (xiaoling_conn_ == nullptr) {
-        return false;
-    }
-    return xiaoling_conn_->RequestAlarmTtsUrl(
-        text, [](bool success, std::string url) {
-            auto& app = Application::GetInstance();
-            app.Schedule([success, url = std::move(url)]() mutable {
-                AlarmService::GetInstance().HandleTtsUrl(success, std::move(url));
-            });
-        });
-}
-
-void Application::CancelAlarmTtsRequest() {
-    std::lock_guard<std::mutex> lock(xiaoling_conn_mutex_);
-    if (xiaoling_conn_ != nullptr) {
-        xiaoling_conn_->CancelAlarmTtsRequest();
-    }
-}
-
-bool Application::FetchCloudAlarmList(std::string& response_body) {
-    std::lock_guard<std::mutex> lock(xiaoling_conn_mutex_);
-    return xiaoling_conn_ != nullptr && xiaoling_conn_->FetchAlarmList(response_body);
-}
-
-bool Application::ResolveCustomAlarmDate(const std::string& alarm_id,
-                                         std::string& date) {
-    std::lock_guard<std::mutex> lock(xiaoling_conn_mutex_);
-    return xiaoling_conn_ != nullptr &&
-           xiaoling_conn_->ResolveCustomAlarmDate(alarm_id, date);
-}
-
-void Application::StopAlarmTone() {
-    audio_player_.StopNonMusic(PlaybackEndReason::kCancelled);
-    playback_intents_.Pop(PlaybackIntent::kAlarm);
-    if (alarm_previous_volume_ >= 0) {
-        if (auto* codec = Board::GetInstance().GetAudioCodec(); codec != nullptr) {
-            codec->SetOutputVolumeTemporary(alarm_previous_volume_);
-        }
-        alarm_previous_volume_ = -1;
-    }
-    if (alarm_resume_music_) {
-        audio_player_.ResumeMusic();
-        alarm_resume_music_ = false;
     }
 }
 

@@ -19,15 +19,12 @@ public:
     void Cancel(PlayerEngine& engine) override;
 
     uint32_t PlayUrl(const std::string& url);
-    uint32_t PlayAlarmUrl(const std::string& url);
     void SetUrlCallback(UrlCallback callback);
     void SetAdmissionCallback(AdmissionCallback callback);
     static bool IsHttpUrl(const std::string& url);
 
 private:
-    uint32_t PlayUrlInternal(const std::string& url, bool notify,
-                             PlaybackChannel channel = PlaybackChannel::kTts,
-                             int priority = 50);
+    uint32_t PlayUrlInternal(const std::string& url, bool notify);
 
     PlayerEngine* engine_;
     SessionAllocator allocate_session_;

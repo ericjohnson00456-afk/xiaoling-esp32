@@ -17,6 +17,21 @@
 
 #define TAG "M5StackCoreS3Board"
 
+namespace {
+
+// AXP2101 的电源键中断使能和状态寄存器。状态位写 1 清除。
+constexpr uint8_t kAxp2101IrqEnable1Reg = 0x41;
+constexpr uint8_t kAxp2101IrqStatus1Reg = 0x49;
+constexpr uint8_t kPowerKeyLongPressMask = 1 << 2;
+constexpr uint8_t kPowerKeyShortPressMask = 1 << 3;
+constexpr uint8_t kPowerKeyEventMask = kPowerKeyLongPressMask | kPowerKeyShortPressMask;
+
+// 等待后续短按以识别双击、多击；Application 会根据最终击次执行业务。
+constexpr int64_t kPowerKeyMultiClickTimeoutUs = 400 * 1000;
+constexpr uint64_t kPowerKeyPollPeriodUs = 50 * 1000;
+
+}  // namespace
+
 class Pmic : public Axp2101 {
 public:
     // Power Init
@@ -31,6 +46,21 @@ public:
         WriteReg(0x90, 0xBF);
         WriteReg(0x94, 33 - 5);
         WriteReg(0x95, 33 - 5);
+    }
+
+    void EnablePowerKeyEvents() {
+        // 先清除上电过程中残留的按键状态，避免启动完成后误触发一次短按。
+        WriteReg(kAxp2101IrqStatus1Reg, kPowerKeyEventMask);
+        const uint8_t irq_enable = ReadReg(kAxp2101IrqEnable1Reg);
+        WriteReg(kAxp2101IrqEnable1Reg, irq_enable | kPowerKeyEventMask);
+    }
+
+    uint8_t ReadAndClearPowerKeyEvents() {
+        const uint8_t events = ReadReg(kAxp2101IrqStatus1Reg) & kPowerKeyEventMask;
+        if (events != 0) {
+            WriteReg(kAxp2101IrqStatus1Reg, events);
+        }
+        return events;
     }
 
     void SetBrightness(uint8_t brightness) {
@@ -125,7 +155,10 @@ private:
     LcdDisplay* display_;
     Esp32Camera* camera_;
     esp_timer_handle_t touchpad_timer_;
+    esp_timer_handle_t power_key_timer_;
     PowerSaveTimer* power_save_timer_;
+    uint8_t pending_power_key_clicks_ = 0;
+    int64_t last_power_key_click_time_us_ = 0;
 
     void InitializePowerSaveTimer() {
         power_save_timer_ = new PowerSaveTimer(-1, 60, 300);
@@ -184,6 +217,52 @@ private:
     void InitializeAxp2101() {
         ESP_LOGI(TAG, "Init AXP2101");
         pmic_ = new Pmic(i2c_bus_, 0x34);
+    }
+
+    void PollPowerKey() {
+        const uint8_t events = pmic_->ReadAndClearPowerKeyEvents();
+
+        // 某些按压过程可能同时留下多个状态位，长按优先，避免再触发短按业务。
+        if ((events & kPowerKeyLongPressMask) != 0) {
+            pending_power_key_clicks_ = 0;
+            ESP_LOGI(TAG, "Power key long press");
+            Application::GetInstance().HandleButtonLongPress();
+            return;
+        }
+
+        if ((events & kPowerKeyShortPressMask) != 0) {
+            // Application 当前只区分 1~5 击和 8 击以上，饱和到 8 可避免溢出。
+            if (pending_power_key_clicks_ < 8) {
+                ++pending_power_key_clicks_;
+            }
+            last_power_key_click_time_us_ = esp_timer_get_time();
+        }
+
+        if (pending_power_key_clicks_ == 0 ||
+            esp_timer_get_time() - last_power_key_click_time_us_ < kPowerKeyMultiClickTimeoutUs) {
+            return;
+        }
+
+        const uint8_t click_count = pending_power_key_clicks_;
+        pending_power_key_clicks_ = 0;
+        ESP_LOGI(TAG, "Power key click count: %u", static_cast<unsigned>(click_count));
+        Application::GetInstance().HandleButtonClick(click_count);
+    }
+
+    void InitializePowerKey() {
+        pmic_->EnablePowerKeyEvents();
+        const esp_timer_create_args_t timer_args = {
+            .callback = [](void* arg) {
+                static_cast<M5StackCoreS3Board*>(arg)->PollPowerKey();
+            },
+            .arg = this,
+            .dispatch_method = ESP_TIMER_TASK,
+            .name = "power_key_timer",
+            .skip_unhandled_events = true,
+        };
+        ESP_ERROR_CHECK(esp_timer_create(&timer_args, &power_key_timer_));
+        ESP_ERROR_CHECK(esp_timer_start_periodic(power_key_timer_, kPowerKeyPollPeriodUs));
+        ESP_LOGI(TAG, "AXP2101 power key enabled");
     }
 
     void InitializeAw9523() {
@@ -335,6 +414,7 @@ public:
         InitializePowerSaveTimer();
         InitializeI2c();
         InitializeAxp2101();
+        InitializePowerKey();
         InitializeAw9523();
         I2cDetect();
         InitializeSpi();

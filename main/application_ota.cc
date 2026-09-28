@@ -164,19 +164,6 @@ bool Application::CheckAssetsVersion() {
     bool emoji_downloaded = false;
     bool wake_word_downloaded = false;
     for (const auto& item : pending) {
-#if CONFIG_USE_MICRO_WAKE_WORD
-        if (item.resource == Ota::Resource::WakeWord) {
-            // The resource endpoint currently serves an ESP-SR/CAE ROMFS
-            // image (wrap.json + ESR model), while this build requires a
-            // Micro Wake Word descriptor and a same-package TFLite model.
-            // Never overwrite the working built-in MWW partition with an
-            // incompatible image, even if the user KV enables wake-word OTA.
-            ESP_LOGW(kTag,
-                     "Skipping wake_word OTA: server resource is incompatible "
-                     "with CONFIG_USE_MICRO_WAKE_WORD");
-            continue;
-        }
-#endif
         if ((item.resource == Ota::Resource::WakeWord &&
              KvOta::IsDisabled(KvOta::UpdateType::WakeWord)) ||
             (item.resource == Ota::Resource::Tone &&

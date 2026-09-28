@@ -136,6 +136,8 @@ public:
     void PlaySound(const std::string_view& sound);
     void PlayLocalizedAudio(const char* name);
     void PlayTone(uint16_t tone_id);
+    /*  ========== 闹钟业务 ======== */
+    // AlarmService 通过以下接口使用 Application 的播放器和小聆连接。
     uint32_t StartAlarmTone(uint16_t tone_id);
     uint32_t StartAlarmTtsUrl(const std::string& url);
     bool RequestAlarmTtsUrl(const std::string& text);
@@ -181,8 +183,6 @@ private:
     PlaybackIntentStack playback_intents_;
     PendingMusicListType pending_music_list_type_ = PendingMusicListType::kNone;
     std::vector<std::string> pending_music_list_;
-    int alarm_previous_volume_ = -1;
-    bool alarm_resume_music_ = false;
     bool background_music_session_ = false;
     bool background_session_finished_ = false;
     bool music_was_playing_for_session_ = false;
@@ -232,6 +232,20 @@ private:
                             const std::string& qrcode = "");
     void PlayActivationAudio(uint16_t id);
 
+    /*  ========== 闹钟业务 ======== */
+    // application_alarm.cc 通过这个唯一入口安装播放、时钟、唤醒词和小聆连接钩子。
+    void InitializeAlarm();
+    void PrepareAlarmPlayback();
+    struct AlarmFlowState {
+        ~AlarmFlowState();
+
+        bool initialized = false;
+        int previous_volume = -1;
+        uint32_t connected_subscription_id = 0;
+        std::function<void()> on_clock_tick;
+        std::function<void()> on_wake_word;
+    } alarm_flow_;
+
 #ifdef CONFIG_LSPLATFORM
     Watchdog uplink_watchdog_{5000, "uplink"};
     Watchdog downlink_watchdog_{15000, "downlink"};
@@ -241,7 +255,6 @@ private:
 
     bool aborted_ = false;
 
-    void PrepareAlarmPlayback();
     int clock_ticks_ = 0;
     // 由 NetworkEvent::Connected/Disconnected 驱动；唤醒时区分“网络未连”和“WS 未连”。
     std::atomic_bool network_connected_{false};

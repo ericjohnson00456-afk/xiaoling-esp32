@@ -30,21 +30,6 @@ uint32_t TonePlayer::PlayTone(uint16_t tone_id) {
     return Submit(request, *engine_);
 }
 
-uint32_t TonePlayer::PlayAlarm(uint16_t tone_id) {
-    const char* url = ToneModel::GetInstance().GetUrl(tone_id);
-    if (url == nullptr) {
-        ESP_LOGW("TonePlayer", "闹钟 tone 不存在: id=%u", static_cast<unsigned>(tone_id));
-        return 0;
-    }
-    PlaybackRequest request;
-    request.session_id = allocate_session_();
-    request.source_type = PlaybackSourceType::kRomfs;
-    request.channel = PlaybackChannel::kAlarm;
-    request.source = url;
-    request.priority = 100;
-    return Submit(request, *engine_);
-}
-
 std::optional<uint16_t> TonePlayer::SelectWakeupTone() {
     auto& tones = ToneModel::GetInstance();
     uint16_t candidates[5] = {};
