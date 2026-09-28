@@ -3,11 +3,11 @@
 #include "cmd/kv/kv_user.h"
 #include "cmd/device.h"
 #include "cmd/reboot.h"
+#include "cmd/tasks.h"
 #include "cmd/wifi.h"
 
 #include <cstdio>
 #include <fcntl.h>
-#include <cstring>
 
 #include <esp_console.h>
 #include <esp_err.h>
@@ -21,23 +21,49 @@ namespace {
 
 void ShellTask(void*) {
     char line[256];
+    size_t line_length = 0;
+    bool discard_line = false;
     std::printf("\r\nXiaoling shell ready. Type 'help'.\r\nxiaoling> ");
     std::fflush(stdout);
 
     while (true) {
-        if (std::fgets(line, sizeof(line), stdin) == nullptr) {
+        const int ch = std::fgetc(stdin);
+        if (ch == EOF) {
             // USB-Serial/JTAG can report EOF while no host is connected.
             // Keep the shell task alive and retry when the terminal appears.
             clearerr(stdin);
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;
         }
-        line[std::strcspn(line, "\r\n")] = '\0';
-        if (line[0] == '\0') {
-            std::printf("xiaoling> ");
-            std::fflush(stdout);
+
+        if (ch != '\r' && ch != '\n') {
+            if (discard_line) {
+                continue;
+            }
+            if ((ch == '\b' || ch == 0x7f) && line_length > 0) {
+                --line_length;
+            } else if (line_length + 1 < sizeof(line)) {
+                line[line_length++] = static_cast<char>(ch);
+            } else {
+                discard_line = true;
+                line_length = 0;
+                std::printf("\r\nCommand too long.\r\nxiaoling> ");
+                std::fflush(stdout);
+            }
             continue;
         }
+
+        if (discard_line) {
+            discard_line = false;
+            continue;
+        }
+        // Ignore the LF half of CRLF and empty lines.
+        if (line_length == 0) {
+            continue;
+        }
+        line[line_length] = '\0';
+        line_length = 0;
+
         int command_ret = 0;
         const esp_err_t ret = esp_console_run(line, &command_ret);
         if (ret == ESP_ERR_NOT_FOUND) {
@@ -79,6 +105,9 @@ bool SerialShell::Initialize() {
     }
     if (ret == ESP_OK) {
         ret = RegisterDeviceCommands();
+    }
+    if (ret == ESP_OK) {
+        ret = RegisterTaskCommands();
     }
     if (ret == ESP_OK) {
         ret = RegisterWifiCommands();

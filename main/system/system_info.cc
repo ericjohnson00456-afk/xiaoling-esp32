@@ -15,6 +15,8 @@
 #include <esp_ota_ops.h>
 #include <algorithm>
 #include <cstring>
+#include <memory>
+#include <new>
 #if CONFIG_IDF_TARGET_ESP32P4
 #include "esp_wifi_remote.h"
 #endif
@@ -173,7 +175,9 @@ esp_err_t SystemInfo::PrintTaskCpuUsage(TickType_t xTicksToWait) {
         //Check if matching task found
         if (k >= 0) {
             uint32_t task_elapsed_time = end_array[k].ulRunTimeCounter - start_array[i].ulRunTimeCounter;
-            uint32_t percentage_time = (task_elapsed_time * 100UL) / (total_elapsed_time * CONFIG_FREERTOS_NUMBER_OF_CORES);
+            uint32_t percentage_time = static_cast<uint32_t>(
+                (static_cast<uint64_t>(task_elapsed_time) * 100ULL) /
+                (static_cast<uint64_t>(total_elapsed_time) * CONFIG_FREERTOS_NUMBER_OF_CORES));
             printf("| %-16s | %8lu | %4lu%%\n", start_array[i].pcTaskName, task_elapsed_time, percentage_time);
         }
     }
@@ -197,10 +201,23 @@ exit:    //Common return path
     return ret;
 }
 
-void SystemInfo::PrintTaskList() {
-    char buffer[1000];
-    vTaskList(buffer);
-    ESP_LOGI(TAG, "Task list: \n%s", buffer);
+esp_err_t SystemInfo::PrintTaskList() {
+    constexpr UBaseType_t kTaskCountMargin = 8;
+    constexpr size_t kBytesPerTask = configMAX_TASK_NAME_LEN + 64;
+    const UBaseType_t task_count = uxTaskGetNumberOfTasks();
+    const size_t buffer_size =
+        (task_count + kTaskCountMargin) * kBytesPerTask + 1;
+    std::unique_ptr<char[]> task_list(new (std::nothrow) char[buffer_size]);
+    if (!task_list) {
+        std::printf("Not enough memory for FreeRTOS task list\n");
+        return ESP_ERR_NO_MEM;
+    }
+
+    vTaskList(task_list.get());
+    std::printf("FreeRTOS tasks: %u\n", static_cast<unsigned>(task_count));
+    std::printf("Name            State Prio Stack Num Core\n");
+    std::printf("%s", task_list.get());
+    return ESP_OK;
 }
 
 void SystemInfo::PrintHeapStats() {

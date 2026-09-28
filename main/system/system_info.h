@@ -21,7 +21,7 @@ public:
     static std::string GetCloudDeviceId();
 #endif // CONFIG_LSPLATFORM
     static esp_err_t PrintTaskCpuUsage(TickType_t xTicksToWait);
-    static void PrintTaskList();
+    static esp_err_t PrintTaskList();
     static void PrintHeapStats();
 };
 
