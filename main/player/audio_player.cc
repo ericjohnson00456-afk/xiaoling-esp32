@@ -72,6 +72,7 @@ uint32_t AudioPlayer::PlayMusicUrl(const std::string& url) {
         music_list_.clear();
         music_list_.push_back(MusicListItem{.url = url});
         current_music_index_ = 0;
+        active_music_index_ = static_cast<std::size_t>(-1);
         ++music_list_generation_;
         current_music_session_id_ = 0;
         current_music_retry_used_ = false;
@@ -101,6 +102,7 @@ uint32_t AudioPlayer::PlayMusicList(const std::vector<std::string>& urls) {
         std::lock_guard<std::mutex> lock(music_list_mutex_);
         music_list_ = std::move(valid_urls);
         current_music_index_ = 0;
+        active_music_index_ = static_cast<std::size_t>(-1);
         first_url = music_list_.front().url;
         ++music_list_generation_;
         current_music_session_id_ = 0;
@@ -134,6 +136,7 @@ bool AudioPlayer::PlayMusicItemList(const std::vector<std::string>& item_ids,
         std::lock_guard<std::mutex> lock(music_list_mutex_);
         music_list_ = std::move(items);
         current_music_index_ = 0;
+        active_music_index_ = static_cast<std::size_t>(-1);
         ++music_list_generation_;
         current_music_session_id_ = 0;
         current_music_retry_used_ = false;
@@ -156,6 +159,7 @@ bool AudioPlayer::PlayPreviousMusic(bool play_when_ready) {
         current_music_index_ = current_music_index_ == 0
                                    ? music_list_.size() - 1
                                    : current_music_index_ - 1;
+        active_music_index_ = static_cast<std::size_t>(-1);
         index = current_music_index_;
         current_music_retry_used_ = false;
     }
@@ -170,6 +174,7 @@ bool AudioPlayer::PlayNextMusic(bool play_when_ready) {
             return false;
         }
         current_music_index_ = (current_music_index_ + 1) % music_list_.size();
+        active_music_index_ = static_cast<std::size_t>(-1);
         index = current_music_index_;
         current_music_retry_used_ = false;
     }
@@ -184,6 +189,7 @@ bool AudioPlayer::ReplayMusic(bool play_when_ready) {
             return false;
         }
         index = current_music_index_;
+        active_music_index_ = static_cast<std::size_t>(-1);
         current_music_retry_used_ = false;
     }
     return RequestMusicAtIndex(index, play_when_ready);
@@ -193,6 +199,7 @@ void AudioPlayer::ClearMusicList() {
     std::lock_guard<std::mutex> lock(music_list_mutex_);
     music_list_.clear();
     current_music_index_ = 0;
+    active_music_index_ = static_cast<std::size_t>(-1);
     ++music_list_generation_;
     current_music_session_id_ = 0;
     current_music_retry_used_ = false;
@@ -288,6 +295,7 @@ bool AudioPlayer::StartResolvedMusic(std::size_t index, const std::string& url) 
             return false;
         }
         current_music_session_id_ = session_id;
+        active_music_index_ = index;
     }
     PrefetchNextMusic(index);
     return true;
@@ -431,15 +439,31 @@ bool AudioPlayer::ResumeMusic() {
         return false;
     }
     std::size_t index = 0;
+    bool resume_paused_session = false;
     {
         std::lock_guard<std::mutex> lock(music_list_mutex_);
         if (music_list_.empty()) {
             return false;
         }
         index = current_music_index_;
+        resume_paused_session = active_music_index_ == current_music_index_ &&
+                                current_music_session_id_ != 0;
     }
-    // The playlist selection may have changed while TTS owned the foreground.
-    // Resolve/play the selected entry instead of restarting MusicPlayer's old URL.
+    // Intent 抢占没有修改列表索引时，恢复仍存活的 GMF/HTTP 会话，继续从
+    // 暂停点播放；上一首、下一首或重播修改过索引标记时才重新提交 URL。
+    if (resume_paused_session && music_channel_ != nullptr) {
+        if (music_channel_->IsPaused()) {
+            // TTS 已经结束并关闭了共享 PCM 流，恢复音乐前重新初始化输出状态。
+            audio_service_->BeginPlayerPlayback();
+            if (music_channel_->Resume()) {
+                return true;
+            }
+            audio_service_->ClearPlaybackQueue();
+        }
+        if (music_channel_->IsAudible()) {
+            return true;
+        }
+    }
     return RequestMusicAtIndex(index, true);
 }
 
@@ -485,9 +509,7 @@ bool AudioPlayer::PauseMusic() {
     if (music_channel_ == nullptr || !music_channel_->IsAudible()) {
         return true;
     }
-    // HTTP streaming cannot be paused reliably because the GMF worker may be
-    // blocked in the network reader. Stop it immediately so wakeup is not
-    // delayed by the HTTP timeout; MusicPlayer can restart the URL on resume.
+    // 保留 GMF 解码器和 HTTP 会话，Intent 恢复时从当前流位置继续播放。
     if (!music_channel_->Pause()) {
         ESP_LOGE(TAG, "停止音乐失败，无法避免覆盖提示音");
         return false;

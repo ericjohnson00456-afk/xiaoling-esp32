@@ -87,6 +87,7 @@ private:
     mutable std::mutex music_list_mutex_;
     std::vector<MusicListItem> music_list_;
     std::size_t current_music_index_ = 0;
+    std::size_t active_music_index_ = static_cast<std::size_t>(-1);
     uint32_t music_list_generation_ = 0;
     uint32_t current_music_session_id_ = 0;
     bool current_music_retry_used_ = false;

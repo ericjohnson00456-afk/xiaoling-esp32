@@ -1,10 +1,18 @@
 #pragma once
 
-#include "playback_intent_stack.h"
+#include "playback_intent.h"
 
-#include <functional>
+class Application;
 
-class AudioPlayer;
+class VoiceSessionIntent final {
+public:
+  void Initialize(Application &app);
 
-PlaybackIntentStack::Handlers CreateVoiceSessionIntentHandlers(
-    AudioPlayer& audio_player, std::function<bool()> has_active_tts);
+  void OnEnter();
+  void OnPreempted();
+  void OnResumed();
+  void OnExit();
+
+private:
+  Application *app_ = nullptr;
+};

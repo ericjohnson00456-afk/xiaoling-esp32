@@ -1,6 +1,22 @@
 #pragma once
 
-#include "playback_intent_stack.h"
+#include "playback_intent.h"
 
-// 创建闹钟播放事件的生命周期处理器。
-PlaybackIntentStack::Handlers CreateAlarmIntentHandlers();
+class PlaybackIntentManager;
+
+class AlarmIntent final {
+public:
+  void Initialize(PlaybackIntentManager &intent_manager);
+
+  void OnEnter();
+  void OnPreempted();
+  void OnResumed();
+  void OnExit();
+
+  bool Enter();
+  bool Exit();
+
+private:
+  PlaybackIntentManager *intent_manager_ = nullptr;
+  int previous_volume_ = -1;
+};

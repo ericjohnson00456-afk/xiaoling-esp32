@@ -18,12 +18,12 @@
 #include "ota/ota.h"
 #include "audio_service.h"
 #include "player/audio_player.h"
-#include "player/intents/playback_intent_stack.h"
+#include "player/intents/playback_intent_manager.h"
 #include "xiaoling/session/session_core.h"
 #include "system/device_status.h"
 #include "system/watchdog.h"
 
-// Main event bits
+// 主事件位
 #define MAIN_EVENT_SCHEDULE             (1 << 0)
 #define MAIN_EVENT_WAKE_WORD_DETECTED   (1 << 2)
 #define MAIN_EVENT_VAD_CHANGE           (1 << 3)
@@ -48,63 +48,75 @@ public:
         static Application instance;
         return instance;
     }
-    // Delete copy constructor and assignment operator
+    // 禁止复制 Application 单例。
     Application(const Application&) = delete;
     Application& operator=(const Application&) = delete;
 
     /**
-     * Initialize the application
-     * This sets up display, audio, network callbacks, etc.
-     * Network connection starts asynchronously.
+     * 初始化应用程序。
+     * 配置显示、音频和网络回调等模块，并异步启动网络连接。
      */
     void Initialize();
 
     /**
-     * Run the main event loop
-     * This function runs in the main task and never returns.
-     * It handles all events including network, state changes, and user interactions.
+     * 运行主事件循环。
+     * 本方法在主任务中持续运行，负责处理网络、状态变化和用户交互等事件。
      */
     void Run();
 
+    /**
+     * 读取设备当前的全局运行状态。
+     * 供板型、显示和 LED 等模块使用
+     */
     DeviceState GetDeviceState() const { return DeviceStatus::GetState(); }
-    bool IsVoiceDetected() const { return audio_service_.IsVoiceDetected(); }
 
     /**
-     * Request state transition
-     * Returns true if transition was successful
+     * 请求切换设备状态。
+     * 切换成功返回 true。
      */
     bool SetDeviceState(DeviceState state);
 
     /**
-     * Schedule a callback to be executed in the main task
+     * 返回音频处理器的 VAD 检测结果
+     * 用于监听状态下的人声 LED 指示。
+     */
+    bool IsVoiceDetected() const { return audio_service_.IsVoiceDetected(); }
+
+    /**
+     * 将回调投递到 Application 主任务执行。
      */
     void Schedule(std::function<void()>&& callback);
     void ScheduleUrgent(std::function<void()>&& callback);
 
     /**
-     * Alert with status, message, emotion and optional localized tone name.
+     * 显示包含状态、消息和表情的警告，可选择播放本地化提示音。
      */
     void Alert(const char* status, const char* message, const char* emotion = "", const std::string_view& sound = "");
     void Alert(const char* status, const char* message, const char* emotion, uint16_t tone_id);
     void DismissAlert();
 
+    /**
+     * 根据原因中止当前语音交互。
+     * 唤醒词会停止当前 TTS 并上报打断位置；退出指令只结束上行并允许 TTS 播放完成。
+     * 本方法会同步操作语音会话和播放器，应在 Application 主任务中调用。
+     */
     void AbortSpeaking(AbortReason reason);
 
     /**
-     * Toggle chat state (event-based, thread-safe)
-     * Sends MAIN_EVENT_TOGGLE_CHAT to be handled in Run()
+     * 以事件方式切换对话状态，可跨任务安全调用。
+     * 实际处理由主循环中的 MAIN_EVENT_TOGGLE_CHAT 事件完成。
      */
     void ToggleChatState();
 
     /**
-     * Start listening (event-based, thread-safe)
-     * Sends MAIN_EVENT_START_LISTENING to be handled in Run()
+     * 以事件方式开始监听，可跨任务安全调用。
+     * 实际处理由主循环中的 MAIN_EVENT_START_LISTENING 事件完成。
      */
     void StartListening();
 
     /**
-     * Stop listening (event-based, thread-safe)
-     * Sends MAIN_EVENT_STOP_LISTENING to be handled in Run()
+     * 以事件方式停止监听，可跨任务安全调用。
+     * 实际处理由主循环中的 MAIN_EVENT_STOP_LISTENING 事件完成。
      */
     void StopListening();
 
@@ -119,22 +131,11 @@ public:
     void ClearNetworkConfiguration();
 
     void WakeWordInvoke(const std::string& wake_word);
-    bool ResolveKuwoMusicUrl(const std::string& item_id, std::string& url);
-    bool SubmitKuwoMusicList(std::vector<std::string> item_ids);
-    bool SubmitMusicUrlList(std::vector<std::string> urls);
-    bool RequestPauseMusic();
-    bool RequestResumeMusic();
-    bool RequestStopMusic();
-    bool RequestPreviousMusic();
-    bool RequestNextMusic();
-    bool RequestReplayMusic();
-    void ExitMusicIntent();
     bool CanEnterSleepMode();
     void SendMcpMessage(const std::string& payload);
     void SetAecMode(AecMode mode);
     AecMode GetAecMode() const { return aec_mode_; }
-    void PlaySound(const std::string_view& sound);
-    void PlayLocalizedAudio(const char* name);
+    void PlayRespakAudio(const char* name);
     void PlayTone(uint16_t tone_id);
     /*  ========== 闹钟业务 ======== */
     // AlarmService 通过以下接口使用 Application 的播放器和小聆连接。
@@ -145,24 +146,22 @@ public:
     bool FetchCloudAlarmList(std::string& response_body);
     bool ResolveCustomAlarmDate(const std::string& alarm_id, std::string& date);
     void StopAlarmTone();
+
     AudioService& GetAudioService() { return audio_service_; }
     AudioPlayer& GetAudioPlayer() { return audio_player_; }
+    PlaybackIntentManager& GetIntentManager() { return intent_manager_; }
     void SetDuplexMode(DuplexMode mode);
     DuplexMode GetDuplexMode() const { return session_controller_.policy().mode; }
 
     /**
-     * Reset protocol resources (thread-safe)
-     * Can be called from any task to release resources allocated after network connected
-     * This includes closing audio channel, resetting protocol and ota objects
+     * 重置协议资源，可跨任务安全调用。
+     * 释放联网后创建的资源，包括关闭音频通道以及重置协议和 OTA 对象。
      */
     void ResetXiaolingConn();
 
 private:
-    enum class PendingMusicListType : uint8_t {
-        kNone,
-        kKuwoItemIds,
-        kUrls,
-    };
+    friend class MusicIntent;
+    friend class VoiceSessionIntent;
 
     Application();
     ~Application();
@@ -180,21 +179,11 @@ private:
     AudioService audio_service_;
     AudioPlayer audio_player_;
     VoiceSessionController session_controller_;
-    PlaybackIntentStack playback_intents_;
-    PendingMusicListType pending_music_list_type_ = PendingMusicListType::kNone;
-    std::vector<std::string> pending_music_list_;
-    bool background_music_session_ = false;
-    bool background_session_finished_ = false;
-    bool music_was_playing_for_session_ = false;
-    // Music MCP tools return the UI/recorder to idle immediately, but the
-    // voice intent remains as a barrier until the current TTS has drained.
-    bool music_tool_session_exit_pending_ = false;
-    ListeningMode listening_mode_before_background_session_ = kListeningModeAutoStop;
-    std::atomic_bool background_tts_pending_{false};
+    PlaybackIntentManager intent_manager_;
     uint32_t active_tts_session_id_ = 0;
     uint32_t pending_tts_session_id_ = 0;
-    // Half-duplex ends listening before the streamed TTS produces its first
-    // PCM block. Keep the UI in the thinking state during that idle gap.
+    // 半双工模式会在流式 TTS 产生首个 PCM 数据块前结束监听；
+    // 在这段空档期保持界面处于“思考中”状态。
     std::atomic_bool tts_waiting_for_playback_{false};
     std::atomic_bool tts_output_started_{false};
     std::atomic_bool exit_requested_{false};
@@ -235,12 +224,10 @@ private:
     /*  ========== 闹钟业务 ======== */
     // application_alarm.cc 通过这个唯一入口安装播放、时钟、唤醒词和小聆连接钩子。
     void InitializeAlarm();
-    void PrepareAlarmPlayback();
     struct AlarmFlowState {
         ~AlarmFlowState();
 
         bool initialized = false;
-        int previous_volume = -1;
         uint32_t connected_subscription_id = 0;
         std::function<void()> on_clock_tick;
         std::function<void()> on_wake_word;
@@ -251,7 +238,7 @@ private:
     Watchdog downlink_watchdog_{15000, "downlink"};
     std::vector<int32_t> last_watchdog_bites_{};
     bool narrowband_mode_ = false;
-#endif // CONFIG_LSPLATFORM
+#endif  // 小聆平台
 
     bool aborted_ = false;
 
@@ -262,7 +249,7 @@ private:
     int64_t listening_started_at_us_ = 0;
 
 
-    // Event handlers
+    // 主事件处理函数。
     void HandleStateChangedEvent();
     void HandleToggleChatEvent();
     void HandleStartListeningEvent();
@@ -278,36 +265,24 @@ private:
     void PauseWakeWordDetection();
     bool EndListeningSessionForWakeup();
     void BeginWakeup(ListeningMode mode);
-    void FinishBackgroundMusicSession();
-    void RestoreBackgroundMusicSession();
-    bool EnterMusicIntent();
-    void PrepareMusicToolStandby(bool resume_music_after_tts);
-    void CompleteMusicToolVoiceSession();
-    void ClearPendingMusicList();
-    bool QueueKuwoMusicUrlResolve(const std::string& item_id,
-                                  AudioPlayer::MusicUrlResolveCallback callback);
     void CancelWakeup();
     void PublishWifiIcon();
     void LogUplinkDiagnostics(const char* phase);
 
     /*  ========== 按键业务 ======== */
     // 按键业务实现。application_button.cc 负责短击、长按、重新配网和恢复出厂。
-    // 防止多次连击重复启动恢复出厂任务。
-    std::atomic_bool factory_reset_started_{false};
     // 在 Application 主任务中执行短击次数对应的业务。
     void ProcessButtonClick(uint8_t click_count);
     // 在 Application 主任务中处理长按，用于停止闹钟或跳过 OTA。
     void ProcessButtonLongPress();
-    // 去重后启动恢复出厂任务。
+    // 启动恢复出厂任务。
     void StartFactoryReset();
     // 播放提示音后执行恢复出厂和重启。
     void FactoryResetTask();
 
-    // State change handler called by state machine
-    void OnStateChanged(DeviceState old_state, DeviceState new_state);
 #ifdef CONFIG_LSPLATFORM
     void CountWatchdogBites();
-#endif // CONFIG_LSPLATFORM
+#endif  // 小聆平台
 };
 
 

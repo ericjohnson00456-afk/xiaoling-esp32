@@ -20,6 +20,7 @@ public:
     uint32_t PlayUrl(const std::string& url);
     bool Pause();
     bool Resume();
+    bool IsPaused() const;
     bool IsAudible() const;
 
 private:
@@ -27,5 +28,4 @@ private:
     SessionAllocator allocate_session_;
     std::atomic<uint32_t> session_id_{0};
     std::atomic_bool paused_{false};
-    std::string current_url_;
 };

@@ -14,6 +14,7 @@ public:
     static std::string GetMacAddress();
     static std::string GetChipModelName();
     static std::string GetUserAgent();
+    static std::string GetDeviceSerialNumber();
 #ifdef CONFIG_LSPLATFORM
     static std::string GetProductId();
     static std::string GetSecretId();

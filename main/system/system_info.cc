@@ -10,8 +10,11 @@
 #include <esp_heap_caps.h>
 #include <esp_partition.h>
 #include <esp_app_desc.h>
+#include <esp_efuse.h>
+#include <esp_efuse_table.h>
 #include <esp_ota_ops.h>
 #include <algorithm>
+#include <cstring>
 #if CONFIG_IDF_TARGET_ESP32P4
 #include "esp_wifi_remote.h"
 #endif
@@ -55,6 +58,18 @@ std::string SystemInfo::GetUserAgent() {
     auto app_desc = esp_app_get_description();
     auto user_agent = std::string(BOARD_NAME "/") + app_desc->version;
     return user_agent;
+}
+
+std::string SystemInfo::GetDeviceSerialNumber() {
+#ifdef ESP_EFUSE_BLOCK_USR_DATA
+    uint8_t serial_number[33] = {};
+    if (esp_efuse_read_field_blob(ESP_EFUSE_USER_DATA, serial_number, 32 * 8) == ESP_OK &&
+        serial_number[0] != 0) {
+        return std::string(reinterpret_cast<char*>(serial_number),
+                           strnlen(reinterpret_cast<char*>(serial_number), 32));
+    }
+#endif
+    return {};
 }
 
 #ifdef CONFIG_LSPLATFORM

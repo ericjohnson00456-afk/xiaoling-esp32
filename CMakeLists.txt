@@ -40,18 +40,6 @@ set(PROJECT_VER ${XIAOLING_VER})
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(xiaozhi)
 
-# esp-ml307 3.3.2 performs blocking TLS/TCP writes and retries WANT_WRITE
-# forever. Replace only its ESP transport implementations from the project so
-# realtime AEC WebSocket writes have a deadline, while keeping the registry
-# component itself immutable and upgradeable.
-idf_component_get_property(ESP_ML307_LIB 78__esp-ml307 COMPONENT_LIB)
-get_target_property(ESP_ML307_SOURCES ${ESP_ML307_LIB} SOURCES)
-list(FILTER ESP_ML307_SOURCES EXCLUDE REGEX "/src/esp/esp_(ssl|tcp)\\.cc$")
-list(APPEND ESP_ML307_SOURCES
-     "${CMAKE_CURRENT_LIST_DIR}/main/transport_patch/esp_ssl.cc"
-     "${CMAKE_CURRENT_LIST_DIR}/main/transport_patch/esp_tcp.cc")
-set_property(TARGET ${ESP_ML307_LIB} PROPERTY SOURCES "${ESP_ML307_SOURCES}")
-
 # esp_asrc 1.0.1 的内存分配日志仍用 %d 打印 uint32_t。
 # 保留格式告警，但避免 ESP-IDF 5.4.4 的新工具链将供应商代码告警升级为构建错误。
 idf_component_get_property(ESP_ASRC_LIB espressif__esp_asrc COMPONENT_LIB)

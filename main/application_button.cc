@@ -137,16 +137,12 @@ void Application::ClearNetworkConfiguration() {
     ResetXiaolingConn();
 }
 
-// 对恢复出厂请求做去重，并创建独立任务执行耗时的提示音和重置流程。
+// 创建独立任务执行耗时的提示音和恢复出厂流程。
 void Application::StartFactoryReset() {
-    if (factory_reset_started_.exchange(true)) {
-        return;
-    }
     ESP_LOGW(kTag, "Detected 8 or more clicks; factory reset requested");
     if (xTaskCreate([](void* arg) {
             static_cast<Application*>(arg)->FactoryResetTask();
         }, "factory_reset", 4096, this, 5, nullptr) != pdPASS) {
-        factory_reset_started_ = false;
         ESP_LOGE(kTag, "Failed to create factory reset task");
     }
 }
