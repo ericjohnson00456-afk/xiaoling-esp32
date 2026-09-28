@@ -67,6 +67,7 @@ public:
     void SendStartListening(ListeningMode mode);
     void SendStopListening();
     bool EndSession();
+    bool CancelSession();
     void PrepareAbortSpeaking(AbortReason reason);
     void SendAbortSpeaking(AbortReason reason);
     void HandleIatBargeIn();

@@ -569,11 +569,11 @@ bool XiaolingSessionVoice::SendAudioBatch(
         if ((rejected % 10) == 1) {
             ESP_LOGW(TAG,
                      "上行链路[会话拒绝]: seq=%lu, packets=%u, rejected=%lu, "
-                     "session_active=%d, end_requested=%d",
+                     "session_active=%d",
                      static_cast<unsigned long>(sequence),
                      static_cast<unsigned>(packets.size()),
                      static_cast<unsigned long>(rejected),
-                     session_active_.load() ? 1 : 0, end_requested_.load() ? 1 : 0);
+                     session_active_.load() ? 1 : 0);
         }
         return false;
     }
@@ -694,7 +694,6 @@ void XiaolingSessionVoice::SendStartListening(ListeningMode mode) {
         text_sender_("{\"action\":\"cancel\"}");
     }
 
-    end_requested_ = false;
     SetAudioUploadEnabled(false, "send_start_prepare");
     uplink_audio_format_checked_ = false;
     if (event_group_ == nullptr) {
@@ -730,25 +729,22 @@ void XiaolingSessionVoice::SendStartListening(ListeningMode mode) {
 }
 
 void XiaolingSessionVoice::SendStopListening() {
-    if (session_active_ && text_sender_) {
-        // Set this before sending: the WebSocket receive task may process the
-        // server acknowledgement immediately on another core.
-        end_requested_ = true;
-        if (text_sender_("{\"action\":\"end\"}")) {
-            SetAudioUploadEnabled(false, "send_end_ok");
-        } else {
-            end_requested_ = false;
-        }
-    }
+    CancelSession();
 }
 
 bool XiaolingSessionVoice::EndSession() {
+    return CancelSession();
+}
+
+bool XiaolingSessionVoice::CancelSession() {
     const bool was_active = session_active_.load();
     const bool sent = !was_active ||
-        (text_sender_ && text_sender_("{\"action\":\"end\"}"));
+        (text_sender_ && text_sender_("{\"action\":\"cancel\"}"));
 
-    SetAudioUploadEnabled(false, "end_session");
-    end_requested_ = false;
+    // A cancellation is terminal locally even if the control frame cannot be
+    // queued. Do not let stale IAT/TTS state or buffered microphone packets
+    // leak into the next voice session.
+    SetAudioUploadEnabled(false, "cancel_session");
     pending_wake_word_.clear();
     pending_wake_audio_.clear();
     uplink_audio_format_checked_ = false;
@@ -851,10 +847,7 @@ void XiaolingSessionVoice::SendAbortSpeaking(AbortReason reason) {
         tts_audio_clock_ms_ = 0;
     }
     CancelSubtitleStream(true);
-    if (session_active_ && text_sender_ && text_sender_("{\"action\":\"cancel\"}")) {
-        SetAudioUploadEnabled(false, "cancel_ok");
-        SetSessionActive(false);
-    }
+    CancelSession();
 }
 
 void XiaolingSessionVoice::HandleIatBargeIn() {
@@ -1052,7 +1045,6 @@ void XiaolingSessionVoice::HandleMessage(const cJSON* root) {
 
 void XiaolingSessionVoice::Reset() {
     SetAudioUploadEnabled(false, "reset");
-    end_requested_ = false;
     SetSessionActive(false);
     pending_wake_word_.clear();
     pending_wake_audio_.clear();
@@ -1073,12 +1065,10 @@ void XiaolingSessionVoice::SetSessionActive(bool active) {
 void XiaolingSessionVoice::SetAudioUploadEnabled(bool enabled, const char* reason) {
     const bool previous = audio_upload_enabled_.exchange(enabled);
     ESP_LOGI(TAG,
-             "上行链路[云端开关]: %d->%d, reason=%s, session_active=%d, "
-             "end_requested=%d, sid=%s",
+             "上行链路[云端开关]: %d->%d, reason=%s, session_active=%d, sid=%s",
              previous ? 1 : 0, enabled ? 1 : 0,
              reason != nullptr ? reason : "unknown",
-             session_active_.load() ? 1 : 0, end_requested_.load() ? 1 : 0,
-             session_id_.c_str());
+             session_active_.load() ? 1 : 0, session_id_.c_str());
 }
 
 void XiaolingSessionVoice::ResetResultState() {
@@ -1109,15 +1099,6 @@ void XiaolingSessionVoice::HandleIat(const cJSON* data) {
     last_iat_text_ = text;
     auto& events = XiaolingEventBus::GetInstance();
     const bool is_last = ReadBool(data, "is_last");
-    // The empty final IAT is only an end acknowledgement. Do not expose it as
-    // an empty utterance to the UI or application listeners.
-    if (is_last && end_requested_.load() && last_iat_text_.empty()) {
-        iat_active_ = false;
-        end_requested_ = false;
-        SetAudioUploadEnabled(false, "empty_final_iat_after_end");
-        SetSessionActive(false);
-        return;
-    }
     if (!iat_active_) {
         iat_active_ = true;
         events.Publish(XIAOLING_IAT_START, last_iat_text_);
@@ -1128,7 +1109,6 @@ void XiaolingSessionVoice::HandleIat(const cJSON* data) {
     if (is_last) {
         events.Publish(XIAOLING_IAT_END, last_iat_text_);
         iat_active_ = false;
-        end_requested_ = false;
     }
 }
 

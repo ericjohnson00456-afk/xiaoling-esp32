@@ -199,6 +199,10 @@ bool XiaolingConn::EndSession() {
     return voice_ != nullptr && voice_->EndSession();
 }
 
+bool XiaolingConn::CancelSession() {
+    return voice_ != nullptr && voice_->CancelSession();
+}
+
 void XiaolingConn::PrepareAbortSpeaking(AbortReason reason) {
     if (voice_ != nullptr) {
         voice_->PrepareAbortSpeaking(reason);

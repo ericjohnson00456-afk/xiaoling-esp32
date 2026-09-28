@@ -51,6 +51,7 @@ public:
     void SendStartListening(ListeningMode mode);
     void SendStopListening();
     bool EndSession();
+    bool CancelSession();
     // 在停止本地 TTS 前冻结实际 PCM 播放位置对应的 timeline 游标。
     void PrepareAbortSpeaking(AbortReason reason);
     void SendAbortSpeaking(AbortReason reason);
@@ -100,7 +101,6 @@ private:
 
     std::atomic_bool session_active_{false};
     std::atomic_bool audio_upload_enabled_{false};
-    std::atomic_bool end_requested_{false};
     bool narrowband_mode_ = false;
     std::string session_id_;
     std::string pending_wake_word_;

@@ -1225,7 +1225,17 @@ void Application::HandleToggleChatEvent() {
             BeginWakeup(listening_mode_);
         }
     } else if (state == kDeviceStateListening) {
-        xiaoling_conn_->SendStopListening();
+        // A button press cancels the interaction instead of finalizing the
+        // utterance. Stop capture first for immediate local feedback, then
+        // cancel the cloud session so it does not return a final IAT/TTS.
+        ESP_LOGI(TAG, "按键取消聆听：立即停止本地录音并取消云端会话");
+        iat_utterance_active_ = false;
+        audio_service_.EnableVoiceProcessing(false);
+        session_controller_.EndSession();
+        SetDeviceState(kDeviceStateIdle);
+        if (!xiaoling_conn_->CancelSession()) {
+            ESP_LOGW(TAG, "按键取消云端语音会话上报失败");
+        }
     }
 }
 
