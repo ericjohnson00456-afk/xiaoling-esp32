@@ -33,7 +33,6 @@
 #include <esp_efuse.h>
 #include <esp_efuse_table.h>
 #include <esp_timer.h>
-#include <esp_system.h>
 #ifdef SOC_HMAC_SUPPORTED
 #include <esp_hmac.h>
 #endif
@@ -1689,21 +1688,6 @@ void Application::ScheduleUrgent(std::function<void()>&& callback) {
     }
     xEventGroupSetBits(event_group_, MAIN_EVENT_SCHEDULE);
 }
-
-
-void Application::Reboot() {
-    ESP_LOGI(TAG, "Rebooting...");
-    // 断开音频通道。
-    if (xiaoling_conn_ && xiaoling_conn_->IsConnected()) {
-        xiaoling_conn_->Disconnect();
-    }
-    xiaoling_conn_.reset();
-    audio_service_.Stop();
-
-    vTaskDelay(pdMS_TO_TICKS(1000));
-    esp_restart();
-}
-
 void Application::WakeWordInvoke(const std::string& wake_word) {
     if (exit_requested_.load() &&
         (tts_waiting_for_playback_.load() || audio_player_.IsPlaying())) {

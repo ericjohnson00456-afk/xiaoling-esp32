@@ -1,5 +1,6 @@
 #include <esp_lcd_panel_vendor.h>
 #include <esp_log.h>
+#include <esp_system.h>
 #include "settings.h"
 #include "application.h"
 #include "ui/i18n/lang_config.h"
@@ -178,8 +179,7 @@ class YunliaoS3 : public DualNetworkBoard {
         settings.SetBool("ips_mode", !currentIpsMode);
         ESP_LOGI(TAG, "IPS mode toggled to %s", !currentIpsMode ? "enabled" : "disabled");
         vTaskDelay(pdMS_TO_TICKS(1000));
-        auto& app = Application::GetInstance();
-        app.Reboot();
+        esp_restart();
     }
 
    public:

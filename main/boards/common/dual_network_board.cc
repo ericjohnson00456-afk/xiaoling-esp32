@@ -1,9 +1,9 @@
 #include "dual_network_board.h"
-#include "application.h"
 #include "display/display.h"
 #include "ui/i18n/lang_config.h"
 #include "settings.h"
 #include <esp_log.h>
+#include <esp_system.h>
 
 static const char *TAG = "DualNetworkBoard";
 
@@ -52,7 +52,7 @@ void DualNetworkBoard::SwitchNetworkType() {
         display->ShowNotification(Lang::Strings::SWITCH_TO_WIFI_NETWORK);
     }
     vTaskDelay(pdMS_TO_TICKS(1000));
-    Application::GetInstance().Reboot();
+    esp_restart();
 }
 
 bool DualNetworkBoard::EnterNetworkConfigMode() {

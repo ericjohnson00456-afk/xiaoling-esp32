@@ -9,6 +9,7 @@
 #include "ui/ui_app.h"
 
 #include <esp_log.h>
+#include <esp_system.h>
 
 #include <cstdio>
 
@@ -202,7 +203,7 @@ bool Application::CheckAssetsVersion() {
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
         if (!success) {
             ESP_LOGE(kTag, "Failed to update %s resource; rebooting to retry", item.label);
-            Reboot();
+            esp_restart();
             return false;
         }
         downloaded = true;
@@ -228,7 +229,7 @@ bool Application::CheckAssetsVersion() {
         PlayOtaTone(90);
         UiApp::ShowUpgradeResult(Lang::Strings::RESOURCE_UPDATE_SUCCESSFUL);
         vTaskDelay(pdMS_TO_TICKS(3000));
-        Reboot();
+        esp_restart();
         return true;
     }
 
@@ -344,7 +345,7 @@ bool Application::UpgradeFirmware(const std::string& url, const std::string& ver
     ota_settings.SetBool("app_update_pending_success", true);
     UiApp::SetChatMessage("system", Lang::Strings::UPGRADE_SUCCESSFUL_REBOOTING);
     vTaskDelay(pdMS_TO_TICKS(1000));
-    Reboot();
+    esp_restart();
     return true;
 }
 

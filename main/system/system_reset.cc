@@ -9,7 +9,17 @@
 
 namespace {
 constexpr char kTag[] = "SystemReset";
-constexpr int kRestartDelaySeconds = 1;
+constexpr int kFactoryResetRestartDelayMs = 1000;
+}
+
+void SystemReset::Restart(int delay_ms) {
+    if (delay_ms > 0) {
+        ESP_LOGI(kTag, "Restarting in %d ms", delay_ms);
+        vTaskDelay(pdMS_TO_TICKS(delay_ms));
+    } else {
+        ESP_LOGI(kTag, "Restarting now");
+    }
+    esp_restart();
 }
 
 void SystemReset::ResetToFactory() {
@@ -30,7 +40,7 @@ void SystemReset::ResetToFactory() {
     }
     ESP_LOGI(kTag, "Erased otadata partition");
 
-    RestartInSeconds(kRestartDelaySeconds);
+    Restart(kFactoryResetRestartDelayMs);
 }
 
 void SystemReset::ResetNvsFlash() {
@@ -45,12 +55,4 @@ void SystemReset::ResetNvsFlash() {
     if (err != ESP_OK) {
         ESP_LOGE(kTag, "Failed to initialize NVS flash: %s", esp_err_to_name(err));
     }
-}
-
-void SystemReset::RestartInSeconds(int seconds) {
-    for (int i = seconds; i > 0; --i) {
-        ESP_LOGI(kTag, "Resetting in %d seconds", i);
-        vTaskDelay(pdMS_TO_TICKS(1000));
-    }
-    esp_restart();
 }

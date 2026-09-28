@@ -4,6 +4,7 @@
 
 #include "application.h"
 #include "mcp_server.h"
+#include "system/system_reset.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
@@ -26,8 +27,7 @@ MCP_REGISTER_TOOL(RegisterDeviceControl, McpToolGroup::kCommon, 90) {
         // minimum delay so the response has time to reach the cloud.
         Application::GetInstance().Schedule([reboot_delay]() {
           Application::GetInstance().Schedule([reboot_delay]() {
-            vTaskDelay(pdMS_TO_TICKS(reboot_delay));
-            Application::GetInstance().Reboot();
+            SystemReset::Restart(reboot_delay);
           });
         });
         return std::string("已完成操作");

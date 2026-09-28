@@ -117,7 +117,6 @@ public:
     // 清除 Wi-Fi 配置、重置小聆连接并进入配网状态；五击和串口 wifi 命令共用。
     void ClearNetworkConfiguration();
 
-    void Reboot();
     void WakeWordInvoke(const std::string& wake_word);
     bool ResolveKuwoMusicUrl(const std::string& item_id, std::string& url);
     bool CanEnterSleepMode();
