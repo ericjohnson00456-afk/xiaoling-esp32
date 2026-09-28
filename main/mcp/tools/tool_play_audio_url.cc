@@ -35,7 +35,7 @@ MCP_REGISTER_TOOL(RegisterPlayAudioUrl, McpToolGroup::kCommon, 21) {
                    cJSON_Delete(root);
                    if (urls.empty())
                      throw std::runtime_error("没有可播放的音频 URL");
-                   if (Application::GetInstance().GetAudioPlayer().PlayMusicList(urls) == 0)
+                   if (!Application::GetInstance().SubmitMusicUrlList(std::move(urls)))
                      throw std::runtime_error("提交音频播放失败");
                    return std::string("播放成功");
                  });

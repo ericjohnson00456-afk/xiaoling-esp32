@@ -46,6 +46,26 @@ bool PlaybackIntentStack::Push(PlaybackIntent intent) {
         if (handlers_[HandlerIndex(new_top)].on_enter) {
             handlers_[HandlerIndex(new_top)].on_enter();
         }
+        entered_[HandlerIndex(new_top)] = true;
+    }
+    return true;
+}
+
+bool PlaybackIntentStack::Reenter(PlaybackIntent intent) {
+    if (intent <= PlaybackIntent::kNone || intent >= PlaybackIntent::kCount) {
+        return false;
+    }
+    if (!Contains(intent)) {
+        return Push(intent);
+    }
+
+    const size_t index = HandlerIndex(intent);
+    entered_[index] = false;
+    if (Top() == intent) {
+        if (handlers_[index].on_enter) {
+            handlers_[index].on_enter();
+        }
+        entered_[index] = true;
     }
     return true;
 }
@@ -63,13 +83,20 @@ bool PlaybackIntentStack::Pop(PlaybackIntent intent) {
     if (handlers_[HandlerIndex(intent)].on_exit) {
         handlers_[HandlerIndex(intent)].on_exit();
     }
+    entered_[HandlerIndex(intent)] = false;
     std::move(it + 1, intents_.begin() + size_, it);
     --size_;
 
     if (top_changed && size_ > 0) {
         const PlaybackIntent resumed = Top();
-        if (handlers_[HandlerIndex(resumed)].on_resumed) {
-            handlers_[HandlerIndex(resumed)].on_resumed();
+        const size_t resumed_index = HandlerIndex(resumed);
+        if (!entered_[resumed_index]) {
+            if (handlers_[resumed_index].on_enter) {
+                handlers_[resumed_index].on_enter();
+            }
+            entered_[resumed_index] = true;
+        } else if (handlers_[resumed_index].on_resumed) {
+            handlers_[resumed_index].on_resumed();
         }
     }
     return true;
@@ -89,4 +116,5 @@ PlaybackIntent PlaybackIntentStack::Top() const {
 
 void PlaybackIntentStack::Clear() {
     size_ = 0;
+    entered_.fill(false);
 }

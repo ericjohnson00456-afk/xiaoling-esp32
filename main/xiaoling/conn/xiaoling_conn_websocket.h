@@ -40,6 +40,7 @@ private:
     std::function<void(int)> on_error_;
     uint32_t rx_binary_sequence_ = 0;
     uint32_t tx_binary_sequence_ = 0;
+    std::string endpoint_url_;
 };
 
 #endif  // XIAOLING_CONN_WEBSOCKET_H

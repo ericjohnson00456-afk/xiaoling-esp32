@@ -7,4 +7,6 @@
 class AudioPlayer;
 
 PlaybackIntentStack::Handlers CreateMusicIntentHandlers(
-    AudioPlayer& audio_player, std::function<bool()> should_resume);
+    AudioPlayer& audio_player, std::function<bool()> should_resume,
+    std::function<bool()> start_playback,
+    std::function<void()> clear_pending_list);

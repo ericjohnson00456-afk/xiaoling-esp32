@@ -30,6 +30,7 @@ public:
 
     void SetHandlers(PlaybackIntent intent, Handlers handlers);
     bool Push(PlaybackIntent intent);
+    bool Reenter(PlaybackIntent intent);
     bool Pop(PlaybackIntent intent);
     bool Contains(PlaybackIntent intent) const;
     PlaybackIntent Top() const;
@@ -38,5 +39,6 @@ public:
 private:
     std::array<PlaybackIntent, kCapacity> intents_{};
     std::array<Handlers, static_cast<size_t>(PlaybackIntent::kCount)> handlers_{};
+    std::array<bool, static_cast<size_t>(PlaybackIntent::kCount)> entered_{};
     size_t size_ = 0;
 };

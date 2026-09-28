@@ -12,6 +12,7 @@
 #include <memory>
 #include <cstdint>
 #include <atomic>
+#include <vector>
 
 #include "xiaoling/conn/xiaoling_conn.h"
 #include "ota/ota.h"
@@ -119,6 +120,15 @@ public:
 
     void WakeWordInvoke(const std::string& wake_word);
     bool ResolveKuwoMusicUrl(const std::string& item_id, std::string& url);
+    bool SubmitKuwoMusicList(std::vector<std::string> item_ids);
+    bool SubmitMusicUrlList(std::vector<std::string> urls);
+    bool RequestPauseMusic();
+    bool RequestResumeMusic();
+    bool RequestStopMusic();
+    bool RequestPreviousMusic();
+    bool RequestNextMusic();
+    bool RequestReplayMusic();
+    void ExitMusicIntent();
     bool CanEnterSleepMode();
     void SendMcpMessage(const std::string& payload);
     void SetAecMode(AecMode mode);
@@ -146,6 +156,12 @@ public:
     void ResetXiaolingConn();
 
 private:
+    enum class PendingMusicListType : uint8_t {
+        kNone,
+        kKuwoItemIds,
+        kUrls,
+    };
+
     Application();
     ~Application();
 
@@ -163,14 +179,20 @@ private:
     AudioPlayer audio_player_;
     VoiceSessionController session_controller_;
     PlaybackIntentStack playback_intents_;
+    PendingMusicListType pending_music_list_type_ = PendingMusicListType::kNone;
+    std::vector<std::string> pending_music_list_;
     int alarm_previous_volume_ = -1;
     bool alarm_resume_music_ = false;
     bool background_music_session_ = false;
     bool background_session_finished_ = false;
     bool music_was_playing_for_session_ = false;
+    // Music MCP tools return the UI/recorder to idle immediately, but the
+    // voice intent remains as a barrier until the current TTS has drained.
+    bool music_tool_session_exit_pending_ = false;
     ListeningMode listening_mode_before_background_session_ = kListeningModeAutoStop;
     std::atomic_bool background_tts_pending_{false};
     uint32_t active_tts_session_id_ = 0;
+    uint32_t pending_tts_session_id_ = 0;
     // Half-duplex ends listening before the streamed TTS produces its first
     // PCM block. Keep the UI in the thinking state during that idle gap.
     std::atomic_bool tts_waiting_for_playback_{false};
@@ -245,6 +267,12 @@ private:
     void BeginWakeup(ListeningMode mode);
     void FinishBackgroundMusicSession();
     void RestoreBackgroundMusicSession();
+    bool EnterMusicIntent();
+    void PrepareMusicToolStandby(bool resume_music_after_tts);
+    void CompleteMusicToolVoiceSession();
+    void ClearPendingMusicList();
+    bool QueueKuwoMusicUrlResolve(const std::string& item_id,
+                                  AudioPlayer::MusicUrlResolveCallback callback);
     void CancelWakeup();
     void PublishWifiIcon();
     void LogUplinkDiagnostics(const char* phase);

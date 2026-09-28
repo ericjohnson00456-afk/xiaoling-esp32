@@ -29,6 +29,7 @@ constexpr size_t kStreamingHttpReadSize = 1024;
 constexpr size_t kStreamingHttpBufferSize = 32 * 1024;
 constexpr size_t kPlayerCommandStackSize = 4096;
 constexpr UBaseType_t kPlayerCommandPriority = 8;
+constexpr uint64_t kTtsPcmTimeoutUs = 5ULL * 1000ULL * 1000ULL;
 #if CONFIG_FREERTOS_NUMBER_OF_CORES > 1
 constexpr BaseType_t kPlayerCommandCore = 1;
 #else
@@ -43,6 +44,11 @@ std::string UrlHostForLog(const std::string& url) {
     const auto host_start = scheme_end + 3;
     const auto host_end = url.find_first_of("/?#", host_start);
     return url.substr(host_start, host_end == std::string::npos ? std::string::npos : host_end - host_start);
+}
+
+bool IsTtsPcmTimeout(PlaybackEndReason reason) {
+    return reason == PlaybackEndReason::kFirstPcmTimeout ||
+           reason == PlaybackEndReason::kPcmStallTimeout;
 }
 
 }  // namespace
@@ -112,6 +118,11 @@ int GmfPlayerEngine::ConfigureInputIo(esp_asp_handle_t handle, void* ctx) {
 
 GmfPlayerEngine::~GmfPlayerEngine() {
     StopCommandTask();
+    DisarmTtsPcmTimeout();
+    if (tts_pcm_timer_ != nullptr) {
+        esp_timer_delete(tts_pcm_timer_);
+        tts_pcm_timer_ = nullptr;
+    }
     if (handle_ == nullptr) {
         return;
     }
@@ -190,6 +201,22 @@ bool GmfPlayerEngine::Initialize(AudioService* audio_service, EventCallback call
         handle_ = nullptr;
         return false;
     }
+    const esp_timer_create_args_t timer_args = {
+        .callback = [](void* arg) {
+            static_cast<GmfPlayerEngine*>(arg)->HandleTtsPcmTimeout();
+        },
+        .arg = this,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "tts_pcm_timeout",
+        .skip_unhandled_events = true,
+    };
+    if (esp_timer_create(&timer_args, &tts_pcm_timer_) != ESP_OK) {
+        ESP_LOGE(TAG, "创建 TTS PCM 超时定时器失败");
+        StopCommandTask();
+        esp_audio_simple_player_destroy(handle_);
+        handle_ = nullptr;
+        return false;
+    }
     initialized_ = true;
     ESP_LOGI(TAG, "流式播放器就绪: output=%d Hz/%d ch/%d bit",
              CONFIG_AUDIO_SIMPLE_PLAYER_RESAMPLE_DEST_RATE,
@@ -217,9 +244,11 @@ bool GmfPlayerEngine::DoPlay(const PlaybackRequest& request) {
         command_pending_playback_ = false;
         return false;
     }
+    DisarmTtsPcmTimeout();
 
     // 新媒体开始前清掉旧下行 Opus 和残留 PCM，物理 I2S 仍由 AudioOutputTask 独占。
     audio_service_->BeginPlayerPlayback();
+    const int64_t started_us = esp_timer_get_time();
     {
         std::lock_guard<std::mutex> lock(mutex_);
         current_request_ = request;
@@ -227,6 +256,14 @@ bool GmfPlayerEngine::DoPlay(const PlaybackRequest& request) {
         playing_ = true;
         draining_ = false;
         http_request_ready_emitted_ = false;
+        tts_timeout_session_id_ = request.channel == PlaybackChannel::kTts
+                                      ? request.session_id
+                                      : 0;
+        tts_timeout_started_us_ = request.channel == PlaybackChannel::kTts
+                                      ? started_us
+                                      : 0;
+        last_tts_pcm_us_ = 0;
+        tts_timeout_stop_pending_ = false;
     }
 
     ESP_LOGI(TAG, "开始流式播放: session=%lu, channel=%d, host=%s, url_bytes=%u",
@@ -237,6 +274,9 @@ bool GmfPlayerEngine::DoPlay(const PlaybackRequest& request) {
     output_chunks_ = 0;
     const auto result = esp_audio_simple_player_run(handle_, request.source.c_str(), nullptr);
     if (result == ESP_GMF_ERR_OK) {
+        if (request.channel == PlaybackChannel::kTts) {
+            ArmTtsPcmTimeout(kTtsPcmTimeoutUs);
+        }
         command_pending_playback_ = false;
         ESP_LOGI(TAG, "GMF run 已提交: session=%lu, elapsed=%lums",
                  static_cast<unsigned long>(request.session_id),
@@ -246,10 +286,15 @@ bool GmfPlayerEngine::DoPlay(const PlaybackRequest& request) {
 
     ESP_LOGE(TAG, "启动流式播放失败: session=%lu, error=0x%x",
              static_cast<unsigned long>(request.session_id), result);
+    DisarmTtsPcmTimeout();
     {
         std::lock_guard<std::mutex> lock(mutex_);
         playing_ = false;
         draining_ = false;
+        tts_timeout_session_id_ = 0;
+        tts_timeout_started_us_ = 0;
+        last_tts_pcm_us_ = 0;
+        tts_timeout_stop_pending_ = false;
     }
     audio_service_->ClearPlaybackQueue();
     command_pending_playback_ = false;
@@ -267,11 +312,20 @@ bool GmfPlayerEngine::Pause() {
 }
 
 bool GmfPlayerEngine::DoPause() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (!initialized_ || handle_ == nullptr || !playing_) {
-        return false;
+    bool is_tts = false;
+    bool paused = false;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!initialized_ || handle_ == nullptr || !playing_) {
+            return false;
+        }
+        is_tts = current_request_.channel == PlaybackChannel::kTts;
+        paused = esp_audio_simple_player_pause(handle_) == ESP_GMF_ERR_OK;
     }
-    return esp_audio_simple_player_pause(handle_) == ESP_GMF_ERR_OK;
+    if (paused && is_tts) {
+        DisarmTtsPcmTimeout();
+    }
+    return paused;
 }
 
 bool GmfPlayerEngine::Resume() {
@@ -279,11 +333,29 @@ bool GmfPlayerEngine::Resume() {
 }
 
 bool GmfPlayerEngine::DoResume() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (!initialized_ || handle_ == nullptr || !playing_) {
-        return false;
+    bool is_tts = false;
+    bool resumed = false;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!initialized_ || handle_ == nullptr || !playing_) {
+            return false;
+        }
+        is_tts = current_request_.channel == PlaybackChannel::kTts;
+        resumed = esp_audio_simple_player_resume(handle_) == ESP_GMF_ERR_OK;
+        if (resumed && is_tts) {
+            const int64_t now_us = esp_timer_get_time();
+            if (output_chunks_.load() == 0) {
+                tts_timeout_started_us_ = now_us;
+            } else {
+                last_tts_pcm_us_ = now_us;
+            }
+            tts_timeout_stop_pending_ = false;
+        }
     }
-    return esp_audio_simple_player_resume(handle_) == ESP_GMF_ERR_OK;
+    if (resumed && is_tts) {
+        ArmTtsPcmTimeout(kTtsPcmTimeoutUs);
+    }
+    return resumed;
 }
 
 bool GmfPlayerEngine::Stop(PlaybackEndReason reason) {
@@ -295,6 +367,7 @@ bool GmfPlayerEngine::Stop(PlaybackEndReason reason) {
 }
 
 bool GmfPlayerEngine::DoStop(PlaybackEndReason reason) {
+    DisarmTtsPcmTimeout();
     bool drain_only = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -413,6 +486,77 @@ void GmfPlayerEngine::StopCommandTask() {
     }
 }
 
+void GmfPlayerEngine::ArmTtsPcmTimeout(uint64_t timeout_us) {
+    std::lock_guard<std::mutex> lock(tts_timer_mutex_);
+    if (tts_pcm_timer_ == nullptr) {
+        return;
+    }
+    esp_timer_stop(tts_pcm_timer_);
+    const esp_err_t result = esp_timer_start_once(tts_pcm_timer_, timeout_us);
+    if (result != ESP_OK) {
+        ESP_LOGE(TAG, "启动 TTS PCM 超时定时器失败: %s", esp_err_to_name(result));
+    }
+}
+
+void GmfPlayerEngine::DisarmTtsPcmTimeout() {
+    std::lock_guard<std::mutex> lock(tts_timer_mutex_);
+    if (tts_pcm_timer_ != nullptr) {
+        esp_timer_stop(tts_pcm_timer_);
+    }
+}
+
+void GmfPlayerEngine::HandleTtsPcmTimeout() {
+    PlaybackEndReason timeout_reason = PlaybackEndReason::kNone;
+    uint32_t session_id = 0;
+    uint64_t remaining_us = 0;
+    const int64_t now_us = esp_timer_get_time();
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!playing_ || current_request_.channel != PlaybackChannel::kTts ||
+            current_request_.session_id != tts_timeout_session_id_ ||
+            tts_timeout_stop_pending_) {
+            return;
+        }
+        const bool received_pcm = output_chunks_.load() != 0;
+        const int64_t reference_us = received_pcm
+                                         ? last_tts_pcm_us_
+                                         : tts_timeout_started_us_;
+        if (reference_us <= 0) {
+            return;
+        }
+        const uint64_t elapsed_us = static_cast<uint64_t>(now_us - reference_us);
+        if (elapsed_us < kTtsPcmTimeoutUs) {
+            remaining_us = kTtsPcmTimeoutUs - elapsed_us;
+        } else {
+            timeout_reason = received_pcm
+                                 ? PlaybackEndReason::kPcmStallTimeout
+                                 : PlaybackEndReason::kFirstPcmTimeout;
+            session_id = current_request_.session_id;
+            tts_timeout_stop_pending_ = true;
+        }
+    }
+
+    if (remaining_us != 0) {
+        ArmTtsPcmTimeout(remaining_us);
+        return;
+    }
+
+    ESP_LOGE(TAG, "TTS PCM 超时: session=%lu, type=%s, timeout=5000ms",
+             static_cast<unsigned long>(session_id),
+             timeout_reason == PlaybackEndReason::kFirstPcmTimeout
+                 ? "first_pcm"
+                 : "pcm_stall");
+    if (!Stop(timeout_reason)) {
+        ESP_LOGE(TAG, "提交 TTS PCM 超时停止命令失败: session=%lu",
+                 static_cast<unsigned long>(session_id));
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            tts_timeout_stop_pending_ = false;
+        }
+        ArmTtsPcmTimeout(kTtsPcmTimeoutUs);
+    }
+}
+
 int GmfPlayerEngine::OutputCallback(uint8_t* data, int data_size, void* ctx) {
     return static_cast<GmfPlayerEngine*>(ctx)->HandleOutput(data, data_size);
 }
@@ -457,12 +601,18 @@ int GmfPlayerEngine::HandleOutput(uint8_t* data, int data_size) {
         return ESP_FAIL;
     }
     uint32_t session_id = 0;
+    uint32_t chunk_index = 0;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         session_id = current_request_.session_id;
+        chunk_index = ++output_chunks_;
+        if (playing_ && current_request_.channel == PlaybackChannel::kTts &&
+            current_request_.session_id == tts_timeout_session_id_ &&
+            !tts_timeout_stop_pending_) {
+            last_tts_pcm_us_ = esp_timer_get_time();
+        }
     }
 
-    const uint32_t chunk_index = ++output_chunks_;
     if (chunk_index == 1) {
         ESP_LOGI(TAG, "首个 PCM 输出: session=%lu, elapsed=%lums, bytes=%d",
                  static_cast<unsigned long>(session_id),
@@ -504,6 +654,7 @@ int GmfPlayerEngine::HandleEvent(esp_asp_event_pkt_t* event) {
 
     PlaybackEvent playback_event;
     bool should_emit = true;
+    bool terminal = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         playback_event.session_id = current_request_.session_id;
@@ -521,10 +672,13 @@ int GmfPlayerEngine::HandleEvent(esp_asp_event_pkt_t* event) {
                 playing_ = false;
                 draining_ = false;
                 command_pending_playback_ = false;
-                playback_event.state = PlaybackState::kStopped;
                 playback_event.reason = stop_reason_ == PlaybackEndReason::kNone
                                             ? PlaybackEndReason::kCancelled
                                             : stop_reason_;
+                playback_event.state = IsTtsPcmTimeout(playback_event.reason)
+                                           ? PlaybackState::kFailed
+                                           : PlaybackState::kStopped;
+                terminal = true;
                 break;
             case ESP_ASP_STATE_FINISHED:
                 playing_ = false;
@@ -532,22 +686,35 @@ int GmfPlayerEngine::HandleEvent(esp_asp_event_pkt_t* event) {
                 command_pending_playback_ = false;
                 playback_event.state = PlaybackState::kCompleted;
                 playback_event.reason = PlaybackEndReason::kNaturalEnd;
+                terminal = true;
                 break;
             case ESP_ASP_STATE_ERROR:
                 playing_ = false;
                 draining_ = false;
                 command_pending_playback_ = false;
                 playback_event.state = PlaybackState::kFailed;
-                playback_event.reason = PlaybackEndReason::kFailed;
+                playback_event.reason = IsTtsPcmTimeout(stop_reason_)
+                                            ? stop_reason_
+                                            : PlaybackEndReason::kFailed;
+                terminal = true;
                 break;
             default:
                 should_emit = false;
                 break;
         }
+        if (terminal) {
+            tts_timeout_session_id_ = 0;
+            tts_timeout_started_us_ = 0;
+            last_tts_pcm_us_ = 0;
+            tts_timeout_stop_pending_ = false;
+        }
     }
 
     if (!should_emit) {
         return ESP_OK;
+    }
+    if (terminal) {
+        DisarmTtsPcmTimeout();
     }
     ESP_LOGI(TAG, "GMF 状态事件: state=%s, elapsed=%lums, pcm_chunks=%lu",
              esp_audio_simple_player_state_to_str(state),

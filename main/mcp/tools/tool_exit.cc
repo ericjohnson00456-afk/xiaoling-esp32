@@ -4,9 +4,11 @@
 
 namespace {
 MCP_REGISTER_TOOL(RegisterExit, McpToolGroup::kCommon, 132) {
-  server.AddTool("ls.built_in.exit", "退出当前对话并停止上行，保留当前播放。", PropertyList(),
+  server.AddTool("ls.built_in.exit", "退出当前对话并停止上行，同时清除音乐播放列表。", PropertyList(),
                  [](const PropertyList &) -> ReturnValue {
-                   Application::GetInstance().AbortSpeaking(kAbortReasonExit);
+                   auto& app = Application::GetInstance();
+                   app.ExitMusicIntent();
+                   app.AbortSpeaking(kAbortReasonExit);
                    return std::string("已完成操作");
                  });
 }

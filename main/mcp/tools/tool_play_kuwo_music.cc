@@ -1,45 +1,16 @@
 #include <stdexcept>
-#include <memory>
+#include <cmath>
+#include <cstdio>
 #include <string>
 #include <utility>
 #include <vector>
-
-#include <esp_log.h>
-#include <freertos/FreeRTOS.h>
-#include <freertos/task.h>
 
 #include "application.h"
 #include "mcp_server.h"
 #include <cJSON.h>
 
 namespace {
-constexpr const char *kItemsSchema = R"({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"playable":{"type":"integer"},"itemid":{"type":"string"}},"required":["itemid"]}}},"required":["items"]})";
-
-struct KuwoResolveContext {
-  std::vector<std::string> item_ids;
-};
-
-void ResolveKuwoTask(void *arg) {
-  std::unique_ptr<KuwoResolveContext> context(static_cast<KuwoResolveContext *>(arg));
-  std::vector<std::string> urls;
-  urls.reserve(context->item_ids.size());
-  for (const auto &item_id : context->item_ids) {
-    std::string url;
-    if (Application::GetInstance().ResolveKuwoMusicUrl(item_id, url)) {
-      urls.emplace_back(std::move(url));
-    }
-  }
-  if (!urls.empty()) {
-    Application::GetInstance().Schedule([urls = std::move(urls)]() mutable {
-      if (Application::GetInstance().GetAudioPlayer().PlayMusicList(urls) == 0) {
-        ESP_LOGW("PlayKuwo", "酷我歌曲 URL 已解析，但提交播放失败");
-      }
-    });
-  } else {
-    ESP_LOGW("PlayKuwo", "没有解析到可播放的酷我歌曲");
-  }
-  vTaskDelete(nullptr);
-}
+constexpr const char *kItemsSchema = R"({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"playable":{"type":"integer"},"itemid":{"oneOf":[{"type":"string"},{"type":"integer"}]}},"required":["itemid"]}}},"required":["items"]})";
 
 MCP_REGISTER_TOOL(RegisterPlayKuwoMusic, McpToolGroup::kCommon, 20) {
   server.AddTool("ls.built_in.play_kuwo_music", "播放酷我音乐。",
@@ -57,20 +28,24 @@ MCP_REGISTER_TOOL(RegisterPlayKuwoMusic, McpToolGroup::kCommon, 20) {
                    if (!cJSON_IsArray(items) || cJSON_GetArraySize(items) == 0) {
                      cJSON_Delete(root); throw std::runtime_error("没有可播放的酷我音乐");
                    }
-                   auto context = std::make_unique<KuwoResolveContext>();
+                   std::vector<std::string> item_ids;
                    for (int i = 0; i < cJSON_GetArraySize(items); ++i) {
                      cJSON *item = cJSON_GetArrayItem(items, i);
                      cJSON *id = cJSON_IsObject(item) ? cJSON_GetObjectItem(item, "itemid") : nullptr;
-                     if (!cJSON_IsString(id) || id->valuestring == nullptr || id->valuestring[0] == '\0') continue;
-                     context->item_ids.emplace_back(id->valuestring);
+                     if (cJSON_IsString(id) && id->valuestring != nullptr && id->valuestring[0] != '\0') {
+                       item_ids.emplace_back(id->valuestring);
+                     } else if (cJSON_IsNumber(id) && std::isfinite(id->valuedouble) &&
+                                id->valuedouble >= 0 && std::floor(id->valuedouble) == id->valuedouble) {
+                       char text[32] = {};
+                       std::snprintf(text, sizeof(text), "%.0f", id->valuedouble);
+                       item_ids.emplace_back(text);
+                     }
                    }
                    cJSON_Delete(root);
-                   if (context->item_ids.empty()) throw std::runtime_error("没有可播放的酷我音乐");
-                   if (xTaskCreate(ResolveKuwoTask, "kuwo_resolve", 8192,
-                                   context.release(), 4, nullptr) != pdPASS) {
-                     throw std::runtime_error("创建酷我解析任务失败");
-                   }
-                   return std::string("已提交播放请求");
+                   if (item_ids.empty()) throw std::runtime_error("没有可播放的酷我音乐");
+                   if (!Application::GetInstance().SubmitKuwoMusicList(std::move(item_ids)))
+                     throw std::runtime_error("提交酷我播放列表失败");
+                   return std::string("播放成功");
                  });
 }
 } // namespace

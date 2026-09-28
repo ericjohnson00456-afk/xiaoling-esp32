@@ -66,27 +66,27 @@ uint32_t AudioPlayer::PlayMusicUrl(const std::string& url) {
     {
         std::lock_guard<std::mutex> lock(music_list_mutex_);
         music_list_.clear();
-        music_list_.push_back(url);
+        music_list_.push_back(MusicListItem{.url = url});
         current_music_index_ = 0;
+        ++music_list_generation_;
+        current_music_session_id_ = 0;
+        current_music_retry_used_ = false;
+        music_url_resolver_ = nullptr;
     }
-    const auto session_id = PlayMusicUrlInternal(url);
-    if (session_id != 0) {
-        std::function<void()> callback;
-        {
-            std::lock_guard<std::mutex> lock(callback_mutex_);
-            callback = music_start_callback_;
-        }
-        if (callback) callback();
+    if (!StartResolvedMusic(0, url)) {
+        ClearMusicList();
+        return 0;
     }
-    return session_id;
+    std::lock_guard<std::mutex> lock(music_list_mutex_);
+    return current_music_session_id_;
 }
 
 uint32_t AudioPlayer::PlayMusicList(const std::vector<std::string>& urls) {
-    std::vector<std::string> valid_urls;
+    std::vector<MusicListItem> valid_urls;
     valid_urls.reserve(urls.size());
     for (const auto& url : urls) {
         if (TtsPlayer::IsHttpUrl(url)) {
-            valid_urls.push_back(url);
+            valid_urls.push_back(MusicListItem{.url = url});
         }
     }
     if (valid_urls.empty()) {
@@ -97,22 +97,53 @@ uint32_t AudioPlayer::PlayMusicList(const std::vector<std::string>& urls) {
         std::lock_guard<std::mutex> lock(music_list_mutex_);
         music_list_ = std::move(valid_urls);
         current_music_index_ = 0;
-        first_url = music_list_.front();
+        first_url = music_list_.front().url;
+        ++music_list_generation_;
+        current_music_session_id_ = 0;
+        current_music_retry_used_ = false;
+        music_url_resolver_ = nullptr;
     }
-    const auto session_id = PlayMusicUrlInternal(first_url);
-    if (session_id != 0) {
-        std::function<void()> callback;
-        {
-            std::lock_guard<std::mutex> lock(callback_mutex_);
-            callback = music_start_callback_;
-        }
-        if (callback) callback();
+    if (!StartResolvedMusic(0, first_url)) {
+        ClearMusicList();
+        return 0;
     }
-    return session_id;
+    std::lock_guard<std::mutex> lock(music_list_mutex_);
+    return current_music_session_id_;
 }
 
-bool AudioPlayer::PlayPreviousMusic() {
-    std::string url;
+bool AudioPlayer::PlayMusicItemList(const std::vector<std::string>& item_ids,
+                                    MusicUrlResolver resolver) {
+    if (!resolver) {
+        return false;
+    }
+    std::vector<MusicListItem> items;
+    items.reserve(item_ids.size());
+    for (const auto& item_id : item_ids) {
+        if (!item_id.empty()) {
+            items.push_back(MusicListItem{.item_id = item_id});
+        }
+    }
+    if (items.empty()) {
+        return false;
+    }
+    {
+        std::lock_guard<std::mutex> lock(music_list_mutex_);
+        music_list_ = std::move(items);
+        current_music_index_ = 0;
+        ++music_list_generation_;
+        current_music_session_id_ = 0;
+        current_music_retry_used_ = false;
+        music_url_resolver_ = std::move(resolver);
+    }
+    if (!RequestMusicAtIndex(0, true)) {
+        ClearMusicList();
+        return false;
+    }
+    return true;
+}
+
+bool AudioPlayer::PlayPreviousMusic(bool play_when_ready) {
+    std::size_t index = 0;
     {
         std::lock_guard<std::mutex> lock(music_list_mutex_);
         if (music_list_.empty()) {
@@ -121,34 +152,153 @@ bool AudioPlayer::PlayPreviousMusic() {
         current_music_index_ = current_music_index_ == 0
                                    ? music_list_.size() - 1
                                    : current_music_index_ - 1;
-        url = music_list_[current_music_index_];
+        index = current_music_index_;
+        current_music_retry_used_ = false;
     }
-    return PlayMusicUrlInternal(url) != 0;
+    return RequestMusicAtIndex(index, play_when_ready);
 }
 
-bool AudioPlayer::PlayNextMusic() {
-    std::string url;
+bool AudioPlayer::PlayNextMusic(bool play_when_ready) {
+    std::size_t index = 0;
     {
         std::lock_guard<std::mutex> lock(music_list_mutex_);
         if (music_list_.empty()) {
             return false;
         }
         current_music_index_ = (current_music_index_ + 1) % music_list_.size();
-        url = music_list_[current_music_index_];
+        index = current_music_index_;
+        current_music_retry_used_ = false;
     }
-    return PlayMusicUrlInternal(url) != 0;
+    return RequestMusicAtIndex(index, play_when_ready);
 }
 
-bool AudioPlayer::ReplayMusic() {
-    std::string url;
+bool AudioPlayer::ReplayMusic(bool play_when_ready) {
+    std::size_t index = 0;
     {
         std::lock_guard<std::mutex> lock(music_list_mutex_);
         if (music_list_.empty()) {
             return false;
         }
-        url = music_list_[current_music_index_];
+        index = current_music_index_;
+        current_music_retry_used_ = false;
     }
-    return PlayMusicUrlInternal(url) != 0;
+    return RequestMusicAtIndex(index, play_when_ready);
+}
+
+void AudioPlayer::ClearMusicList() {
+    std::lock_guard<std::mutex> lock(music_list_mutex_);
+    music_list_.clear();
+    current_music_index_ = 0;
+    ++music_list_generation_;
+    current_music_session_id_ = 0;
+    current_music_retry_used_ = false;
+    music_url_resolver_ = nullptr;
+}
+
+bool AudioPlayer::HasMusicList() const {
+    std::lock_guard<std::mutex> lock(music_list_mutex_);
+    return !music_list_.empty();
+}
+
+bool AudioPlayer::RequestMusicAtIndex(std::size_t index, bool play_when_ready) {
+    MusicUrlResolver resolver;
+    std::string item_id;
+    std::string cached_url;
+    uint32_t generation = 0;
+    {
+        std::lock_guard<std::mutex> lock(music_list_mutex_);
+        if (index >= music_list_.size()) {
+            return false;
+        }
+        auto& item = music_list_[index];
+        if (!item.url.empty()) {
+            cached_url = item.url;
+        } else {
+            if (!music_url_resolver_ || item.item_id.empty()) {
+                return false;
+            }
+            item.play_when_resolved = item.play_when_resolved || play_when_ready;
+            if (item.resolving) {
+                return true;
+            }
+            item.resolving = true;
+            resolver = music_url_resolver_;
+            item_id = item.item_id;
+            generation = music_list_generation_;
+        }
+    }
+
+    if (!cached_url.empty()) {
+        return !play_when_ready || StartResolvedMusic(index, cached_url);
+    }
+
+    const bool submitted = resolver(
+        item_id, [this, generation, index](bool success, std::string url) mutable {
+            HandleMusicUrlResolved(generation, index, success, std::move(url));
+        });
+    if (!submitted) {
+        std::lock_guard<std::mutex> lock(music_list_mutex_);
+        if (generation == music_list_generation_ && index < music_list_.size()) {
+            music_list_[index].resolving = false;
+            music_list_[index].play_when_resolved = false;
+        }
+    }
+    return submitted;
+}
+
+void AudioPlayer::HandleMusicUrlResolved(uint32_t generation, std::size_t index,
+                                         bool success, std::string url) {
+    const bool valid_url = success && TtsPlayer::IsHttpUrl(url);
+    bool should_play = false;
+    {
+        std::lock_guard<std::mutex> lock(music_list_mutex_);
+        if (generation != music_list_generation_ || index >= music_list_.size()) {
+            return;
+        }
+        auto& item = music_list_[index];
+        item.resolving = false;
+        if (valid_url) {
+            item.url = url;
+        }
+        should_play = valid_url && item.play_when_resolved &&
+                      current_music_index_ == index;
+        item.play_when_resolved = false;
+    }
+    if (should_play) {
+        if (!StartResolvedMusic(index, url)) {
+            ESP_LOGW(TAG, "解析后的音乐 URL 提交播放失败");
+        }
+    } else if (!valid_url) {
+        ESP_LOGW(TAG, "音乐条目 URL 解析失败: index=%u", static_cast<unsigned>(index));
+    }
+}
+
+bool AudioPlayer::StartResolvedMusic(std::size_t index, const std::string& url) {
+    const uint32_t session_id = PlayMusicUrlInternal(url);
+    if (session_id == 0) {
+        return false;
+    }
+    {
+        std::lock_guard<std::mutex> lock(music_list_mutex_);
+        if (index >= music_list_.size() || current_music_index_ != index) {
+            return false;
+        }
+        current_music_session_id_ = session_id;
+    }
+    PrefetchNextMusic(index);
+    return true;
+}
+
+void AudioPlayer::PrefetchNextMusic(std::size_t current_index) {
+    std::size_t next_index = 0;
+    {
+        std::lock_guard<std::mutex> lock(music_list_mutex_);
+        if (music_list_.size() < 2 || current_index >= music_list_.size()) {
+            return;
+        }
+        next_index = (current_index + 1) % music_list_.size();
+    }
+    RequestMusicAtIndex(next_index, false);
 }
 
 uint32_t AudioPlayer::PlayMusicUrlInternal(const std::string& url) {
@@ -273,10 +423,20 @@ bool AudioPlayer::IsMusicPlaying() const {
 }
 
 bool AudioPlayer::ResumeMusic() {
-    if (wakeup_in_progress_ || music_channel_ == nullptr) {
+    if (wakeup_in_progress_) {
         return false;
     }
-    return music_channel_->Resume();
+    std::size_t index = 0;
+    {
+        std::lock_guard<std::mutex> lock(music_list_mutex_);
+        if (music_list_.empty()) {
+            return false;
+        }
+        index = current_music_index_;
+    }
+    // The playlist selection may have changed while TTS owned the foreground.
+    // Resolve/play the selected entry instead of restarting MusicPlayer's old URL.
+    return RequestMusicAtIndex(index, true);
 }
 
 void AudioPlayer::DispatchPlaybackEvent(const PlaybackEvent& event) {
@@ -288,6 +448,29 @@ void AudioPlayer::DispatchPlaybackEvent(const PlaybackEvent& event) {
     }
     if (music_channel_ != nullptr && event.channel == music_channel_->Type()) {
         music_channel_->OnEvent(event);
+        if (event.state == PlaybackState::kFailed) {
+            std::size_t retry_index = 0;
+            bool should_retry = false;
+            {
+                std::lock_guard<std::mutex> lock(music_list_mutex_);
+                if (event.session_id == current_music_session_id_ &&
+                    current_music_index_ < music_list_.size() &&
+                    !music_list_[current_music_index_].item_id.empty() &&
+                    !current_music_retry_used_) {
+                    retry_index = current_music_index_;
+                    auto& item = music_list_[retry_index];
+                    item.url.clear();
+                    item.resolving = false;
+                    item.play_when_resolved = false;
+                    current_music_retry_used_ = true;
+                    should_retry = true;
+                }
+            }
+            if (should_retry) {
+                ESP_LOGW(TAG, "音乐流播放失败，重新解析当前条目 URL");
+                RequestMusicAtIndex(retry_index, true);
+            }
+        }
     }
 }
 
@@ -314,11 +497,6 @@ void AudioPlayer::SetEventCallback(EventCallback callback) {
 void AudioPlayer::SetTtsUrlCallback(TtsUrlCallback callback) {
     std::lock_guard<std::mutex> lock(callback_mutex_);
     tts_url_callback_ = std::move(callback);
-}
-
-void AudioPlayer::SetMusicStartCallback(std::function<void()> callback) {
-    std::lock_guard<std::mutex> lock(callback_mutex_);
-    music_start_callback_ = std::move(callback);
 }
 
 void AudioPlayer::HandleEngineEvent(const PlaybackEvent& event) {

@@ -20,6 +20,8 @@ enum class PlaybackEndReason {
     kPreempted,
     kCancelled,
     kFailed,
+    kFirstPcmTimeout,
+    kPcmStallTimeout,
 };
 
 struct PlaybackEvent {

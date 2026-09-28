@@ -28,6 +28,7 @@
 
 #include <cstring>
 #include <algorithm>
+#include <memory>
 #include <esp_log.h>
 #include <esp_app_desc.h>
 #include <esp_efuse.h>
@@ -45,6 +46,28 @@
 #include <cstdio>
 
 #define TAG "Application"
+
+namespace {
+
+struct KuwoUrlResolveTaskContext {
+    std::string item_id;
+    AudioPlayer::MusicUrlResolveCallback callback;
+};
+
+void KuwoUrlResolveTask(void* arg) {
+    std::unique_ptr<KuwoUrlResolveTaskContext> context(
+        static_cast<KuwoUrlResolveTaskContext*>(arg));
+    auto& app = Application::GetInstance();
+    std::string url;
+    const bool success = app.ResolveKuwoMusicUrl(context->item_id, url);
+    app.Schedule([callback = std::move(context->callback), success,
+                  url = std::move(url)]() mutable {
+        callback(success, std::move(url));
+    });
+    vTaskDelete(nullptr);
+}
+
+}  // namespace
 
 #ifdef CONFIG_LSPLATFORM
 static const int kBadNetworkSampleWindowSec = 60;
@@ -351,12 +374,21 @@ void Application::Initialize() {
         PlaybackIntent::kMusic,
         CreateMusicIntentHandlers(audio_player_, [this]() {
             return music_was_playing_for_session_;
+        }, [this]() {
+            return EnterMusicIntent();
+        }, [this]() {
+            ClearPendingMusicList();
         }));
     playback_intents_.SetHandlers(
         PlaybackIntent::kVoiceSession,
         CreateVoiceSessionIntentHandlers(audio_player_, [this]() {
-            return active_tts_session_id_ != 0 ||
-                   tts_waiting_for_playback_.load();
+            // kTts is the expected foreground owner of the TTS stream. Do not
+            // let VoiceSession::on_preempted stop the stream that just caused
+            // the intent transition. Other higher-priority intents may still
+            // cancel an active/pending TTS.
+            return playback_intents_.Top() != PlaybackIntent::kTts &&
+                   (active_tts_session_id_ != 0 ||
+                    tts_waiting_for_playback_.load());
         }));
     audio_player_.SetEventCallback([this](const PlaybackEvent& event) {
         Schedule([this, event]() {
@@ -366,23 +398,33 @@ void Application::Initialize() {
                 return;
             }
             if (event.state == PlaybackState::kStreamReady) {
+                pending_tts_session_id_ = event.session_id;
                 XiaolingEventBus::GetInstance().Publish(XIAOLING_TTS_STREAM_READY);
                 return;
             }
             if (event.state == PlaybackState::kPlaying) {
+                pending_tts_session_id_ = 0;
                 active_tts_session_id_ = event.session_id;
                 background_tts_pending_.store(true);
                 XiaolingEventBus::GetInstance().Publish(XIAOLING_TTS_PLAYING);
                 session_controller_.StartTts(event.session_id);
                 // 与收到 URL 的事件不同，kPlaying 表示 HTTP 响应中已经产生
                 // 可以解码的 TTS 音频数据。
-                UiApp::SetStatus(UiApp::Status::Speaking);
-                UiApp::SetEmotion("说话");
-                if (!exit_requested_.load() && tts_output_started_.exchange(false) &&
+                const bool keep_idle = music_tool_session_exit_pending_;
+                if (!keep_idle) {
+                    UiApp::SetStatus(UiApp::Status::Speaking);
+                    UiApp::SetEmotion("说话");
+                }
+                if (!keep_idle && !exit_requested_.load() &&
+                    tts_output_started_.exchange(false) &&
                     (GetDeviceState() == kDeviceStateIdle ||
                      GetDeviceState() == kDeviceStateListening)) {
                     tts_waiting_for_playback_.store(false);
                     SetDeviceState(kDeviceStateSpeaking);
+                } else if (keep_idle) {
+                    tts_waiting_for_playback_.store(false);
+                    tts_output_started_.store(false);
+                    ESP_LOGI(TAG, "音乐工具等待 TTS 播完，设备保持待命状态");
                 }
                 return;
             }
@@ -393,15 +435,31 @@ void Application::Initialize() {
             }
             tts_waiting_for_playback_.store(false);
             tts_output_started_.store(false);
-            if (active_tts_session_id_ != event.session_id) {
+            const bool active_session = active_tts_session_id_ == event.session_id;
+            const bool pending_session = pending_tts_session_id_ == event.session_id;
+            if (!active_session && !pending_session) {
                 return;
             }
+            const char* reason_text = "interrupted";
+            if (event.reason == PlaybackEndReason::kNaturalEnd) {
+                reason_text = "natural";
+            } else if (event.reason == PlaybackEndReason::kFirstPcmTimeout) {
+                reason_text = "first_pcm_timeout";
+                ESP_LOGW(TAG, "TTS 首帧 PCM 超时: session=%lu",
+                         static_cast<unsigned long>(event.session_id));
+            } else if (event.reason == PlaybackEndReason::kPcmStallTimeout) {
+                reason_text = "pcm_stall_timeout";
+                ESP_LOGW(TAG, "TTS 播放中 PCM 断流超时: session=%lu",
+                         static_cast<unsigned long>(event.session_id));
+            }
             XiaolingEventBus::GetInstance().Publish(
-                XIAOLING_TTS_STOPPED,
-                event.reason == PlaybackEndReason::kNaturalEnd ? "natural" : "interrupted");
+                XIAOLING_TTS_STOPPED, reason_text);
+            pending_tts_session_id_ = 0;
             active_tts_session_id_ = 0;
             background_tts_pending_.store(false);
-            session_controller_.EndTts(event.session_id);
+            if (active_session) {
+                session_controller_.EndTts(event.session_id);
+            }
             playback_intents_.Pop(PlaybackIntent::kTts);
             if (exit_requested_.load()) {
                 // Exit 会结束本轮对话生命周期，但允许当前 TTS 流播放完毕，
@@ -425,6 +483,11 @@ void Application::Initialize() {
                 xEventGroupClearBits(event_group_, MAIN_EVENT_WAKE_WORD_DETECTED);
                 audio_service_.EnableWakeWordDetection(true);
                 exit_requested_.store(false);
+                return;
+            }
+            if (music_tool_session_exit_pending_) {
+                ESP_LOGI(TAG, "音乐工具 TTS 播放结束，释放语音会话 Intent");
+                CompleteMusicToolVoiceSession();
                 return;
             }
             if (background_music_session_) {
@@ -483,7 +546,8 @@ void Application::Initialize() {
         tts_output_started_.store(true);
         XiaolingEventBus::GetInstance().Publish(XIAOLING_TTS_OUTPUT_STARTED);
         Schedule([this]() {
-            if (!exit_requested_.load() && active_tts_session_id_ != 0 &&
+            if (!music_tool_session_exit_pending_ &&
+                !exit_requested_.load() && active_tts_session_id_ != 0 &&
                 tts_output_started_.exchange(false) &&
                 (GetDeviceState() == kDeviceStateIdle ||
                  GetDeviceState() == kDeviceStateListening)) {
@@ -988,6 +1052,18 @@ void Application::InitializeXiaolingConn() {
                     }
                     return;
                 }
+                if (music_tool_session_exit_pending_ &&
+                    (background_tts_pending_.load() ||
+                     active_tts_session_id_ != 0 ||
+                     pending_tts_session_id_ != 0 ||
+                     tts_waiting_for_playback_.load())) {
+                    ESP_LOGI(TAG, "云端会话已结束，等待本地 TTS 排空后再启动音乐");
+                    return;
+                }
+                if (music_tool_session_exit_pending_) {
+                    CompleteMusicToolVoiceSession();
+                    return;
+                }
                 playback_intents_.Pop(PlaybackIntent::kVoiceSession);
                 const auto state = GetDeviceState();
                 if (natural_finish &&
@@ -1305,7 +1381,6 @@ void Application::BeginWakeup(ListeningMode mode) {
         background_tts_pending_.store(false);
         music_was_playing_for_session_ = true;
         listening_mode_before_background_session_ = listening_mode_;
-        playback_intents_.Push(PlaybackIntent::kMusic);
     } else {
         background_music_session_ = false;
         background_session_finished_ = false;
@@ -1376,22 +1451,6 @@ void Application::BeginWakeup(ListeningMode mode) {
                 audio_service_.EnableVoiceProcessing(false);
                 if (xiaoling_conn_) xiaoling_conn_->SendStopListening();
             }
-        });
-    });
-    audio_player_.SetMusicStartCallback([this]() {
-        Schedule([this]() {
-            const auto state = GetDeviceState();
-            if (state != kDeviceStateListening && state != kDeviceStateSpeaking) {
-                return;
-            }
-            ESP_LOGI(TAG, "音乐开始播放：结束当前语音会话并回到待命");
-            iat_utterance_active_ = false;
-            audio_service_.EnableVoiceProcessing(false);
-            session_controller_.EndSession();
-            if (xiaoling_conn_) {
-                xiaoling_conn_->EndSession();
-            }
-            SetDeviceState(kDeviceStateIdle);
         });
     });
     if (iat_subscription_id_ == 0) {
@@ -1483,7 +1542,6 @@ void Application::RestoreBackgroundMusicSession() {
     playback_intents_.Pop(PlaybackIntent::kPromptTone);
     playback_intents_.Pop(PlaybackIntent::kTts);
     playback_intents_.Pop(PlaybackIntent::kVoiceSession);
-    playback_intents_.Pop(PlaybackIntent::kMusic);
     music_was_playing_for_session_ = false;
 }
 
@@ -1594,7 +1652,7 @@ void Application::HandleStateChangedEvent() {
             } else {
                 audio_service_.EnableVoiceProcessing(false);
             }
-            if (exit_requested_.load() &&
+            if ((exit_requested_.load() || music_tool_session_exit_pending_) &&
                 (tts_waiting_for_playback_.load() || audio_player_.IsPlaying())) {
                 audio_service_.EnableWakeWordDetection(false);
                 ESP_LOGI(TAG, "待命期间等待 TTS 播放完成，保持唤醒检测关闭");
@@ -1758,10 +1816,243 @@ void Application::SendMcpMessage(const std::string& payload) {
 }
 
 bool Application::ResolveKuwoMusicUrl(const std::string& item_id, std::string& url) {
+    std::lock_guard<std::mutex> lock(xiaoling_conn_mutex_);
     if (xiaoling_conn_ == nullptr) {
         return false;
     }
     return xiaoling_conn_->ResolveKuwoMusicUrl(item_id, url);
+}
+
+bool Application::QueueKuwoMusicUrlResolve(
+    const std::string& item_id, AudioPlayer::MusicUrlResolveCallback callback) {
+    if (item_id.empty() || !callback) {
+        return false;
+    }
+    auto context = std::make_unique<KuwoUrlResolveTaskContext>();
+    context->item_id = item_id;
+    context->callback = std::move(callback);
+    if (xTaskCreate(KuwoUrlResolveTask, "kuwo_resolve", 8192,
+                    context.get(), 4, nullptr) != pdPASS) {
+        ESP_LOGE(TAG, "创建酷我 URL 解析任务失败");
+        return false;
+    }
+    context.release();
+    return true;
+}
+
+bool Application::SubmitKuwoMusicList(std::vector<std::string> item_ids) {
+    if (item_ids.empty()) {
+        return false;
+    }
+    Schedule([this, item_ids = std::move(item_ids)]() mutable {
+        pending_music_list_type_ = PendingMusicListType::kKuwoItemIds;
+        pending_music_list_ = std::move(item_ids);
+        if (!playback_intents_.Reenter(PlaybackIntent::kMusic)) {
+            ClearPendingMusicList();
+            ESP_LOGW(TAG, "酷我音乐事件提交失败");
+            return;
+        }
+        PrepareMusicToolStandby(true);
+        ESP_LOGI(TAG, "酷我音乐列表已排队，等待当前 TTS 播放完成");
+    });
+    return true;
+}
+
+bool Application::SubmitMusicUrlList(std::vector<std::string> urls) {
+    if (urls.empty()) {
+        return false;
+    }
+    Schedule([this, urls = std::move(urls)]() mutable {
+        pending_music_list_type_ = PendingMusicListType::kUrls;
+        pending_music_list_ = std::move(urls);
+        if (!playback_intents_.Reenter(PlaybackIntent::kMusic)) {
+            ClearPendingMusicList();
+            ESP_LOGW(TAG, "音乐 URL 事件提交失败");
+            return;
+        }
+        PrepareMusicToolStandby(true);
+        ESP_LOGI(TAG, "音乐 URL 列表已排队，等待当前 TTS 播放完成");
+    });
+    return true;
+}
+
+void Application::PrepareMusicToolStandby(bool resume_music_after_tts) {
+    music_tool_session_exit_pending_ = true;
+    music_was_playing_for_session_ = resume_music_after_tts;
+    iat_utterance_active_ = false;
+    audio_service_.EnableVoiceProcessing(false);
+    session_controller_.EndSession();
+    if (GetDeviceState() != kDeviceStateIdle) {
+        SetDeviceState(kDeviceStateIdle);
+    } else {
+        UiApp::SetStatus(UiApp::Status::Standby);
+        UiApp::SetEmotion("待机");
+    }
+    ESP_LOGI(TAG,
+             "音乐工具已回到待命: resume=%d, tts_waiting=%d, pending=%lu, active=%lu",
+             resume_music_after_tts ? 1 : 0,
+             tts_waiting_for_playback_.load() ? 1 : 0,
+             static_cast<unsigned long>(pending_tts_session_id_),
+             static_cast<unsigned long>(active_tts_session_id_));
+
+    const bool tts_active = tts_waiting_for_playback_.load() ||
+                            pending_tts_session_id_ != 0 ||
+                            active_tts_session_id_ != 0;
+    const bool cloud_session_active = xiaoling_conn_ != nullptr &&
+                                      xiaoling_conn_->IsSessionActive();
+    if (!tts_active && !cloud_session_active) {
+        CompleteMusicToolVoiceSession();
+    }
+}
+
+void Application::CompleteMusicToolVoiceSession() {
+    if (!music_tool_session_exit_pending_) {
+        return;
+    }
+    music_tool_session_exit_pending_ = false;
+    if (background_music_session_) {
+        background_session_finished_ = true;
+        FinishBackgroundMusicSession();
+    } else {
+        const bool voice_intent_removed =
+            playback_intents_.Pop(PlaybackIntent::kVoiceSession);
+        if (!voice_intent_removed &&
+            playback_intents_.Top() == PlaybackIntent::kMusic &&
+            music_was_playing_for_session_ &&
+            !audio_player_.IsMusicPlaying()) {
+            audio_player_.ResumeMusic();
+        }
+    }
+    audio_service_.EnableWakeWordDetection(true);
+}
+
+bool Application::RequestPauseMusic() {
+    if (!audio_player_.HasMusicList()) {
+        return false;
+    }
+    Schedule([this]() {
+        music_was_playing_for_session_ = false;
+        if (!audio_player_.PauseMusic()) {
+            ESP_LOGW(TAG, "暂停音乐失败");
+        }
+        PrepareMusicToolStandby(false);
+    });
+    return true;
+}
+
+bool Application::RequestResumeMusic() {
+    if (!audio_player_.HasMusicList()) {
+        return false;
+    }
+    Schedule([this]() {
+        PrepareMusicToolStandby(true);
+    });
+    return true;
+}
+
+bool Application::RequestStopMusic() {
+    if (!audio_player_.HasMusicList()) {
+        return false;
+    }
+    Schedule([this]() {
+        music_was_playing_for_session_ = false;
+        if (!audio_player_.PauseMusic()) {
+            ESP_LOGW(TAG, "停止音乐失败");
+        }
+        PrepareMusicToolStandby(false);
+    });
+    return true;
+}
+
+bool Application::EnterMusicIntent() {
+    const auto state = GetDeviceState();
+    const bool recording = state == kDeviceStateConnecting ||
+                           state == kDeviceStateListening ||
+                           state == kDeviceStateSpeaking;
+    const bool cloud_session_active = xiaoling_conn_ != nullptr &&
+                                      xiaoling_conn_->IsSessionActive();
+    if (recording || cloud_session_active) {
+        ESP_LOGI(TAG, "音乐事件进入：结束录音和语音会话，回到待命");
+        iat_utterance_active_ = false;
+        audio_service_.EnableVoiceProcessing(false);
+        session_controller_.EndSession();
+        if (cloud_session_active) {
+            xiaoling_conn_->EndSession();
+        }
+        if (recording) {
+            SetDeviceState(kDeviceStateIdle);
+        }
+    }
+
+    const PendingMusicListType type = pending_music_list_type_;
+    std::vector<std::string> items = std::move(pending_music_list_);
+    ClearPendingMusicList();
+
+    if (type == PendingMusicListType::kKuwoItemIds) {
+        return audio_player_.PlayMusicItemList(
+            items,
+            [this](const std::string& item_id,
+                   AudioPlayer::MusicUrlResolveCallback callback) {
+                return QueueKuwoMusicUrlResolve(item_id, std::move(callback));
+            });
+    }
+    if (type == PendingMusicListType::kUrls) {
+        return audio_player_.PlayMusicList(items) != 0;
+    }
+    return false;
+}
+
+void Application::ClearPendingMusicList() {
+    pending_music_list_type_ = PendingMusicListType::kNone;
+    pending_music_list_.clear();
+}
+
+void Application::ExitMusicIntent() {
+    ScheduleUrgent([this]() {
+        playback_intents_.Pop(PlaybackIntent::kMusic);
+    });
+}
+
+bool Application::RequestPreviousMusic() {
+    if (!audio_player_.HasMusicList()) {
+        return false;
+    }
+    Schedule([this]() {
+        if (!audio_player_.PlayPreviousMusic(false)) {
+            ESP_LOGW(TAG, "切换上一首失败");
+            return;
+        }
+        PrepareMusicToolStandby(true);
+    });
+    return true;
+}
+
+bool Application::RequestNextMusic() {
+    if (!audio_player_.HasMusicList()) {
+        return false;
+    }
+    Schedule([this]() {
+        if (!audio_player_.PlayNextMusic(false)) {
+            ESP_LOGW(TAG, "切换下一首失败");
+            return;
+        }
+        PrepareMusicToolStandby(true);
+    });
+    return true;
+}
+
+bool Application::RequestReplayMusic() {
+    if (!audio_player_.HasMusicList()) {
+        return false;
+    }
+    Schedule([this]() {
+        if (!audio_player_.ReplayMusic(false)) {
+            ESP_LOGW(TAG, "重播当前音乐失败");
+            return;
+        }
+        PrepareMusicToolStandby(true);
+    });
+    return true;
 }
 
 void Application::SetAecMode(AecMode mode) {

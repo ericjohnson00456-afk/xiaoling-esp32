@@ -7,6 +7,7 @@
 #include <esp_audio_simple_player.h>
 #include <esp_gmf_io.h>
 #include <esp_gmf_io_http.h>
+#include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
@@ -55,6 +56,9 @@ private:
     bool DoStop(PlaybackEndReason reason);
     void CommandLoop();
     void StopCommandTask();
+    void ArmTtsPcmTimeout(uint64_t timeout_us);
+    void DisarmTtsPcmTimeout();
+    void HandleTtsPcmTimeout();
     static void CommandTaskEntry(void* arg);
 
     AudioService* audio_service_ = nullptr;
@@ -64,7 +68,11 @@ private:
     PlaybackRequest current_request_;
     PlaybackEndReason stop_reason_ = PlaybackEndReason::kNone;
     uint32_t playback_started_ms_ = 0;
-    uint32_t output_chunks_ = 0;
+    std::atomic<uint32_t> output_chunks_{0};
+    uint32_t tts_timeout_session_id_ = 0;
+    int64_t tts_timeout_started_us_ = 0;
+    int64_t last_tts_pcm_us_ = 0;
+    bool tts_timeout_stop_pending_ = false;
     bool http_request_ready_emitted_ = false;
     bool initialized_ = false;
     bool playing_ = false;
@@ -76,4 +84,6 @@ private:
     std::atomic_bool command_pending_playback_{false};
     TaskHandle_t command_task_handle_ = nullptr;
     bool command_task_stack_external_ = false;
+    esp_timer_handle_t tts_pcm_timer_ = nullptr;
+    std::mutex tts_timer_mutex_;
 };

@@ -1,16 +1,65 @@
 #include "xiaoling_conn_websocket.h"
 
+#include "network_diagnostics.h"
 #include "realtime_transport_scope.h"
 
 #include "board.h"
 #include "web_socket.h"
 
 #include <esp_log.h>
+#include <esp_system.h>
 #include <esp_timer.h>
+#include <esp_wifi.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #include <utility>
 
 #define TAG "XiaolingWs"
+
+namespace {
+constexpr uint32_t kControlSendTimeoutMs = 250;
+constexpr uint32_t kBinarySendTimeoutMs = 2000;
+
+void LogBinarySendDiagnostics(uint32_t sequence, size_t size,
+                              int64_t started_us) {
+    const uint32_t elapsed_ms = static_cast<uint32_t>(
+        (esp_timer_get_time() - started_us) / 1000);
+    const unsigned stack_free_words = static_cast<unsigned>(
+        uxTaskGetStackHighWaterMark(nullptr));
+
+    wifi_ap_record_t ap_info = {};
+    const esp_err_t wifi_result = esp_wifi_sta_get_ap_info(&ap_info);
+    if (wifi_result == ESP_OK) {
+        ESP_LOGW(TAG,
+                 "WS TX diagnostics: seq=%lu, bytes=%u, elapsed=%lums, "
+                 "wifi_rssi=%d dBm, channel=%u, second_channel=%d, "
+                 "free_heap=%lu, min_free_heap=%lu, task_stack_free=%u words",
+                 static_cast<unsigned long>(sequence),
+                 static_cast<unsigned>(size),
+                 static_cast<unsigned long>(elapsed_ms),
+                 static_cast<int>(ap_info.rssi),
+                 static_cast<unsigned>(ap_info.primary),
+                 static_cast<int>(ap_info.second),
+                 static_cast<unsigned long>(esp_get_free_heap_size()),
+                 static_cast<unsigned long>(esp_get_minimum_free_heap_size()),
+                 stack_free_words);
+        return;
+    }
+
+    ESP_LOGW(TAG,
+             "WS TX diagnostics: seq=%lu, bytes=%u, elapsed=%lums, "
+             "wifi_info_error=%s, free_heap=%lu, min_free_heap=%lu, "
+             "task_stack_free=%u words",
+             static_cast<unsigned long>(sequence),
+             static_cast<unsigned>(size),
+             static_cast<unsigned long>(elapsed_ms),
+             esp_err_to_name(wifi_result),
+             static_cast<unsigned long>(esp_get_free_heap_size()),
+             static_cast<unsigned long>(esp_get_minimum_free_heap_size()),
+             stack_free_words);
+}
+}  // namespace
 
 XiaolingConnWebSocket::XiaolingConnWebSocket(int connect_id)
     : connect_id_(connect_id) {
@@ -24,6 +73,8 @@ bool XiaolingConnWebSocket::Connect(const std::string& url, const XiaolingWsHead
     Disconnect();
     rx_binary_sequence_ = 0;
     tx_binary_sequence_ = 0;
+    endpoint_url_ = url;
+    NetworkDiagnostics::Initialize();
 
     auto network = Board::GetInstance().GetNetwork();
     if (network == nullptr) {
@@ -108,9 +159,8 @@ bool XiaolingConnWebSocket::SendText(const std::string& text) {
     if (!IsConnected()) {
         return false;
     }
-    // Control messages are short but must not pin their caller behind a
-    // congested socket. They get a slightly wider deadline than 20 ms audio.
-    RealtimeTransportScope deadline(250);
+    // Control messages are short and retain a tight deadline.
+    RealtimeTransportScope deadline(kControlSendTimeoutMs);
     return websocket_->Send(text);
 }
 
@@ -127,9 +177,17 @@ bool XiaolingConnWebSocket::SendBinary(const uint8_t* data, size_t size) {
         ESP_LOGI(TAG, "上行链路[Socket写入开始]: seq=%lu, bytes=%u",
                  static_cast<unsigned long>(sequence), static_cast<unsigned>(size));
     }
-    RealtimeTransportScope deadline(120);
+    // Audio frames may share the transport with concurrent HTTPS traffic.
+    // Allow transient congestion to recover before tearing down the WS.
+    RealtimeTransportScope deadline(kBinarySendTimeoutMs);
     if (!websocket_->Send(data, size, true)) {
-        ESP_LOGE(TAG, "WS TX binary failed: bytes=%u", static_cast<unsigned>(size));
+        ESP_LOGE(TAG, "WS TX binary failed: seq=%lu, bytes=%u",
+                 static_cast<unsigned long>(sequence),
+                 static_cast<unsigned>(size));
+        LogBinarySendDiagnostics(sequence, size, started_us);
+        NetworkDiagnostics::LogSnapshot("ws_binary_send_failed");
+        NetworkDiagnostics::StartFailureProbe(
+            endpoint_url_, "ws_binary_send_failed", sequence, size);
         return false;
     }
     const uint32_t elapsed_ms = static_cast<uint32_t>(
@@ -150,7 +208,7 @@ bool XiaolingConnWebSocket::Ping() {
     if (!IsConnected()) {
         return false;
     }
-    RealtimeTransportScope deadline(250);
+    RealtimeTransportScope deadline(kControlSendTimeoutMs);
     websocket_->Ping();
     return true;
 }
