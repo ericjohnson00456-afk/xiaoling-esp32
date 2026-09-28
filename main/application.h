@@ -74,7 +74,7 @@ public:
      * 请求切换设备状态。
      * 切换成功返回 true。
      */
-    bool SetDeviceState(DeviceState state);
+    bool SetDeviceState(DeviceState state) { return DeviceStatus::TransitionTo(state); }
 
     /**
      * 返回音频处理器的 VAD 检测结果

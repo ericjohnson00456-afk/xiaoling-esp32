@@ -1,12 +1,7 @@
 #include <esp_log.h>
 #include <esp_err.h>
-#include <nvs.h>
 #include <nvs_flash.h>
-#include <driver/gpio.h>
-#include <esp_event.h>
 #include <esp_ota_ops.h>
-#include <freertos/FreeRTOS.h>
-#include <freertos/task.h>
 
 #include "application.h"
 
@@ -22,11 +17,6 @@ extern "C" void app_main(void)
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
-
-    ret = esp_event_loop_create_default();
-    if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
-        ESP_ERROR_CHECK(ret);
-    }
 
     const auto* running_partition = esp_ota_get_running_partition();
     if (running_partition != nullptr) {

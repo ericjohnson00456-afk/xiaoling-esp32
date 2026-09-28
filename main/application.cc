@@ -4,7 +4,7 @@
 #include "system/system_info.h"
 #include "audio_codec.h"
 #include "xiaoling/conn/xiaoling_conn.h"
-#include "xiaoling/conn/xiaoling_config.h"
+#include "xiaoling/conn/xiaoling_conn_activation.h"
 #include "ui/i18n/lang_config.h"
 #include "mcp_server.h"
 #include "resource/assets.h"
@@ -29,16 +29,12 @@
 #include <esp_log.h>
 #include <esp_app_desc.h>
 #include <esp_timer.h>
-#ifdef SOC_HMAC_SUPPORTED
-#include <esp_hmac.h>
-#endif
 #include <nvs_flash.h>
 #include <font_awesome.h>
 #include <cJSON.h>
 #include <driver/gpio.h>
 #include <arpa/inet.h>
 #include <font_awesome.h>
-#include <cstdio>
 
 #define TAG "Application"
 
@@ -60,167 +56,6 @@ static constexpr EventBits_t kAllMainEvents =
     MAIN_EVENT_START_LISTENING |
     MAIN_EVENT_STOP_LISTENING |
     MAIN_EVENT_STATE_CHANGED;
-
-namespace {
-
-struct XiaolingActivationInfo {
-    std::string message;
-    std::string code;
-    std::string challenge;
-    std::string qrcode;
-};
-
-std::unique_ptr<Http> CreateXiaolingActivationHttp(const std::string& serial_number) {
-    auto& board = Board::GetInstance();
-    auto network = board.GetNetwork();
-    if (network == nullptr) {
-        return nullptr;
-    }
-    auto http = network->CreateHttp(0);
-    if (http == nullptr) {
-        return nullptr;
-    }
-
-    http->SetHeader("Activation-Version", serial_number.empty() ? "1" : "2");
-    http->SetHeader("Device-Id", SystemInfo::GetMacAddress());
-    http->SetHeader("Client-Id", board.GetUuid());
-    if (!serial_number.empty()) {
-        http->SetHeader("Serial-Number", serial_number);
-    }
-    http->SetHeader("User-Agent", SystemInfo::GetUserAgent());
-    http->SetHeader("Accept-Language", Lang::CODE);
-    http->SetHeader("Content-Type", "application/json");
-    return http;
-}
-
-void ParseXiaolingActivationInfo(const cJSON* root, XiaolingActivationInfo& info) {
-    const cJSON* activation = cJSON_GetObjectItemCaseSensitive(root, "activation");
-    if (!cJSON_IsObject(activation)) {
-        activation = root;
-    }
-
-    const auto read_string = [activation](const char* key, std::string& target) {
-        const cJSON* value = cJSON_GetObjectItemCaseSensitive(activation, key);
-        if (cJSON_IsString(value) && value->valuestring != nullptr) {
-            target = value->valuestring;
-        }
-    };
-    read_string("message", info.message);
-    read_string("code", info.code);
-    read_string("challenge", info.challenge);
-    read_string("qrcode", info.qrcode);
-}
-
-bool FetchXiaolingActivationInfo(XiaolingActivationInfo& info,
-                                 const std::string& serial_number) {
-    const std::string url = std::string("https://") + XiaolingConfig::GetHost() +
-                            "/v1/xiaoling/" + SystemInfo::GetProductId() + "/ota/";
-    auto http = CreateXiaolingActivationHttp(serial_number);
-    if (http == nullptr) {
-        return false;
-    }
-
-    std::string request = Board::GetInstance().GetSystemInfoJson();
-    const char* method = request.empty() ? "GET" : "POST";
-    if (!request.empty()) {
-        http->SetContent(std::move(request));
-    }
-    ESP_LOGI(TAG, "小聆激活信息请求: method=%s url=%s", method, url.c_str());
-    if (!http->Open(method, url)) {
-        ESP_LOGW(TAG, "小聆激活信息请求失败");
-        return false;
-    }
-
-    const int status = http->GetStatusCode();
-    const std::string body = http->ReadAll();
-    http->Close();
-    if (status != 200) {
-        ESP_LOGW(TAG, "小聆激活信息请求返回 HTTP %d: %s", status,
-                 body.empty() ? "<empty>" : body.c_str());
-        return false;
-    }
-
-    cJSON* root = cJSON_Parse(body.c_str());
-    if (root == nullptr) {
-        ESP_LOGW(TAG, "小聆激活信息响应不是有效 JSON");
-        return false;
-    }
-    ParseXiaolingActivationInfo(root, info);
-    cJSON_Delete(root);
-    return true;
-}
-
-std::string BuildXiaolingActivationPayload(const XiaolingActivationInfo& info,
-                                           const std::string& serial_number) {
-    if (serial_number.empty()) {
-        return "{}";
-    }
-
-    std::string hmac_hex;
-#ifdef SOC_HMAC_SUPPORTED
-    uint8_t hmac_result[32] = {};
-    const esp_err_t result = esp_hmac_calculate(
-        HMAC_KEY0, reinterpret_cast<const uint8_t*>(info.challenge.data()),
-        info.challenge.size(), hmac_result);
-    if (result != ESP_OK) {
-        ESP_LOGE(TAG, "激活 HMAC 计算失败: %s", esp_err_to_name(result));
-        return "{}";
-    }
-    char byte_text[3] = {};
-    for (const uint8_t byte : hmac_result) {
-        std::snprintf(byte_text, sizeof(byte_text), "%02x", byte);
-        hmac_hex += byte_text;
-    }
-#endif
-
-    cJSON* payload = cJSON_CreateObject();
-    cJSON_AddStringToObject(payload, "algorithm", "hmac-sha256");
-    cJSON_AddStringToObject(payload, "serial_number", serial_number.c_str());
-    cJSON_AddStringToObject(payload, "challenge", info.challenge.c_str());
-    cJSON_AddStringToObject(payload, "hmac", hmac_hex.c_str());
-    char* json_text = cJSON_PrintUnformatted(payload);
-    const std::string json = json_text != nullptr ? json_text : "{}";
-    cJSON_free(json_text);
-    cJSON_Delete(payload);
-    return json;
-}
-
-esp_err_t SubmitXiaolingActivation(const XiaolingActivationInfo& info,
-                                   const std::string& serial_number) {
-    if (info.challenge.empty()) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    const std::string url = std::string("https://") + XiaolingConfig::GetHost() +
-                            "/v1/xiaoling/" + SystemInfo::GetProductId() +
-                            "/ota/activate";
-    auto http = CreateXiaolingActivationHttp(serial_number);
-    if (http == nullptr) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    http->SetContent(BuildXiaolingActivationPayload(info, serial_number));
-    if (!http->Open("POST", url)) {
-        ESP_LOGW(TAG, "小聆激活请求失败");
-        return ESP_FAIL;
-    }
-
-    const int status = http->GetStatusCode();
-    if (status == 202) {
-        http->Close();
-        return ESP_ERR_TIMEOUT;
-    }
-    if (status != 200) {
-        const std::string body = http->ReadAll();
-        http->Close();
-        ESP_LOGW(TAG, "小聆激活请求返回 HTTP %d: %s", status,
-                 body.empty() ? "<empty>" : body.c_str());
-        return ESP_FAIL;
-    }
-    http->Close();
-    return ESP_OK;
-}
-
-}  // namespace
 
 Application::Application() {
     event_group_ = xEventGroupCreate();
@@ -278,10 +113,6 @@ Application::~Application() {
         esp_timer_delete(clock_timer_handle_);
     }
     vEventGroupDelete(event_group_);
-}
-
-bool Application::SetDeviceState(DeviceState state) {
-    return DeviceStatus::TransitionTo(state);
 }
 
 void Application::Initialize() {
@@ -783,26 +614,25 @@ void Application::HandleNetworkDisconnectedEvent() {
 }
 
 void Application::RunXiaolingActivation() {
-    XiaolingActivationInfo activation;
-    const std::string serial_number = SystemInfo::GetDeviceSerialNumber();
-    if (!FetchXiaolingActivationInfo(activation, serial_number)) {
+    XiaolingConnActivation activation;
+    if (!activation.Fetch()) {
         // 激活信息查询不会改写 Flash；请求失败时仍让小聆连接层按自身的
         // 鉴权和重连策略处理，不把它误当成 OTA 失败。
         ESP_LOGW(TAG, "未取得小聆激活信息，继续初始化小聆连接");
         return;
     }
 
-    if (!activation.code.empty()) {
-        ShowActivationCode(activation.code, activation.message, activation.qrcode);
+    if (!activation.code().empty()) {
+        ShowActivationCode(activation.code(), activation.message(), activation.qrcode());
     }
-    if (activation.challenge.empty()) {
+    if (!activation.IsRequired()) {
         return;
     }
 
     constexpr int kActivationAttempts = 10;
     for (int attempt = 0; attempt < kActivationAttempts; ++attempt) {
         ESP_LOGI(TAG, "等待设备绑定: %d/%d", attempt + 1, kActivationAttempts);
-        const esp_err_t result = SubmitXiaolingActivation(activation, serial_number);
+        const esp_err_t result = activation.Submit();
         if (result == ESP_OK) {
             ESP_LOGI(TAG, "设备绑定成功");
             Board::GetInstance().GetDisplay()->DismissActivation();
