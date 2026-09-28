@@ -10,9 +10,26 @@
 namespace {
 constexpr char kTag[] = "SystemReset";
 constexpr int kFactoryResetRestartDelayMs = 1000;
+
+void ResetNvsFlash() {
+    ESP_LOGI(kTag, "Resetting NVS flash");
+    esp_err_t err = nvs_flash_erase();
+    if (err != ESP_OK) {
+        ESP_LOGE(kTag, "Failed to erase NVS flash: %s", esp_err_to_name(err));
+        return;
+    }
+
+    err = nvs_flash_init();
+    if (err != ESP_OK) {
+        ESP_LOGE(kTag, "Failed to initialize NVS flash: %s", esp_err_to_name(err));
+    }
 }
 
-void SystemReset::Restart(int delay_ms) {
+}  // namespace
+
+namespace SystemReset {
+
+void Restart(int delay_ms) {
     if (delay_ms > 0) {
         ESP_LOGI(kTag, "Restarting in %d ms", delay_ms);
         vTaskDelay(pdMS_TO_TICKS(delay_ms));
@@ -22,7 +39,7 @@ void SystemReset::Restart(int delay_ms) {
     esp_restart();
 }
 
-void SystemReset::ResetToFactory() {
+void ResetToFactory() {
     ResetNvsFlash();
 
     ESP_LOGI(kTag, "Resetting to factory");
@@ -43,16 +60,4 @@ void SystemReset::ResetToFactory() {
     Restart(kFactoryResetRestartDelayMs);
 }
 
-void SystemReset::ResetNvsFlash() {
-    ESP_LOGI(kTag, "Resetting NVS flash");
-    esp_err_t err = nvs_flash_erase();
-    if (err != ESP_OK) {
-        ESP_LOGE(kTag, "Failed to erase NVS flash: %s", esp_err_to_name(err));
-        return;
-    }
-
-    err = nvs_flash_init();
-    if (err != ESP_OK) {
-        ESP_LOGE(kTag, "Failed to initialize NVS flash: %s", esp_err_to_name(err));
-    }
-}
+}  // namespace SystemReset
