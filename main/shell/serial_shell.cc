@@ -59,9 +59,6 @@ SerialShell& SerialShell::GetInstance() {
 }
 
 bool SerialShell::Initialize() {
-#if !CONFIG_ENABLE_SERIAL_SHELL
-    return true;
-#else
     if (initialized_) {
         return true;
     }
@@ -106,5 +103,4 @@ bool SerialShell::Initialize() {
     initialized_ = true;
     ESP_LOGI(TAG, "Serial shell started");
     return true;
-#endif
 }

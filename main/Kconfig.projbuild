@@ -27,23 +27,11 @@ if LSPLATFORM
         endchoice
         config LSPLATFORM_BUILTIN_PRODUCT_ID
             string
-            default "def3d247-a012-451b-8bde-e80f621e06d2" if \
-                BOARD_TYPE_M5STACK_CORE_S3 || \
-                BOARD_TYPE_M5STACK_CORE_TAB5 || \
-                BOARD_TYPE_M5STACK_ATOM_S3_ECHO_BASE || \
-                BOARD_TYPE_M5STACK_ATOM_S3R_ECHO_BASE || \
-                BOARD_TYPE_M5STACK_ATOM_S3R_CAM_M12_ECHO_BASE || \
-                BOARD_TYPE_M5STACK_ATOM_MATRIX_ECHO_BASE || \
-                BOARD_TYPE_M5STACK_ATOM_ECHOS3R
-            default "1932f91f-8e6f-4403-aada-956de35b3e5e" if \
-                BOARD_TYPE_ATK_DNESP32S3 || \
-                BOARD_TYPE_ATK_DNESP32S3_BOX || \
-                BOARD_TYPE_ATK_DNESP32S3_BOX0 || \
-                BOARD_TYPE_ATK_DNESP32S3_BOX2_WIFI || \
-                BOARD_TYPE_ATK_DNESP32S3_BOX2_4G || \
-                BOARD_TYPE_ATK_DNESP32S3M_WIFI || \
-                BOARD_TYPE_ATK_DNESP32S3M_4G
-            default "ef22350d-6863-4814-8ed8-47c5b0c514a6"
+            default "54c71d3e-e257-4284-835b-8645f357e91c"
+            depends on LSPLATFORM_PRODUCT_ID_BUILTIN
+        config LSPLATFORM_BUILTIN_SECRET_ID
+            string
+            default "7993f759-3678-49ea-a959-13756ba93456"
             depends on LSPLATFORM_PRODUCT_ID_BUILTIN
         config LSPLATFORM_CUSTOM_PRODUCT_ID
             string "自建应用 Product ID"
@@ -918,18 +906,6 @@ menu "TAIJIPAI_S3_CONFIG"
     default y
     help
         启动双声道
-endmenu
-
-menu "串口 Shell"
-    config ENABLE_SERIAL_SHELL
-        bool "Enable serial shell"
-        default y
-        help
-            Enable the runtime serial shell for reading and writing NVS settings.
-
-    if ENABLE_SERIAL_SHELL
-        comment "Shell transport follows the ESP-IDF console transport selection."
-    endif
 endmenu
 
 endmenu

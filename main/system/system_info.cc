@@ -77,7 +77,11 @@ std::string SystemInfo::GetSecretId() {
     if (!stored.empty()) {
         return stored;
     }
+#if defined(CONFIG_LSPLATFORM_PRODUCT_ID_BUILTIN)
+    return std::string(CONFIG_LSPLATFORM_BUILTIN_SECRET_ID);
+#elif defined(CONFIG_LSPLATFORM_PRODUCT_ID_CUSTOM)
     return std::string(CONFIG_LSCHAT_SECRET_ID);
+#endif
 }
 
 std::string SystemInfo::GetCloudDeviceId() {

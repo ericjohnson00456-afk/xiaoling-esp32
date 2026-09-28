@@ -254,6 +254,9 @@ esp_err_t Ota::CheckVersion() {
         http->SetHeader("X-DeviceID", device_id);
         http->SetHeader("X-CurTime", current_time);
         http->SetHeader("X-CheckSum", checksum);
+        ESP_LOGI(TAG,
+                 "Firmware OTA headers: X-ProductID=%s X-DeviceID=%s X-CurTime=%s X-CheckSum=%s",
+                 product_id.c_str(), device_id.c_str(), current_time.c_str(), checksum.c_str());
         method = "GET";
     } else {
         request = board.GetSystemInfoJson();
