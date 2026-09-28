@@ -107,10 +107,15 @@ public:
      */
     void StopListening();
 
-    // Thread-safe entry point for board button callbacks. The click business
-    // logic is implemented in application_button.cc and runs on the main task.
+    /*  ========== 按键业务 ========*/
+    // 按键业务的板级入口。两个方法均可从按键回调任务安全调用，
+    // 实际处理会投递到 Application 主任务，实现见 application_button.cc。
+    // 根据连击次数投递一次短击事件。
     void HandleButtonClick(uint8_t click_count);
+    // 投递一次长按事件。
     void HandleButtonLongPress();
+    // 清除 Wi-Fi 配置、重置小聆连接并进入配网状态；五击和串口 wifi 命令共用。
+    void ClearNetworkConfiguration();
 
     void Reboot();
     void WakeWordInvoke(const std::string& wake_word);
@@ -140,10 +145,6 @@ public:
      * This includes closing audio channel, resetting protocol and ota objects
      */
     void ResetXiaolingConn();
-
-    // Clear saved Wi-Fi credentials and enter the board's provisioning mode.
-    // This is also the behavior used by the five-click button shortcut.
-    void ClearNetworkConfiguration();
 
 private:
     Application();
@@ -181,6 +182,7 @@ private:
     uint32_t iat_end_subscription_id_ = 0;
     bool iat_utterance_active_ = false;
 
+    /*  ========== OTA业务 ======== */
     // OTA 流程独立于设备激活和小聆连接。application_ota.cc 只负责
     // 固件、资源检查与更新，并通过 MAIN_EVENT_OTA_COMPLETED 报告结果。
     struct OtaFlowState {
@@ -220,7 +222,6 @@ private:
 
     void PrepareAlarmPlayback();
     int clock_ticks_ = 0;
-    std::atomic_bool factory_reset_started_{false};
     // 由 NetworkEvent::Connected/Disconnected 驱动；唤醒时区分“网络未连”和“WS 未连”。
     std::atomic_bool network_connected_{false};
     bool keep_voice_processing_on_idle_ = false;
@@ -236,10 +237,6 @@ private:
     void HandleNetworkDisconnectedEvent();
     void HandleWakeWordDetectedEvent();
     void ProcessMainEvents(EventBits_t bits);
-    void ProcessButtonClick(uint8_t click_count);
-    void ProcessButtonLongPress();
-    void StartFactoryReset();
-    void FactoryResetTask();
     void InitializeXiaolingConn();
     // 唤醒入口的连接检查：WS 就绪返回 true；否则按网络状态播报 085/064 提示音。
     bool EnsureXiaolingReadyForWakeup();
@@ -252,6 +249,19 @@ private:
     void CancelWakeup();
     void PublishWifiIcon();
     void LogUplinkDiagnostics(const char* phase);
+
+    /*  ========== 按键业务 ======== */
+    // 按键业务实现。application_button.cc 负责短击、长按、重新配网和恢复出厂。
+    // 防止多次连击重复启动恢复出厂任务。
+    std::atomic_bool factory_reset_started_{false};
+    // 在 Application 主任务中执行短击次数对应的业务。
+    void ProcessButtonClick(uint8_t click_count);
+    // 在 Application 主任务中处理长按，用于停止闹钟或跳过 OTA。
+    void ProcessButtonLongPress();
+    // 去重后启动恢复出厂任务。
+    void StartFactoryReset();
+    // 播放提示音后执行恢复出厂和重启。
+    void FactoryResetTask();
 
     // State change handler called by state machine
     void OnStateChanged(DeviceState old_state, DeviceState new_state);

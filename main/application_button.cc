@@ -14,22 +14,29 @@
 
 namespace {
 constexpr char kTag[] = "ApplicationButton";
+// 设备尚未取得角色配置时，播放通用配网提示音。
 constexpr uint16_t kProvisioningToneId = 70;
+// 设备已取得角色配置时，播放设备配置二维码提示音。
 constexpr uint16_t kDeviceConfigToneId = 104;
 }
 
+// 板级按键回调可能运行在非应用主任务中，这里只投递短击事件，
+// 具体业务统一回到 Application 主任务串行执行。
 void Application::HandleButtonClick(uint8_t click_count) {
     Schedule([this, click_count]() {
         ProcessButtonClick(click_count);
     });
 }
 
+// 将板级长按回调切换到 Application 主任务，避免在按键回调中直接
+// 操作闹钟、播放器和 OTA 状态。
 void Application::HandleButtonLongPress() {
     Schedule([this]() {
         ProcessButtonLongPress();
     });
 }
 
+// 长按优先停止正在响铃的闹钟；如果正在等待固件升级确认，则跳过本次升级。
 void Application::ProcessButtonLongPress() {
     if (AlarmService::GetInstance().IsRinging()) {
         ESP_LOGI(kTag, "Long press: stop alarm");
@@ -39,7 +46,10 @@ void Application::ProcessButtonLongPress() {
     HandleOtaConfirmation(false);
 }
 
+// 在应用主任务中处理短击次数，优先响应闹钟和 OTA 确认，
+// 然后再执行各个击次对应的常规功能。
 void Application::ProcessButtonClick(uint8_t click_count) {
+    // 闹钟响铃时，任意短击只用于贪睡或停止闹钟，不再执行其他按键功能。
     if (AlarmService::GetInstance().IsRinging()) {
         ESP_LOGI(kTag, "Click: %s alarm", AlarmService::GetInstance().CanSnooze() ? "snooze" : "stop");
         if (AlarmService::GetInstance().CanSnooze()) {
@@ -49,12 +59,15 @@ void Application::ProcessButtonClick(uint8_t click_count) {
         }
         return;
     }
+    // 固件 OTA 等待用户选择时，单击表示确认升级。
     if (click_count == 1 && HandleOtaConfirmation(true)) {
         return;
     }
 
     switch (click_count) {
         case 1:
+            // 单击：非主页时先返回主页；启动期允许进入配网；
+            // 其余情况用于开始或结束语音交互。
             if (UiManager::GetInstance().lvgl_display() != nullptr &&
                 UiManager::GetInstance().TopScreenId() != UI_PAGE_HOME) {
                 UiApp::NavigateHome();
@@ -67,6 +80,7 @@ void Application::ProcessButtonClick(uint8_t click_count) {
             ToggleChatState();
             break;
         case 2:
+            // 双击：仅在启用设备端 AEC 的构建中，允许空闲状态切换 AEC。
 #if CONFIG_USE_DEVICE_AEC
             if (GetDeviceState() == kDeviceStateIdle) {
                 SetAecMode(GetAecMode() == kAecOff ? kAecOnDeviceSide : kAecOff);
@@ -74,6 +88,7 @@ void Application::ProcessButtonClick(uint8_t click_count) {
 #endif
             break;
         case 3: {
+            // 三击：打开角色配置二维码；尚无角色配置时展示通用配网入口。
             auto& qrcode_presenter = QrCodePresenter::GetInstance();
             const bool has_role_config_qrcode = qrcode_presenter.HasRoleConfigQrCode();
             qrcode_presenter.SelectRoleConfig();
@@ -82,12 +97,15 @@ void Application::ProcessButtonClick(uint8_t click_count) {
             break;
         }
         case 4:
+            // 四击：切换 UI 语言。
             UiApp::ToggleLanguage();
             break;
         case 5:
+            // 五击：清除已保存的 Wi-Fi，断开小聆并重新进入配网。
             ClearNetworkConfiguration();
             break;
         default:
+            // 八击及以上：恢复出厂设置。六击和七击当前不定义功能。
             if (click_count >= 8) {
                 StartFactoryReset();
             }
@@ -95,6 +113,7 @@ void Application::ProcessButtonClick(uint8_t click_count) {
     }
 }
 
+// 停止当前 Wi-Fi 连接、清除已保存的网络配置，然后进入配网状态。
 void Application::ClearNetworkConfiguration() {
     const auto state = GetDeviceState();
     if (state == kDeviceStateUpgrading || state == kDeviceStateFatalError) {
@@ -118,6 +137,7 @@ void Application::ClearNetworkConfiguration() {
     ResetXiaolingConn();
 }
 
+// 对恢复出厂请求做去重，并创建独立任务执行耗时的提示音和重置流程。
 void Application::StartFactoryReset() {
     if (factory_reset_started_.exchange(true)) {
         return;
@@ -131,6 +151,7 @@ void Application::StartFactoryReset() {
     }
 }
 
+// 停止当前播放，完整播放恢复出厂提示音，随后清除设备数据并重启。
 void Application::FactoryResetTask() {
     audio_player_.Stop(PlaybackEndReason::kCancelled);
     const auto session_id = audio_player_.PlayTone(103);
