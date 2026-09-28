@@ -41,7 +41,7 @@ void CustomWakeWord::ParseWakenetModelConfig() {
     auto& assets = Assets::GetInstance();
     void* ptr = nullptr;
     size_t size = 0;
-    if (!assets.GetAssetData("index.json", ptr, size)) {
+    if (!assets.RespakStore().GetAssetData("index.json", ptr, size)) {
         ESP_LOGE(TAG, "Failed to read index.json");
         return;
     }

@@ -478,13 +478,12 @@ void blufi_start(void)
     application.SetDeviceState(kDeviceStateWifiConfiguring);
 
     auto& assets = Assets::GetInstance();
-    assets.Apply();
 
     // Show the provisioning QR before WiFi/BLE initialization consumes the
     // remaining internal heap. The display keeps the image alive internally.
     void* qrcode_data = nullptr;
     size_t qrcode_size = 0;
-    if (assets.GetAssetData("/provisioning/xl_ble_prov.png", qrcode_data, qrcode_size) &&
+    if (assets.RespakStore().GetAssetData("/provisioning/xl_ble_prov.png", qrcode_data, qrcode_size) &&
         qrcode_data != nullptr && qrcode_size != 0) {
         auto qrcode = std::make_unique<LvglRawImage>(qrcode_data, qrcode_size);
         auto display = Board::GetInstance().GetDisplay();

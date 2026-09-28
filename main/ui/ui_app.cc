@@ -22,14 +22,6 @@
 #include <optional>
 #include <utility>
 
-#ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
-#include "resource/assets.h"
-#include "lvgl_theme.h"
-#include "ui/utils/emoji/emoji_repository.h"
-
-#include <memory>
-#endif
-
 namespace {
 
 constexpr char kTag[] = "UiApp";
@@ -113,24 +105,6 @@ bool ShouldIgnoreStandbyEmotion(const std::string& emotion) {
 
 namespace UiApp {
 
-bool ReloadEmojiResources() {
-#ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
-    auto* display = UiManager::GetInstance().display();
-    if (display == nullptr) {
-        return false;
-    }
-    DisplayLockGuard lock(display);
-    auto& themes = LvglThemeManager::GetInstance();
-    auto* dark = themes.GetTheme("dark");
-    if (dark == nullptr || dark->emoji_repository() == nullptr) {
-        return false;
-    }
-    return dark->emoji_repository()->LoadFromAssets(Assets::GetInstance().EmojiStore());
-#else
-    return true;
-#endif
-}
-
 void SetBannerIdleProvider(std::function<bool()> provider) {
     HomePresenter::GetInstance().SetBannerIdleProvider(std::move(provider));
 }
@@ -156,22 +130,6 @@ bool Initialize() {
         }
         ui.Initialize(display);
     }
-
-#ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
-    // Home 页面创建前先加载表情动画定义，避免页面打开后再解析 JSON。
-    auto emoji_repository = std::make_shared<EmojiRepository>();
-    if (emoji_repository->LoadFromAssets(Assets::GetInstance().EmojiStore())) {
-        auto& themes = LvglThemeManager::GetInstance();
-        if (auto* light = themes.GetTheme("light")) {
-            light->set_emoji_repository(emoji_repository);
-        }
-        if (auto* dark = themes.GetTheme("dark")) {
-            dark->set_emoji_repository(emoji_repository);
-        }
-    } else {
-        ESP_LOGW(kTag, "表情动画资源加载失败，Home 页面将使用无表情回退");
-    }
-#endif
 
     if (ui.RegisterScreen(&HomePresenter::Screen()) != 0 ||
         ui.RegisterScreen(&AlarmSuccessPresenter::Screen()) != 0 ||

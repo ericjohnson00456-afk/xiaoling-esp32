@@ -24,8 +24,9 @@ OledDisplay::OledDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handl
 
     auto& theme_manager = LvglThemeManager::GetInstance();
     theme_manager.RegisterTheme("dark", std::move(dark_theme));
+    // OLED 同样会在 Application 初始化前创建界面，必须先准备字体。
     if (!Assets::GetInstance().LoadFonts()) {
-        ESP_LOGE(TAG, "Required UI fonts are unavailable in respak; refusing built-in fallback");
+        ESP_LOGE(TAG, "respak 中缺少必要 UI 字体，且未启用内置回退字体");
         std::abort();
     }
     current_theme_ = theme_manager.GetTheme("dark");

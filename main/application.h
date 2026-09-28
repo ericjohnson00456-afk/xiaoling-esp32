@@ -27,7 +27,7 @@
 #define MAIN_EVENT_WAKE_WORD_DETECTED   (1 << 2)
 #define MAIN_EVENT_VAD_CHANGE           (1 << 3)
 #define MAIN_EVENT_ERROR                (1 << 4)
-#define MAIN_EVENT_ACTIVATION_DONE      (1 << 5)
+#define MAIN_EVENT_OTA_COMPLETED        (1 << 5)
 #define MAIN_EVENT_CLOCK_TICK           (1 << 6)
 #define MAIN_EVENT_NETWORK_CONNECTED    (1 << 7)
 #define MAIN_EVENT_NETWORK_DISCONNECTED (1 << 8)
@@ -35,10 +35,6 @@
 #define MAIN_EVENT_START_LISTENING      (1 << 10)
 #define MAIN_EVENT_STOP_LISTENING       (1 << 11)
 #define MAIN_EVENT_STATE_CHANGED        (1 << 12)
-#define MAIN_EVENT_OTA_CONFIRM_START    (1 << 13)
-#define MAIN_EVENT_OTA_CONFIRM_SKIP     (1 << 14)
-
-
 enum AecMode {
     kAecOff,
     kAecOnDeviceSide,
@@ -118,7 +114,6 @@ public:
 
     void Reboot();
     void WakeWordInvoke(const std::string& wake_word);
-    bool UpgradeFirmware(const std::string& url, const std::string& version = "");
     bool ResolveKuwoMusicUrl(const std::string& item_id, std::string& url);
     bool CanEnterSleepMode();
     void SendMcpMessage(const std::string& payload);
@@ -185,7 +180,35 @@ private:
     uint32_t iat_update_subscription_id_ = 0;
     uint32_t iat_end_subscription_id_ = 0;
     bool iat_utterance_active_ = false;
-    std::unique_ptr<Ota> ota_;
+
+    // OTA 流程独立于设备激活和小聆连接。application_ota.cc 只负责
+    // 固件、资源检查与更新，并通过 MAIN_EVENT_OTA_COMPLETED 报告结果。
+    struct OtaFlowState {
+        std::unique_ptr<Ota> client;
+        TaskHandle_t task_handle = nullptr;
+        bool resources_checked = false;
+        std::atomic_bool completed{false};
+        std::atomic_bool succeeded{false};
+        std::atomic_bool confirmation_pending{false};
+        std::atomic_int confirmation_decision{0};
+    } ota_flow_;
+
+    void StartOtaFlow();
+    void OtaTask();
+    void CompleteOtaFlow(bool succeeded);
+    bool HandleOtaConfirmation(bool confirm);
+    bool CheckAssetsVersion();
+    bool CheckNewVersion();
+    bool UpgradeFirmware(const std::string& url, const std::string& version = "");
+    void PlayOtaTone(uint16_t tone_id, uint8_t repeat_count = 1);
+
+    // 设备激活与小聆连接属于 Application 启动阶段，不是 OTA 的一部分。
+    bool WaitForOtaFlowCompletion();
+    void RunXiaolingActivation();
+    void ShowActivationCode(const std::string& code, const std::string& message,
+                            const std::string& qrcode = "");
+    void PlayActivationAudio(uint16_t id);
+
 #ifdef CONFIG_LSPLATFORM
     Watchdog uplink_watchdog_{5000, "uplink"};
     Watchdog downlink_watchdog_{15000, "downlink"};
@@ -196,11 +219,7 @@ private:
     bool aborted_ = false;
 
     void PrepareAlarmPlayback();
-    bool assets_version_checked_ = false;
-    std::atomic_bool ota_confirmation_pending_{false};
-    std::atomic_int ota_confirmation_decision_{0};
     int clock_ticks_ = 0;
-    TaskHandle_t activation_task_handle_ = nullptr;
     std::atomic_bool factory_reset_started_{false};
     // 由 NetworkEvent::Connected/Disconnected 驱动；唤醒时区分“网络未连”和“WS 未连”。
     std::atomic_bool network_connected_{false};
@@ -215,22 +234,15 @@ private:
     void HandleStopListeningEvent();
     void HandleNetworkConnectedEvent();
     void HandleNetworkDisconnectedEvent();
-    void HandleActivationDoneEvent();
     void HandleWakeWordDetectedEvent();
+    void ProcessMainEvents(EventBits_t bits);
     void ProcessButtonClick(uint8_t click_count);
     void ProcessButtonLongPress();
     void StartFactoryReset();
     void FactoryResetTask();
-    // Activation task (runs in background)
-    void ActivationTask();
-
-    // Helper methods
-    bool CheckAssetsVersion();
-    bool CheckNewVersion();
     void InitializeXiaolingConn();
     // 唤醒入口的连接检查：WS 就绪返回 true；否则按网络状态播报 085/064 提示音。
     bool EnsureXiaolingReadyForWakeup();
-    void ShowActivationCode(const std::string& code, const std::string& message, const std::string& qrcode = "");
     void SetListeningMode(ListeningMode mode);
     void PauseWakeWordDetection();
     bool EndListeningSessionForWakeup();
@@ -240,8 +252,6 @@ private:
     void CancelWakeup();
     void PublishWifiIcon();
     void LogUplinkDiagnostics(const char* phase);
-    void PlayOtaTone(uint16_t tone_id, uint8_t repeat_count = 1);
-    void PlayActivationAudio(uint16_t id);
 
     // State change handler called by state machine
     void OnStateChanged(DeviceState old_state, DeviceState new_state);

@@ -37,8 +37,6 @@ enum class TextKey : int32_t {
 };
 
 bool Initialize();
-// 资源分区更新后重新加载表情动画定义。
-bool ReloadEmojiResources();
 // 由 application 注入 Banner 是否允许轮换的设备状态。
 void SetBannerIdleProvider(std::function<bool()> provider);
 

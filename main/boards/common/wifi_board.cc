@@ -40,7 +40,7 @@ std::unique_ptr<LvglImage> WifiBoard::GetProvisioningQRCode(std::string& message
         : "/provisioning/xl_ble_prov.png";
     void* image_data = nullptr;
     size_t image_size = 0;
-    if (!Assets::GetInstance().GetAssetData(path, image_data, image_size) ||
+    if (!Assets::GetInstance().RespakStore().GetAssetData(path, image_data, image_size) ||
         image_data == nullptr || image_size == 0) {
         return nullptr;
     }

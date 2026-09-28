@@ -1246,6 +1246,10 @@ void AudioService::CheckAndUpdateAudioPowerState() {
 void AudioService::SetMicroWakeWordModel(const void* model_data, size_t model_size,
                                          const std::string& wake_word,
                                          const MicroWakeWordConfig& config) {
+    EnableWakeWordDetection(false);
+    wake_word_.reset();
+    wake_word_initialized_ = false;
+
     static srmodel_list_t models_list = {.num = 0};
     models_list_ = &models_list;
 
@@ -1260,10 +1264,12 @@ void AudioService::SetMicroWakeWordModel(const void* model_data, size_t model_si
             callbacks_.on_wake_word_detected(wake_word);
         }
     });
-    EnableWakeWordDetection(true);
 }
 #else // !CONFIG_USE_MICRO_WAKE_WORD
 void AudioService::SetModelsList(srmodel_list_t* models_list) {
+    EnableWakeWordDetection(false);
+    wake_word_.reset();
+    wake_word_initialized_ = false;
     models_list_ = models_list;
 
 #if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32P4
@@ -1289,7 +1295,6 @@ void AudioService::SetModelsList(srmodel_list_t* models_list) {
                 callbacks_.on_wake_word_detected(wake_word);
             }
         });
-        EnableWakeWordDetection(true);
     }
 }
 #endif // CONFIG_USE_MICRO_WAKE_WORD

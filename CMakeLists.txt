@@ -22,6 +22,18 @@ add_compile_options(-Wno-missing-field-initializers)
 
 message(STATUS "Using sdkconfig defaults for LSPlatform")
 set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.lsplatform")
+
+# Some ESP32-S3 boards use Quad PSRAM while the target-wide defaults use
+# Octal PSRAM. Load board-specific defaults before project() so a clean
+# configuration selects the hardware settings for the requested board.
+if(BOARD_TYPE)
+    set(BOARD_SDKCONFIG_DEFAULTS "main/boards/${BOARD_TYPE}/sdkconfig.defaults")
+    if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/${BOARD_SDKCONFIG_DEFAULTS}")
+        list(APPEND SDKCONFIG_DEFAULTS "${BOARD_SDKCONFIG_DEFAULTS}")
+        message(STATUS "Using board sdkconfig defaults: ${BOARD_SDKCONFIG_DEFAULTS}")
+    endif()
+endif()
+
 set(XIAOLING_VER "3.0.0")
 set(PROJECT_VER ${XIAOLING_VER})
 

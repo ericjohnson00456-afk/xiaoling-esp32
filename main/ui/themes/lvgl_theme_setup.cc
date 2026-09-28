@@ -48,8 +48,10 @@ void RegisterLcdThemes() {
 LvglTheme* InitializeAndGetLcdTheme() {
     RegisterLcdThemes();
 
+    // LCD 会在 Application::Initialize() 之前创建基础 UI，因此字体必须在
+    // 返回主题前完成加载，不能推迟到统一资源加载阶段。
     if (!Assets::GetInstance().LoadFonts()) {
-        ESP_LOGE(kTag, "Required UI fonts are unavailable in respak; refusing built-in fallback");
+        ESP_LOGE(kTag, "respak 中缺少必要 UI 字体，且未启用内置回退字体");
         std::abort();
     }
 

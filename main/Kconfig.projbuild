@@ -5,11 +5,6 @@ config LSPLATFORM
     default y
 
 if LSPLATFORM
-    config LSPLATFORM_BANNERS
-        bool
-        default y
-        depends on LSPLATFORM
-        depends on !USE_WECHAT_MESSAGE_STYLE
     menu "LSPlatform 选项"
         choice
             prompt "Product ID"

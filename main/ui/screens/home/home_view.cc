@@ -211,8 +211,8 @@ void HomeView::CreateUi() {
     lv_obj_set_size(alarm_image_, 20, 20);
     void* alarm_data = nullptr;
     size_t alarm_size = 0;
-    if (Assets::GetInstance().GetAssetData("/icon/alarm/ic_status_alarm.png",
-                                           alarm_data, alarm_size) &&
+    if (Assets::GetInstance().RespakStore().GetAssetData(
+            "/icon/alarm/ic_status_alarm.png", alarm_data, alarm_size) &&
         alarm_data != nullptr && alarm_size > 0) {
         alarm_icon_ = std::make_unique<LvglRawImage>(alarm_data, alarm_size);
         lv_image_set_src(alarm_image_, alarm_icon_->image_dsc());
@@ -594,8 +594,8 @@ void HomeView::SetAlarmActive(bool active) {
     if (alarm_icon_ == nullptr) {
         void* data = nullptr;
         size_t size = 0;
-        if (!Assets::GetInstance().GetAssetData("/icon/alarm/ic_status_alarm.png",
-                                                data, size) ||
+        if (!Assets::GetInstance().RespakStore().GetAssetData(
+                "/icon/alarm/ic_status_alarm.png", data, size) ||
             data == nullptr || size == 0) {
             lv_obj_add_flag(alarm_image_, LV_OBJ_FLAG_HIDDEN);
             return;
@@ -647,7 +647,8 @@ void HomeView::SetBattery(int level, bool charging) {
                                  std::to_string(icon_index) + ".png";
         void* data = nullptr;
         size_t size = 0;
-        if (!Assets::GetInstance().GetAssetData(path, data, size) || data == nullptr || size == 0) {
+        if (!Assets::GetInstance().RespakStore().GetAssetData(path, data, size) ||
+            data == nullptr || size == 0) {
             lv_obj_add_flag(battery_image_, LV_OBJ_FLAG_HIDDEN);
             battery_icon_.reset();
             battery_icon_index_ = -1;
@@ -757,7 +758,8 @@ void HomeView::SetDuplexMode(DuplexMode mode) {
         if (!icon) {
             void* data = nullptr;
             size_t size = 0;
-            if (!Assets::GetInstance().GetAssetData(path, data, size) || data == nullptr || size == 0) {
+            if (!Assets::GetInstance().RespakStore().GetAssetData(path, data, size) ||
+                data == nullptr || size == 0) {
                 lv_obj_add_flag(duplex_image_, LV_OBJ_FLAG_HIDDEN);
                 return;
             }

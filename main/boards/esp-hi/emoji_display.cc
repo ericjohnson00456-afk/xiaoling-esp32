@@ -82,7 +82,7 @@ void EmojiPlayer::StartPlayer(const std::string& asset_name, bool repeat, int fp
 
         auto& assets = Assets::GetInstance();
         std::string filename = emoji_asset_name_map.at(asset_name);
-        if (!assets.GetAssetData(filename, src_data, src_len)) {
+        if (!assets.RespakStore().GetAssetData(filename, src_data, src_len)) {
             ESP_LOGE(TAG, "Failed to get asset data for %s", asset_name.c_str());
             return;
         }

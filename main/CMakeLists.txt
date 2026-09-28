@@ -47,7 +47,10 @@ set(SOURCES "audio/audio_codec.cc"
             "system/system_reset.cc"
             "application.cc"
             "application_button.cc"
+            "application_ota.cc"
             "ota/ota.cc"
+            "ota/ota_firmware.cc"
+            "ota/ota_resource.cc"
             "system/time_sync.cc"
             "alarm/alarm_service.cc"
             "shell/settings.cc"
@@ -760,7 +763,7 @@ include(${PROJECT_DIR}/main/audio/wake_words/micro_wake_word/models/models.cmake
 
 idf_component_register(SRCS ${SOURCES}
                     INCLUDE_DIRS ${INCLUDE_DIRS}
-                    REQUIRES espressif__adc_battery_estimation esp_adc efuse console spi_flash app_update esp_app_format esp_psram 78__esp-opus
+                    REQUIRES espressif__adc_battery_estimation esp_adc efuse console spi_flash app_update esp_app_format esp_psram 78__esp-opus bt
                     WHOLE_ARCHIVE
                     )
 

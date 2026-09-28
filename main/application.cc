@@ -5,18 +5,17 @@
 #include "system/system_info.h"
 #include "audio_codec.h"
 #include "xiaoling/conn/xiaoling_conn.h"
+#include "xiaoling/conn/xiaoling_config.h"
 #include "ui/i18n/lang_config.h"
 #include "mcp_server.h"
 #include "resource/assets.h"
 #include "settings.h"
 #include "serial_shell.h"
-#include "system/time_sync.h"
 #include "ui/ui_app.h"
 #include "ui/ui_manager.h"
 #include "ui/ui_page_ids.h"
 #include "ui/screens/qrcode/qrcode_presenter.h"
 #include "xiaoling/xiaoling_events.h"
-#include "player/resource/tone_model.h"
 #include "player/resource/localized_audio.h"
 #include "player/intents/music_intent.h"
 #include "player/intents/voice_session_intent.h"
@@ -25,47 +24,220 @@
 
 #ifdef CONFIG_LSPLATFORM
 #include "image_fetcher.h"
-#endif // CONFIG_LSPLATFORM
+#endif  // 小聆平台
 
 #include <cstring>
 #include <algorithm>
-#include <array>
-#include <cstdio>
 #include <esp_log.h>
+#include <esp_app_desc.h>
+#include <esp_efuse.h>
+#include <esp_efuse_table.h>
 #include <esp_timer.h>
 #include <esp_system.h>
+#ifdef SOC_HMAC_SUPPORTED
+#include <esp_hmac.h>
+#endif
 #include <nvs_flash.h>
 #include <font_awesome.h>
 #include <cJSON.h>
 #include <driver/gpio.h>
 #include <arpa/inet.h>
 #include <font_awesome.h>
+#include <cstdio>
 
 #define TAG "Application"
-
-namespace {
-
-std::string FormatFirmwareSize(size_t size) {
-    char text[32] = {};
-    if (size >= 1024U * 1024U) {
-        std::snprintf(text, sizeof(text), "%.1f MB",
-                      static_cast<double>(size) / (1024.0 * 1024.0));
-    } else if (size >= 1024U) {
-        std::snprintf(text, sizeof(text), "%u KB",
-                      static_cast<unsigned>(size / 1024U));
-    } else {
-        std::snprintf(text, sizeof(text), "%u B", static_cast<unsigned>(size));
-    }
-    return text;
-}
-
-}  // namespace
-
 
 #ifdef CONFIG_LSPLATFORM
 static const int kBadNetworkSampleWindowSec = 60;
 static const int kBadNetworkSampleCount = 3;
 #endif
+
+static constexpr EventBits_t kAllMainEvents =
+    MAIN_EVENT_SCHEDULE |
+    MAIN_EVENT_WAKE_WORD_DETECTED |
+    MAIN_EVENT_VAD_CHANGE |
+    MAIN_EVENT_CLOCK_TICK |
+    MAIN_EVENT_ERROR |
+    MAIN_EVENT_OTA_COMPLETED |
+    MAIN_EVENT_NETWORK_CONNECTED |
+    MAIN_EVENT_NETWORK_DISCONNECTED |
+    MAIN_EVENT_TOGGLE_CHAT |
+    MAIN_EVENT_START_LISTENING |
+    MAIN_EVENT_STOP_LISTENING |
+    MAIN_EVENT_STATE_CHANGED;
+
+namespace {
+
+struct XiaolingActivationInfo {
+    std::string message;
+    std::string code;
+    std::string challenge;
+    std::string qrcode;
+};
+
+std::string ReadDeviceSerialNumber() {
+#ifdef ESP_EFUSE_BLOCK_USR_DATA
+    uint8_t serial_number[33] = {};
+    if (esp_efuse_read_field_blob(ESP_EFUSE_USER_DATA, serial_number, 32 * 8) == ESP_OK &&
+        serial_number[0] != 0) {
+        return std::string(reinterpret_cast<char*>(serial_number),
+                           strnlen(reinterpret_cast<char*>(serial_number), 32));
+    }
+#endif
+    return {};
+}
+
+std::unique_ptr<Http> CreateXiaolingActivationHttp(const std::string& serial_number) {
+    auto& board = Board::GetInstance();
+    auto network = board.GetNetwork();
+    if (network == nullptr) {
+        return nullptr;
+    }
+    auto http = network->CreateHttp(0);
+    if (http == nullptr) {
+        return nullptr;
+    }
+
+    http->SetHeader("Activation-Version", serial_number.empty() ? "1" : "2");
+    http->SetHeader("Device-Id", SystemInfo::GetMacAddress());
+    http->SetHeader("Client-Id", board.GetUuid());
+    if (!serial_number.empty()) {
+        http->SetHeader("Serial-Number", serial_number);
+    }
+    http->SetHeader("User-Agent", SystemInfo::GetUserAgent());
+    http->SetHeader("Accept-Language", Lang::CODE);
+    http->SetHeader("Content-Type", "application/json");
+    return http;
+}
+
+void ParseXiaolingActivationInfo(const cJSON* root, XiaolingActivationInfo& info) {
+    const cJSON* activation = cJSON_GetObjectItemCaseSensitive(root, "activation");
+    if (!cJSON_IsObject(activation)) {
+        activation = root;
+    }
+
+    const auto read_string = [activation](const char* key, std::string& target) {
+        const cJSON* value = cJSON_GetObjectItemCaseSensitive(activation, key);
+        if (cJSON_IsString(value) && value->valuestring != nullptr) {
+            target = value->valuestring;
+        }
+    };
+    read_string("message", info.message);
+    read_string("code", info.code);
+    read_string("challenge", info.challenge);
+    read_string("qrcode", info.qrcode);
+}
+
+bool FetchXiaolingActivationInfo(XiaolingActivationInfo& info,
+                                 const std::string& serial_number) {
+    const std::string url = std::string("https://") + XiaolingConfig::GetHost() +
+                            "/v1/xiaoling/" + SystemInfo::GetProductId() + "/ota/";
+    auto http = CreateXiaolingActivationHttp(serial_number);
+    if (http == nullptr) {
+        return false;
+    }
+
+    std::string request = Board::GetInstance().GetSystemInfoJson();
+    const char* method = request.empty() ? "GET" : "POST";
+    if (!request.empty()) {
+        http->SetContent(std::move(request));
+    }
+    ESP_LOGI(TAG, "小聆激活信息请求: method=%s url=%s", method, url.c_str());
+    if (!http->Open(method, url)) {
+        ESP_LOGW(TAG, "小聆激活信息请求失败");
+        return false;
+    }
+
+    const int status = http->GetStatusCode();
+    const std::string body = http->ReadAll();
+    http->Close();
+    if (status != 200) {
+        ESP_LOGW(TAG, "小聆激活信息请求返回 HTTP %d: %s", status,
+                 body.empty() ? "<empty>" : body.c_str());
+        return false;
+    }
+
+    cJSON* root = cJSON_Parse(body.c_str());
+    if (root == nullptr) {
+        ESP_LOGW(TAG, "小聆激活信息响应不是有效 JSON");
+        return false;
+    }
+    ParseXiaolingActivationInfo(root, info);
+    cJSON_Delete(root);
+    return true;
+}
+
+std::string BuildXiaolingActivationPayload(const XiaolingActivationInfo& info,
+                                           const std::string& serial_number) {
+    if (serial_number.empty()) {
+        return "{}";
+    }
+
+    std::string hmac_hex;
+#ifdef SOC_HMAC_SUPPORTED
+    uint8_t hmac_result[32] = {};
+    const esp_err_t result = esp_hmac_calculate(
+        HMAC_KEY0, reinterpret_cast<const uint8_t*>(info.challenge.data()),
+        info.challenge.size(), hmac_result);
+    if (result != ESP_OK) {
+        ESP_LOGE(TAG, "激活 HMAC 计算失败: %s", esp_err_to_name(result));
+        return "{}";
+    }
+    char byte_text[3] = {};
+    for (const uint8_t byte : hmac_result) {
+        std::snprintf(byte_text, sizeof(byte_text), "%02x", byte);
+        hmac_hex += byte_text;
+    }
+#endif
+
+    cJSON* payload = cJSON_CreateObject();
+    cJSON_AddStringToObject(payload, "algorithm", "hmac-sha256");
+    cJSON_AddStringToObject(payload, "serial_number", serial_number.c_str());
+    cJSON_AddStringToObject(payload, "challenge", info.challenge.c_str());
+    cJSON_AddStringToObject(payload, "hmac", hmac_hex.c_str());
+    char* json_text = cJSON_PrintUnformatted(payload);
+    const std::string json = json_text != nullptr ? json_text : "{}";
+    cJSON_free(json_text);
+    cJSON_Delete(payload);
+    return json;
+}
+
+esp_err_t SubmitXiaolingActivation(const XiaolingActivationInfo& info,
+                                   const std::string& serial_number) {
+    if (info.challenge.empty()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    const std::string url = std::string("https://") + XiaolingConfig::GetHost() +
+                            "/v1/xiaoling/" + SystemInfo::GetProductId() +
+                            "/ota/activate";
+    auto http = CreateXiaolingActivationHttp(serial_number);
+    if (http == nullptr) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    http->SetContent(BuildXiaolingActivationPayload(info, serial_number));
+    if (!http->Open("POST", url)) {
+        ESP_LOGW(TAG, "小聆激活请求失败");
+        return ESP_FAIL;
+    }
+
+    const int status = http->GetStatusCode();
+    if (status == 202) {
+        http->Close();
+        return ESP_ERR_TIMEOUT;
+    }
+    if (status != 200) {
+        const std::string body = http->ReadAll();
+        http->Close();
+        ESP_LOGW(TAG, "小聆激活请求返回 HTTP %d: %s", status,
+                 body.empty() ? "<empty>" : body.c_str());
+        return ESP_FAIL;
+    }
+    http->Close();
+    return ESP_OK;
+}
+
+}  // namespace
 
 Application::Application() {
     event_group_ = xEventGroupCreate();
@@ -134,15 +306,15 @@ void Application::Initialize() {
 
     SetDeviceState(kDeviceStateStarting);
 
-    // Load ROMFS fonts before constructing any UI pages. The display creates
-    // its themes during board initialization; this call also verifies that
-    // every text and icon font comes from the respak partition.
-    if (!Assets::GetInstance().LoadFonts()) {
-        ESP_LOGE(TAG, "Required ROMFS font resources are unavailable; no font fallback is enabled");
+    // 在创建 UI 页面前挂载并索引全部 ROMFS 资源。此处只安装唤醒词模型，
+    // 等音频服务初始化、启动并完成回调注册后再开启唤醒检测。
+    auto& initial_assets = Assets::GetInstance();
+    if (!initial_assets.Apply()) {
+        ESP_LOGE(TAG, "One or more required ROMFS resources are unavailable");
     }
 
-    // UIApp owns display binding and page initialization; Application only
-    // provides the scheduler used to marshal work onto the application task.
+    // UIApp 负责显示设备绑定和页面初始化；Application 只提供调度器，
+    // 将相关工作切换到应用主任务执行。
     auto& ui_manager = UiManager::GetInstance();
     ui_manager.SetTaskScheduler([this](std::function<void()>&& task) {
         Schedule(std::move(task));
@@ -150,33 +322,24 @@ void Application::Initialize() {
     ui_manager.SetUrgentTaskScheduler([this](std::function<void()>&& task) {
         ScheduleUrgent(std::move(task));
     });
-#if CONFIG_LSPLATFORM_BANNERS
     HomePresenter::GetInstance().SetWakeWordProvider([this]() {
         return audio_service_.GetWakeWordName();
     });
     UiApp::SetBannerIdleProvider([this]() {
         return GetDeviceState() == kDeviceStateIdle;
     });
-#endif // CONFIG_LSPLATFORM_BANNERS
     if (!UiApp::Initialize()) {
         ESP_LOGE(TAG, "Home 页面初始化失败");
     }
-    // Show the provisioning gear until the network and activation checks are
-    // complete. The protocol loading step switches to the AI icon before WS.
+    // 网络和激活检查完成前显示配网齿轮；加载协议时会在建立 WebSocket 前
+    // 切换为 AI 图标。
     UiApp::SetEmotion("gear");
     PublishWifiIcon();
     UiApp::SetDuplexMode(session_controller_.policy().mode);
-    auto& initial_assets = Assets::GetInstance();
-    LocalizedAudio::GetInstance().Initialize(initial_assets.RespakStore());
-#ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
-    // 语音播放初始化前建立 ROMFS tone 索引，播放器随后可按 tone_id 读取资源。
-    ToneModel::GetInstance().Initialize(initial_assets.ToneStore(), "/");
-#endif
-
-    // Print board name/version info
+    // 显示开发板名称和版本信息。
     UiApp::SetChatMessage("system", SystemInfo::GetUserAgent());
 
-    // Setup the audio service
+    // 初始化音频服务。
     auto codec = board.GetAudioCodec();
     audio_service_.Initialize(codec);
     audio_service_.EnableDeviceAec(aec_mode_ == kAecOnDeviceSide);
@@ -212,8 +375,8 @@ void Application::Initialize() {
                 background_tts_pending_.store(true);
                 XiaolingEventBus::GetInstance().Publish(XIAOLING_TTS_PLAYING);
                 session_controller_.StartTts(event.session_id);
-                // Unlike the URL event, kPlaying means the HTTP response has
-                // yielded decodable TTS audio.
+                // 与收到 URL 的事件不同，kPlaying 表示 HTTP 响应中已经产生
+                // 可以解码的 TTS 音频数据。
                 UiApp::SetStatus(UiApp::Status::Speaking);
                 UiApp::SetEmotion("说话");
                 if (!exit_requested_.load() && tts_output_started_.exchange(false) &&
@@ -242,17 +405,16 @@ void Application::Initialize() {
             session_controller_.EndTts(event.session_id);
             playback_intents_.Pop(PlaybackIntent::kTts);
             if (exit_requested_.load()) {
-                // Exit ends the conversation lifecycle, but the current TTS
-                // stream is allowed to drain. Only then restore wakeup.
+                // Exit 会结束本轮对话生命周期，但允许当前 TTS 流播放完毕，
+                // 随后才恢复唤醒检测。
                 ESP_LOGI(TAG, "退出请求：TTS 播放结束，恢复唤醒检测但保持待命");
                 if (GetDeviceState() != kDeviceStateIdle) {
                     SetDeviceState(kDeviceStateIdle);
                 } else {
-                    // The exit handler already moved the device to idle before
-                    // the delayed TTS stream started.  kPlaying updated the UI
-                    // directly without changing DeviceStatus, so transitioning
-                    // to idle again would be a no-op and leave the speaking
-                    // expression visible.  Restore the idle UI explicitly.
+                    // 延迟的 TTS 流开始前，退出处理已经把设备切换为空闲状态。
+                    // kPlaying 只直接更新了 UI，没有修改 DeviceStatus，因此再次
+                    // 切换为空闲状态不会触发任何操作，讲话表情会继续显示；这里
+                    // 需要显式恢复空闲界面。
                     UiApp::SetStatus(UiApp::Status::Standby);
                     UiApp::SetEmotion("待机");
                 }
@@ -267,9 +429,8 @@ void Application::Initialize() {
                 return;
             }
             if (background_music_session_) {
-                // A background-music session is always simplex.  The local
-                // TTS terminal event is the reliable playback barrier, so do
-                // not wait for a possibly late cloud finish frame here.
+                // 背景音乐交互始终使用单工模式。本地 TTS 结束事件才是可靠的
+                // 播放完成屏障，因此这里不等待可能延迟到达的云端 finish 帧。
                 background_session_finished_ = true;
                 FinishBackgroundMusicSession();
                 return;
@@ -292,12 +453,11 @@ void Application::Initialize() {
 
     AudioServiceCallbacks callbacks;
     callbacks.on_send_queue_available = [this]() {
-        // This callback runs after Opus encoding, outside AudioService's queue
-        // lock. XiaolingConn::SendAudio only moves the packet into its bounded
-        // queue and wakes the network worker; it never performs a socket write.
-        // Keeping this handoff off the low-priority application/UI task is
-        // essential during TTS, where UI/subtitle work can delay that task for
-        // seconds and previously filled the 2.4 s AudioService send queue.
+        // 此回调在 Opus 编码完成后执行，不持有 AudioService 队列锁。
+        // XiaolingConn::SendAudio 只会把数据包移入有界队列并唤醒网络任务，
+        // 不会直接写入套接字。该交接不能放到低优先级的应用/UI 任务中：
+        // TTS 期间 UI 和字幕工作可能让该任务延迟数秒，过去曾因此填满
+        // AudioService 的 2.4 秒发送队列。
         auto* connection = xiaoling_conn_.get();
         if (connection == nullptr) {
             return;
@@ -338,8 +498,9 @@ void Application::Initialize() {
             XIAOLING_TTS_OUTPUT_PROGRESS, std::to_string(audio_clock_ms));
     };
     audio_service_.SetCallbacks(callbacks);
+    audio_service_.EnableWakeWordDetection(true);
 
-    // Add state change listeners
+    // 注册设备状态变化监听器。
     DeviceStatus::AddStateChangeListener([this](DeviceState old_state, DeviceState new_state) {
         xEventGroupSetBits(event_group_, MAIN_EVENT_STATE_CHANGED);
     });
@@ -347,15 +508,15 @@ void Application::Initialize() {
     // 本地闹钟不依赖云端鉴权；NVS 就绪后立即恢复，校时完成后自动开始调度。
     AlarmService::GetInstance().Initialize();
 
-    // Start the clock timer to update the status bar
+    // 启动时钟定时器，用于更新状态栏。
     esp_timer_start_periodic(clock_timer_handle_, 1000000);
 
-    // Add MCP common tools (only once during initialization)
+    // 注册 MCP 通用工具，初始化期间只执行一次。
     auto& mcp_server = McpServer::GetInstance();
     mcp_server.AddCommonTools();
     board.RegisterMcpTools(mcp_server);
 
-    // Set network event callback for UI updates and network state handling
+    // 注册网络事件回调，用于更新 UI 和处理网络状态。
     board.SetNetworkEventCallback([this](NetworkEvent event, const std::string& data) {
         switch (event) {
             case NetworkEvent::Scanning:
@@ -365,10 +526,10 @@ void Application::Initialize() {
                 break;
             case NetworkEvent::Connecting: {
                 if (data.empty()) {
-                    // Cellular network - registering without carrier info yet
+                    // 蜂窝网络正在注册，暂时还没有运营商信息。
                     UiApp::SetStatus(UiApp::Status::RegisteringNetwork);
                 } else {
-                    // WiFi or cellular with carrier info
+                    // Wi-Fi，或已经取得运营商信息的蜂窝网络。
                     UiApp::ShowNotification(UiApp::Notification::ConnectingToNetwork, 30000, data);
                 }
                 break;
@@ -385,12 +546,12 @@ void Application::Initialize() {
                 xEventGroupSetBits(event_group_, MAIN_EVENT_NETWORK_DISCONNECTED);
                 break;
             case NetworkEvent::WifiConfigModeEnter:
-                // WiFi config mode enter is handled by WifiBoard internally
+                // 进入 Wi-Fi 配网模式由 WifiBoard 内部处理。
                 break;
             case NetworkEvent::WifiConfigModeExit:
-                // WiFi config mode exit is handled by WifiBoard internally
+                // 退出 Wi-Fi 配网模式由 WifiBoard 内部处理。
                 break;
-            // Cellular modem specific events
+            // 蜂窝网络模块专用事件。
             case NetworkEvent::ModemDetecting:
                 UiApp::SetStatus(UiApp::Status::DetectingModule);
                 break;
@@ -411,131 +572,148 @@ void Application::Initialize() {
         PublishWifiIcon();
     });
 
-    // Start network asynchronously
+    // 异步启动网络。
     board.StartNetwork();
 
-    // Update the status bar immediately to show the network state
+    // 立即更新状态栏以显示当前网络状态。
     UiApp::UpdateStatusBar(true);
 
-    // Serial debug shell (independent module, failure is non-fatal)
+    // 启动串口调试终端；该模块相互独立，启动失败不影响主流程。
     if (!SerialShell::GetInstance().Initialize()) {
         ESP_LOGW(TAG, "Serial shell initialization failed");
     }
-}
 
-void Application::Run() {
-    // app_main also owns the serialized UI dispatcher. Priority 1 allowed
-    // continuous wake inference and network callbacks to postpone IAT/subtitle
-    // rendering for more than a second. Keep it below every realtime audio
-    // stage but above background subtitle/network maintenance.
+    // 初始化阶段必须等 OTA 检查与更新结束后，才能读取激活信息并创建小聆连接。
+    // 等待期间仍复用应用事件分发器，保证升级确认按键、UI 调度和网络事件可用。
     constexpr UBaseType_t kApplicationUiPriority = 5;
     vTaskPrioritySet(nullptr, kApplicationUiPriority);
     ESP_LOGI(TAG, "应用/UI 调度优先级: %u",
              static_cast<unsigned>(kApplicationUiPriority));
-    const EventBits_t ALL_EVENTS =
-        MAIN_EVENT_SCHEDULE |
-        MAIN_EVENT_WAKE_WORD_DETECTED |
-        MAIN_EVENT_VAD_CHANGE |
-        MAIN_EVENT_CLOCK_TICK |
-        MAIN_EVENT_ERROR |
-        MAIN_EVENT_NETWORK_CONNECTED |
-        MAIN_EVENT_NETWORK_DISCONNECTED |
-        MAIN_EVENT_TOGGLE_CHAT |
-        MAIN_EVENT_START_LISTENING |
-        MAIN_EVENT_STOP_LISTENING |
-        MAIN_EVENT_ACTIVATION_DONE |
-        MAIN_EVENT_STATE_CHANGED;
+    if (!WaitForOtaFlowCompletion()) {
+        ESP_LOGE(TAG, "OTA 流程失败，停止设备激活和小聆连接");
+        SetDeviceState(kDeviceStateIdle);
+        Alert(Lang::Strings::ERROR, last_error_message_.c_str(), "circle_xmark", 94);
+        return;
+    }
+
+    RunXiaolingActivation();
+    InitializeXiaolingConn();
+
+    SystemInfo::PrintHeapStats();
+    SetDeviceState(kDeviceStateIdle);
+    const std::string version = esp_app_get_description()->version;
+    UiApp::ShowNotification(std::string(Lang::Strings::VERSION) + version);
+    UiApp::SetChatMessage("system", "");
+    PlayTone(59);
+
+    // 小聆会维持 WebSocket，并建立对时延敏感的 TTS HTTP 流。
+    Board::GetInstance().SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
+}
+
+void Application::Run() {
     while (true) {
-        auto bits = xEventGroupWaitBits(event_group_, ALL_EVENTS, pdTRUE, pdFALSE, portMAX_DELAY);
+        const EventBits_t bits = xEventGroupWaitBits(
+            event_group_, kAllMainEvents, pdTRUE, pdFALSE, portMAX_DELAY);
+        ProcessMainEvents(bits);
+    }
+}
 
-        if (bits & MAIN_EVENT_ERROR) {
-            SetDeviceState(kDeviceStateIdle);
-            Alert(Lang::Strings::ERROR, last_error_message_.c_str(), "circle_xmark", 94);
+bool Application::WaitForOtaFlowCompletion() {
+    ESP_LOGI(TAG, "等待 OTA 流程完成");
+    while (!ota_flow_.completed.load()) {
+        const EventBits_t bits = xEventGroupWaitBits(
+            event_group_, kAllMainEvents, pdTRUE, pdFALSE, portMAX_DELAY);
+        ProcessMainEvents(bits);
+    }
+    ESP_LOGI(TAG, "OTA 流程完成，结果: %s",
+             ota_flow_.succeeded.load() ? "成功" : "失败");
+    return ota_flow_.succeeded.load();
+}
+
+void Application::ProcessMainEvents(EventBits_t bits) {
+    if (bits & MAIN_EVENT_ERROR) {
+        SetDeviceState(kDeviceStateIdle);
+        Alert(Lang::Strings::ERROR, last_error_message_.c_str(), "circle_xmark", 94);
+    }
+
+    if (bits & MAIN_EVENT_NETWORK_CONNECTED) {
+        HandleNetworkConnectedEvent();
+    }
+
+    if (bits & MAIN_EVENT_NETWORK_DISCONNECTED) {
+        HandleNetworkDisconnectedEvent();
+    }
+
+    if (bits & MAIN_EVENT_STATE_CHANGED) {
+        HandleStateChangedEvent();
+    }
+
+    if (bits & MAIN_EVENT_TOGGLE_CHAT) {
+        HandleToggleChatEvent();
+    }
+
+    if (bits & MAIN_EVENT_START_LISTENING) {
+        HandleStartListeningEvent();
+    }
+
+    if (bits & MAIN_EVENT_STOP_LISTENING) {
+        HandleStopListeningEvent();
+    }
+
+    if (bits & MAIN_EVENT_SCHEDULE) {
+        std::unique_lock<std::mutex> lock(mutex_);
+        auto urgent_tasks = std::move(main_urgent_tasks_);
+        auto tasks = std::move(main_tasks_);
+        lock.unlock();
+        for (auto& task : urgent_tasks) {
+            task();
+        }
+        for (auto& task : tasks) {
+            task();
+        }
+    }
+
+    if (bits & MAIN_EVENT_WAKE_WORD_DETECTED) {
+        HandleWakeWordDetectedEvent();
+    }
+
+    if (bits & MAIN_EVENT_VAD_CHANGE) {
+        if (GetDeviceState() == kDeviceStateListening) {
+            auto led = Board::GetInstance().GetLed();
+            led->OnStateChanged();
+        }
+    }
+
+    if (bits & MAIN_EVENT_CLOCK_TICK) {
+        clock_ticks_++;
+        AlarmService::GetInstance().Tick();
+        PublishWifiIcon();
+        UiApp::UpdateStatusBar();
+
+        if (GetDeviceState() == kDeviceStateListening ||
+            GetDeviceState() == kDeviceStateSpeaking) {
+            LogUplinkDiagnostics("clock");
         }
 
-        if (bits & MAIN_EVENT_NETWORK_CONNECTED) {
-            HandleNetworkConnectedEvent();
-        }
-
-        if (bits & MAIN_EVENT_NETWORK_DISCONNECTED) {
-            HandleNetworkDisconnectedEvent();
-        }
-
-        if (bits & MAIN_EVENT_ACTIVATION_DONE) {
-            HandleActivationDoneEvent();
-        }
-
-        if (bits & MAIN_EVENT_STATE_CHANGED) {
-            HandleStateChangedEvent();
-        }
-
-        if (bits & MAIN_EVENT_TOGGLE_CHAT) {
-            HandleToggleChatEvent();
-        }
-
-        if (bits & MAIN_EVENT_START_LISTENING) {
-            HandleStartListeningEvent();
-        }
-
-        if (bits & MAIN_EVENT_STOP_LISTENING) {
-            HandleStopListeningEvent();
-        }
-
-        if (bits & MAIN_EVENT_SCHEDULE) {
-            std::unique_lock<std::mutex> lock(mutex_);
-            auto urgent_tasks = std::move(main_urgent_tasks_);
-            auto tasks = std::move(main_tasks_);
-            lock.unlock();
-            for (auto& task : urgent_tasks) {
-                task();
-            }
-            for (auto& task : tasks) {
-                task();
-            }
-        }
-
-        if (bits & MAIN_EVENT_WAKE_WORD_DETECTED) {
-            HandleWakeWordDetectedEvent();
-        }
-
-        if (bits & MAIN_EVENT_VAD_CHANGE) {
-            if (GetDeviceState() == kDeviceStateListening) {
-                auto led = Board::GetInstance().GetLed();
-                led->OnStateChanged();
-            }
-        }
-
-        if (bits & MAIN_EVENT_CLOCK_TICK) {
-            clock_ticks_++;
-            AlarmService::GetInstance().Tick();
-            PublishWifiIcon();
-            UiApp::UpdateStatusBar();
-
-            if (GetDeviceState() == kDeviceStateListening ||
-                GetDeviceState() == kDeviceStateSpeaking) {
-                LogUplinkDiagnostics("clock");
-            }
-
-            if (GetDeviceState() == kDeviceStateListening && listening_started_at_us_ > 0) {
-                const int32_t timeout_ms = KvUser::GetIdleExitTimeoutMs();
-                const int64_t elapsed_ms =
-                    (esp_timer_get_time() - listening_started_at_us_) / 1000;
-                if (timeout_ms > 0 && elapsed_ms >= timeout_ms) {
-                    ESP_LOGI(TAG, "录音超时(%ld ms)，退出录音回到待命状态",
-                             static_cast<long>(timeout_ms));
-                    if (xiaoling_conn_) {
-                        xiaoling_conn_->SendStopListening();
-                    }
-                    SetDeviceState(kDeviceStateIdle);
-                    listening_started_at_us_ = 0;
-                    PlayTone(72);
+        if (GetDeviceState() == kDeviceStateListening && listening_started_at_us_ > 0) {
+            const int32_t timeout_ms = KvUser::GetIdleExitTimeoutMs();
+            const int64_t elapsed_ms =
+                (esp_timer_get_time() - listening_started_at_us_) / 1000;
+            if (timeout_ms > 0 && elapsed_ms >= timeout_ms) {
+                ESP_LOGI(TAG, "录音超时(%ld ms)，退出录音回到待命状态",
+                         static_cast<long>(timeout_ms));
+                if (xiaoling_conn_) {
+                    xiaoling_conn_->SendStopListening();
                 }
+                SetDeviceState(kDeviceStateIdle);
+                listening_started_at_us_ = 0;
+                PlayTone(72);
             }
+        }
 
-            // Print debug info every 10 seconds
-            if (clock_ticks_ % 10 == 0) {
-                SystemInfo::PrintHeapStats();
-            }
+        // 每 10 秒输出一次调试信息。
+        if (clock_ticks_ % 10 == 0) {
+            SystemInfo::PrintHeapStats();
         }
     }
 }
@@ -596,345 +774,89 @@ void Application::HandleNetworkConnectedEvent() {
     auto state = GetDeviceState();
 
     if (state == kDeviceStateStarting || state == kDeviceStateWifiConfiguring) {
-        // Network is ready, start activation
-        SetDeviceState(kDeviceStateActivating);
-        if (activation_task_handle_ != nullptr) {
-            ESP_LOGW(TAG, "Activation task already running");
-            return;
-        }
-
-        xTaskCreate([](void* arg) {
-            Application* app = static_cast<Application*>(arg);
-            app->ActivationTask();
-            app->activation_task_handle_ = nullptr;
-            vTaskDelete(NULL);
-        // HTTPS OTA uses a deeper TLS/HTTP call stack than the normal
-        // activation checks, so leave headroom for the user-confirmed app
-        // upgrade that runs in this task.
-        }, "activation", 4096 * 3, this, 2, &activation_task_handle_);
+        StartOtaFlow();
     }
 
-    // Update the status bar immediately to show the network state
+    // 立即更新状态栏以显示当前网络状态。
     UiApp::UpdateStatusBar(true);
 }
 
 void Application::HandleNetworkDisconnectedEvent() {
     audio_player_.Stop(PlaybackEndReason::kCancelled);
 
-    // Update the status bar immediately to show the network state
+    // 立即更新状态栏以显示当前网络状态。
     UiApp::UpdateStatusBar(true);
 }
 
-void Application::HandleActivationDoneEvent() {
-    ESP_LOGI(TAG, "Activation done");
+void Application::RunXiaolingActivation() {
+    XiaolingActivationInfo activation;
+    const std::string serial_number = ReadDeviceSerialNumber();
+    if (!FetchXiaolingActivationInfo(activation, serial_number)) {
+        // 激活信息查询不会改写 Flash；请求失败时仍让小聆连接层按自身的
+        // 鉴权和重连策略处理，不把它误当成 OTA 失败。
+        ESP_LOGW(TAG, "未取得小聆激活信息，继续初始化小聆连接");
+        return;
+    }
 
-    SystemInfo::PrintHeapStats();
-    SetDeviceState(kDeviceStateIdle);
+    if (!activation.code.empty()) {
+        ShowActivationCode(activation.code, activation.message, activation.qrcode);
+    }
+    if (activation.challenge.empty()) {
+        return;
+    }
 
-    std::string message = std::string(Lang::Strings::VERSION) + ota_->GetCurrentVersion();
-    UiApp::ShowNotification(message);
-    UiApp::SetChatMessage("system", "");
+    constexpr int kActivationAttempts = 10;
+    for (int attempt = 0; attempt < kActivationAttempts; ++attempt) {
+        ESP_LOGI(TAG, "等待设备绑定: %d/%d", attempt + 1, kActivationAttempts);
+        const esp_err_t result = SubmitXiaolingActivation(activation, serial_number);
+        if (result == ESP_OK) {
+            ESP_LOGI(TAG, "设备绑定成功");
+            Board::GetInstance().GetDisplay()->DismissActivation();
+            return;
+        }
 
-    // Play the success sound to indicate the device is ready
-    PlayTone(59);
-
-    // Release OTA object after activation is complete
-    ota_.reset();
-    auto& board = Board::GetInstance();
-    // Xiaoling keeps a WebSocket alive and opens latency-sensitive TTS HTTP
-    // streams after activation. OnConnected() has already selected
-    // PERFORMANCE; do not immediately overwrite it with MAX_MODEM here.
-    // Deep Wi-Fi sleep made the downlink arrive in large, multi-second gaps.
-    board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
+        const int delay_ms = result == ESP_ERR_TIMEOUT ? 3000 : 10000;
+        vTaskDelay(pdMS_TO_TICKS(delay_ms));
+    }
+    ESP_LOGW(TAG, "启动阶段内设备绑定未完成");
 }
 
-void Application::ActivationTask() {
-    // 网络就绪后先校准系统时间，鉴权签名不再自行发起 SNTP。
-    if (!TimeSync::SyncSystemTime()) {
-        ESP_LOGE(TAG, "系统校时失败，停止本次启动链路");
-        last_error_message_ = Lang::Strings::SERVER_NOT_CONNECTED;
-        xEventGroupSetBits(event_group_, MAIN_EVENT_ERROR);
-        return;
-    }
+void Application::ShowActivationCode(const std::string& code,
+                                     const std::string& message,
+                                     const std::string& qrcode) {
+    const std::string activation_title = message.empty()
+                                             ? Lang::Strings::ACTIVATION
+                                             : message;
+    const std::string activation_text = code.empty()
+                                            ? activation_title
+                                            : activation_title + "\n" +
+                                                  Lang::Strings::ACTIVATION_CODE + code;
 
-    auto& board = Board::GetInstance();
-    ota_ = std::make_unique<Ota>();
-    int battery_level = 0;
-    bool charging = false;
-    bool discharging = false;
-    if (board.GetBatteryLevel(battery_level, charging, discharging) &&
-        discharging && battery_level < 10) {
-        ESP_LOGW(TAG, "Skip OTA on battery at %d%%", battery_level);
-        PlayOtaTone(93);
-        InitializeXiaolingConn();
-        xEventGroupSetBits(event_group_, MAIN_EVENT_ACTIVATION_DONE);
-        return;
-    }
-
-    // 只有 SNTP 完成后才请求 OTA；WebSocket 必须等 APP 和资源检查结束后再建立。
-    if (!CheckNewVersion()) {
-        ESP_LOGE(TAG, "OTA 启动检查失败，停止连接小聆");
-        last_error_message_ = Lang::Strings::SERVER_NOT_CONNECTED;
-        xEventGroupSetBits(event_group_, MAIN_EVENT_ERROR);
-        return;
-    }
-
-    // Wi-Fi provisioning and device binding are two separate steps. The
-    // activation data is returned by the OTA endpoint after AP/BluFi
-    // provisioning, so keep the QR/code visible until the server confirms it.
-    if (ota_->HasActivationCode() || ota_->HasActivationChallenge()) {
-        if (ota_->HasActivationCode()) {
-#ifdef CONFIG_LSPLATFORM
-            ShowActivationCode(ota_->GetActivationCode(), ota_->GetActivationMessage(),
-                               ota_->GetActivationQRCode());
-#else
-            ShowActivationCode(ota_->GetActivationCode(), ota_->GetActivationMessage());
-#endif
-        }
-
-        if (ota_->HasActivationChallenge()) {
-            constexpr int kActivationAttempts = 10;
-            bool activated = false;
-            for (int attempt = 0; attempt < kActivationAttempts; ++attempt) {
-                if (GetDeviceState() != kDeviceStateActivating) {
-                    break;
-                }
-
-                ESP_LOGI(TAG, "Waiting for device binding: %d/%d",
-                         attempt + 1, kActivationAttempts);
-                const esp_err_t result = ota_->Activate();
-                if (result == ESP_OK) {
-                    activated = true;
-                    break;
-                }
-
-                // HTTP 202 means the user has not completed binding yet.
-                // Retry at a short interval while leaving the QR code visible.
-                const int delay_ms = result == ESP_ERR_TIMEOUT ? 3000 : 10000;
-                vTaskDelay(pdMS_TO_TICKS(delay_ms));
-            }
-
-            if (activated) {
-                ESP_LOGI(TAG, "Device binding successful");
-                Board::GetInstance().GetDisplay()->DismissActivation();
-            } else {
-                ESP_LOGW(TAG, "Device binding did not complete during startup");
-            }
-        }
-    }
-
-    const esp_err_t resource_check = ota_->CheckResources();
-    if (resource_check != ESP_OK && resource_check != ESP_ERR_NOT_FOUND) {
-        ESP_LOGE(TAG, "Resource OTA metadata check failed; postpone Xiaoling WebSocket connection");
-        last_error_message_ = Lang::Strings::SERVER_NOT_CONNECTED;
-        xEventGroupSetBits(event_group_, MAIN_EVENT_ERROR);
-        return;
-    }
-    if (!CheckAssetsVersion()) {
-        ESP_LOGE(TAG, "Resource OTA failed, postpone Xiaoling WebSocket connection");
-        last_error_message_ = Lang::Strings::DOWNLOAD_ASSETS_FAILED;
-        xEventGroupSetBits(event_group_, MAIN_EVENT_ERROR);
-        return;
-    }
-
-    InitializeXiaolingConn();
-
-    // 通知主循环启动流程已完成。
-    xEventGroupSetBits(event_group_, MAIN_EVENT_ACTIVATION_DONE);
-}
-
-bool Application::CheckAssetsVersion() {
-    if (assets_version_checked_) {
-        return true;
-    }
-    assets_version_checked_ = true;
-
-    auto& board = Board::GetInstance();
-    auto& assets = Assets::GetInstance();
-    if (!assets.partition_valid()) {
-        ESP_LOGW(TAG, "Resource partitions are unavailable for board %s", BOARD_NAME);
-        return true;
-    }
-
-    Settings settings("assets", true);
-    struct PendingResource {
-        Assets::Resource resource;
-        const char* key;
-        const char* alias_key;
-        const char* label;
-        const char* updating_text;
-        const Ota::ResourceInfo* remote;
-    };
-    const PendingResource pending[] = {
-        {Assets::Resource::Respak, "respak_url", "download_url", "respak",
-         Lang::Strings::UPDATING_RESPAK_RESOURCE, nullptr},
-        {Assets::Resource::Tone, "tone_url", nullptr, "tone",
-         Lang::Strings::UPDATING_TONE_RESOURCE, &ota_->GetToneResource()},
-        {Assets::Resource::Emoji, "emoji_url", nullptr, "emoji",
-         Lang::Strings::UPDATING_EMOJI_RESOURCE, &ota_->GetEmojiResource()},
-        {Assets::Resource::WakeWord, "wake_word_url", "wakeword_url", "wake_word",
-         Lang::Strings::UPDATING_WAKE_WORD_RESOURCE, &ota_->GetWakeWordResource()},
-    };
-
-    bool downloaded = false;
-    bool failed = false;
-    bool resource_tone_played = false;
-    bool tone_downloaded = false;
-    for (const auto& item : pending) {
-        // 临时关闭唤醒词资源 OTA。KvOta::GetValue() 对未设置的唤醒词 KV
-        // 返回禁用值；设置 user.disable_wakeword_update=0 可重新开启。
-        if ((item.resource == Assets::Resource::WakeWord &&
-             KvOta::IsDisabled(KvOta::UpdateType::WakeWord)) ||
-            (item.resource == Assets::Resource::Tone &&
-             KvOta::IsDisabled(KvOta::UpdateType::Tone)) ||
-            (item.resource == Assets::Resource::Emoji &&
-             KvOta::IsDisabled(KvOta::UpdateType::Emoji))) {
-            ESP_LOGI(TAG, "Skipping %s OTA: disabled by user KV", item.label);
-            continue;
-        }
-        std::string url = settings.GetString(item.key);
-        if (url.empty() && item.alias_key != nullptr) {
-            url = settings.GetString(item.alias_key);
-        }
-        size_t expected_size = 0;
-        std::array<uint8_t, 16> expected_md5{};
-        if (item.remote != nullptr && item.remote->available) {
-            url = item.remote->url;
-            expected_size = item.remote->size;
-            expected_md5 = item.remote->md5;
-            if (assets.VerifyResource(item.resource, expected_size, expected_md5)) {
-                continue;
-            }
-        }
-        if (url.empty()) {
-            continue;
-        }
-        settings.EraseKey(item.key);
-        if (item.alias_key != nullptr) settings.EraseKey(item.alias_key);
-
-        ESP_LOGI(TAG, "Downloading %s resource from %s", item.label, url.c_str());
-        SetDeviceState(kDeviceStateUpgrading);
-        if (!resource_tone_played) {
-            PlayOtaTone(89);
-            resource_tone_played = true;
-        }
-        UiApp::ShowUpgradeProgress(item.updating_text, 0);
-        board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
-        const bool success = assets.DownloadResource(item.resource, url, expected_size, expected_md5,
-            [label = std::string(item.updating_text)](int progress, size_t speed) {
-                UiApp::ShowUpgradeProgress(label, progress, speed);
-            });
-        board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
-        if (!success) {
-            ESP_LOGE(TAG, "Failed to update %s resource", item.label);
-            failed = true;
-            continue;
-        }
-        downloaded = true;
-        if (item.resource == Assets::Resource::Tone) {
-            tone_downloaded = true;
-        }
-    }
-
-    if (failed && !downloaded) {
-        PlayOtaTone(92);
-        UiApp::ShowUpgradeResult(Lang::Strings::RESOURCE_UPDATE_FAILED);
-        vTaskDelay(pdMS_TO_TICKS(3000));
-        UiApp::NavigateHome();
-        Alert(Lang::Strings::ERROR, Lang::Strings::DOWNLOAD_ASSETS_FAILED,
-              "circle_xmark", "");
-        SetDeviceState(kDeviceStateActivating);
-        return false;
-    }
-    if (downloaded) {
-#ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
-        if (tone_downloaded &&
-            !ToneModel::GetInstance().Initialize(assets.ToneStore(), "/")) {
-            ESP_LOGW(TAG, "Failed to reload tone model after tone update");
-        }
-#endif
-        // Tone/emoji/wake-word models may still be referenced by running tasks;
-        // reboot after the transaction so every consumer remaps a new image.
-        if (failed) {
-            PlayOtaTone(92);
-            UiApp::ShowUpgradeResult(Lang::Strings::RESOURCE_UPDATE_FAILED);
+    ESP_LOGI(TAG, "显示激活码: %s, 二维码 URL: %s",
+             code.c_str(), qrcode.c_str());
+    if (!qrcode.empty()) {
+        auto* fetcher = Board::GetInstance().GetImageFetcher();
+        auto image = fetcher != nullptr ? fetcher->Fetch(qrcode) : nullptr;
+        if (image) {
+            QrCodePresenter::GetInstance().SetCustomQrCode(
+                std::move(image), activation_text);
+            UiManager::GetInstance().NavigateTo(UI_PAGE_QRCODE);
         } else {
-            PlayOtaTone(90);
-            UiApp::ShowUpgradeResult(Lang::Strings::RESOURCE_UPDATE_SUCCESSFUL);
+            ESP_LOGE(TAG, "激活二维码图片下载失败");
         }
-        vTaskDelay(pdMS_TO_TICKS(3000));
-        Reboot();
-        return true;
+    } else {
+        ESP_LOGW(TAG, "激活二维码 URL 为空");
     }
 
-    assets.Apply();
-    LocalizedAudio::GetInstance().Initialize(assets.RespakStore());
-#ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
-    ToneModel::GetInstance().Initialize(assets.ToneStore(), "/");
-    UiApp::ReloadEmojiResources();
-#endif
-    UiApp::SetChatMessage("system", "");
-    UiApp::SetEmotion("microchip_ai");
-    return true;
+    PlayActivationAudio(LocalizedAudio::kActivationGuideId);
+    for (const char digit : code) {
+        if (digit >= '0' && digit <= '9') {
+            PlayActivationAudio(static_cast<uint16_t>(
+                LocalizedAudio::kActivationDigitFirstId + digit - '0'));
+        }
+    }
 }
 
-bool Application::CheckNewVersion() {
-    UiApp::SetStatus(UiApp::Status::CheckingNewVersion);
-    if (ota_ == nullptr || ota_->CheckVersion() != ESP_OK) {
-        return false;
-    }
-    Settings ota_settings("ota", true);
-    const bool app_update_succeeded = ota_settings.GetBool("app_update_pending_success", false);
-    if (app_update_succeeded) {
-        ota_settings.EraseKey("app_update_pending_success");
-        PlayOtaTone(88);
-    }
-    if (!KvOta::IsDisabled(KvOta::UpdateType::App) && ota_->HasNewVersion()) {
-        ESP_LOGI(TAG, "APP OTA available: %s, waiting for user confirmation", ota_->GetFirmwareVersion().c_str());
-
-        const std::string description = ota_->GetFirmwareDescription().empty()
-            ? Lang::Strings::OTA_DEFAULT_NOTES
-            : ota_->GetFirmwareDescription();
-        char confirmation[768] = {};
-        if (ota_->GetFirmwareSize() != 0) {
-            std::snprintf(confirmation, sizeof(confirmation), Lang::Strings::OTA_CONFIRM_WITH_SIZE,
-                          ota_->GetFirmwareVersion().c_str(),
-                          FormatFirmwareSize(ota_->GetFirmwareSize()).c_str(),
-                          description.c_str());
-        } else {
-            std::snprintf(confirmation, sizeof(confirmation), Lang::Strings::OTA_CONFIRM,
-                          ota_->GetFirmwareVersion().c_str(), description.c_str());
-        }
-        UiApp::SetStatusText(Lang::Strings::OTA_UPGRADE);
-        UiApp::SetEmotion("download");
-        UiApp::SetChatMessage("system", confirmation);
-
-        ota_confirmation_decision_.store(0);
-        ota_confirmation_pending_.store(true);
-        PlayOtaTone(86, 3);
-        const EventBits_t decision_bits = xEventGroupWaitBits(
-            event_group_, MAIN_EVENT_OTA_CONFIRM_START | MAIN_EVENT_OTA_CONFIRM_SKIP,
-            pdTRUE, pdFALSE, portMAX_DELAY);
-        ota_confirmation_pending_.store(false);
-        ota_confirmation_decision_.store(0);
-
-        if ((decision_bits & MAIN_EVENT_OTA_CONFIRM_START) != 0) {
-            ESP_LOGI(TAG, "User confirmed APP OTA: %s", ota_->GetFirmwareVersion().c_str());
-            if (UpgradeFirmware(ota_->GetFirmwareUrl(), ota_->GetFirmwareVersion())) {
-                return false;
-            }
-            ESP_LOGW(TAG, "APP OTA failed; continuing with the current firmware");
-        } else {
-            ESP_LOGI(TAG, "User skipped APP OTA");
-            UiApp::SetChatMessage("system", "");
-        }
-    }
-    if (KvOta::IsDisabled(KvOta::UpdateType::App) && ota_->HasNewVersion()) {
-        ESP_LOGI(TAG, "Skipping APP OTA: disabled by user KV");
-    }
-    ota_->MarkCurrentVersionValid();
-    return true;
-}
 void Application::InitializeXiaolingConn() {
     auto& board = Board::GetInstance();
     auto codec = board.GetAudioCodec();
@@ -954,7 +876,7 @@ void Application::InitializeXiaolingConn() {
             ESP_LOGI(TAG, "Narrowband mode enabled");
         }
     }
-#endif // CONFIG_LSPLATFORM
+#endif  // 小聆平台
 
     xiaoling_conn_->OnConnected([this, codec, &board]() {
         DismissAlert();
@@ -986,7 +908,7 @@ void Application::InitializeXiaolingConn() {
     xiaoling_conn_->OnIncomingAudio([this](std::unique_ptr<AudioStreamPacket> packet) {
 #ifdef CONFIG_LSPLATFORM
         downlink_watchdog_.Feed(packet->frame_duration);
-#endif // CONFIG_LSPLATFORM
+#endif  // 小聆平台
         if (GetDeviceState() == kDeviceStateSpeaking) {
             audio_service_.PushPacketToDecodeQueue(std::move(packet));
         }
@@ -996,7 +918,7 @@ void Application::InitializeXiaolingConn() {
     xiaoling_conn_->OnAudioSent([this](uint32_t duration_ms) {
         uplink_watchdog_.Feed(duration_ms);
     });
-#endif // CONFIG_LSPLATFORM
+#endif  // 小聆平台
 
     xiaoling_conn_->OnDisconnected([this, &board]() {
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
@@ -1044,12 +966,9 @@ void Application::InitializeXiaolingConn() {
             }
 
             if (strcmp(sub->valuestring, "setting") == 0) {
-#if CONFIG_LSPLATFORM_BANNERS
                 HomePresenter::GetInstance().HandleSettingMessage(data);
-#endif
-                // Banner UI updates are queued first. The QR-code presenter
-                // queues its download start afterwards so network/image work
-                // cannot delay the first banner frame.
+                // 先将横幅 UI 更新放入队列，再由二维码 Presenter 排队启动下载，
+                // 避免网络和图片处理延迟首条横幅的显示。
                 QrCodePresenter::GetInstance().HandleSettingMessage(data);
             }
             return;
@@ -1060,9 +979,8 @@ void Application::InitializeXiaolingConn() {
             const bool natural_finish = strcmp(action->valuestring, "finish") == 0;
             Schedule([this, natural_finish]() {
                 if (background_music_session_) {
-                    // The cloud finish is the end-of-response barrier. If a
-                    // streamed TTS URL is still draining, the playback event
-                    // will call FinishBackgroundMusicSession() afterwards.
+                    // 云端 finish 是响应结束屏障。如果流式 TTS URL 仍在排空，
+                    // 播放结束事件会随后调用 FinishBackgroundMusicSession()。
                     background_session_finished_ = true;
                     if (!background_tts_pending_.load() &&
                         active_tts_session_id_ == 0 &&
@@ -1112,41 +1030,6 @@ bool Application::EnsureXiaolingReadyForWakeup() {
         PlayTone(64);
     }
     return false;
-}
-
-void Application::ShowActivationCode(const std::string& code, const std::string& message, const std::string& qrcode) {
-    const std::string activation_title = message.empty() ? Lang::Strings::ACTIVATION : message;
-    const std::string activation_text = code.empty()
-        ? activation_title
-        : activation_title + "\n" + Lang::Strings::ACTIVATION_CODE + code;
-
-#ifdef CONFIG_LSPLATFORM
-    ESP_LOGI(TAG, "Showing activation code: %s, QR url: %s", code.c_str(), qrcode.c_str());
-    if (!qrcode.empty()) {
-        auto& board = Board::GetInstance();
-        auto fetcher = board.GetImageFetcher();
-        auto image = fetcher->Fetch(qrcode);
-        if (!image) {
-            ESP_LOGE(TAG, "Failed to fetch QR code image");
-            return;
-        }
-        QrCodePresenter::GetInstance().SetCustomQrCode(std::move(image), activation_text);
-        UiManager::GetInstance().NavigateTo(UI_PAGE_QRCODE);
-    } else {
-        ESP_LOGW(TAG, "QR code URL is empty, skipping image download");
-    }
-
-#else // !CONFIG_LSPLATFORM
-    // This sentence uses 9KB of SRAM, so we need to wait for it to finish
-    Alert(Lang::Strings::ACTIVATION, activation_text.c_str(), "link", "");
-#endif // CONFIG_LSPLATFORM
-    PlayActivationAudio(LocalizedAudio::kActivationGuideId);
-    for (const auto& digit : code) {
-        if (digit >= '0' && digit <= '9') {
-            PlayActivationAudio(static_cast<uint16_t>(
-                LocalizedAudio::kActivationDigitFirstId + digit - '0'));
-        }
-    }
 }
 
 void Application::Alert(const char* status, const char* message, const char* emotion, const std::string_view& sound) {
@@ -1225,9 +1108,8 @@ void Application::HandleToggleChatEvent() {
             BeginWakeup(listening_mode_);
         }
     } else if (state == kDeviceStateListening) {
-        // A button press cancels the interaction instead of finalizing the
-        // utterance. Stop capture first for immediate local feedback, then
-        // cancel the cloud session so it does not return a final IAT/TTS.
+        // 按键操作表示取消交互，而不是提交本次语音。先停止采集以立即给出
+        // 本地反馈，再取消云端会话，防止其返回最终 IAT/TTS。
         ESP_LOGI(TAG, "按键取消聆听：立即停止本地录音并取消云端会话");
         iat_utterance_active_ = false;
         audio_service_.EnableVoiceProcessing(false);
@@ -1361,8 +1243,8 @@ void Application::AbortSpeaking(AbortReason reason) {
     ESP_LOGI(TAG, "Abort speaking");
     if (reason == kAbortReasonExit) {
         exit_requested_.store(true);
-        // The exit MCP tool ends the current uplink conversation only. TTS
-        // may already be downloading or playing, so leave the player alone.
+        // exit MCP 工具只结束当前上行对话。TTS 可能已经开始下载或播放，
+        // 因此这里不操作播放器。
         iat_utterance_active_ = false;
         audio_service_.EnableVoiceProcessing(false);
         session_controller_.EndSession();
@@ -1383,9 +1265,8 @@ void Application::AbortSpeaking(AbortReason reason) {
     }
     aborted_ = true;
 
-    // In half-duplex mode the exit tool can arrive while the microphone
-    // session is still listening.  A speaking cancel only stops playback and
-    // does not close that cloud session, so explicitly send the session end.
+    // 半双工模式下，exit 工具到达时麦克风会话可能仍在监听。取消讲话只会
+    // 停止播放，不会关闭云端会话，因此这里需要显式发送会话结束消息。
     if (GetDeviceState() == kDeviceStateListening) {
         iat_utterance_active_ = false;
         audio_service_.EnableVoiceProcessing(false);
@@ -1459,9 +1340,8 @@ void Application::BeginWakeup(ListeningMode mode) {
     if (GetDeviceState() != kDeviceStateConnecting) {
         return;
     }
-    // Do not serialize capture behind the prompt tone.  The player keeps the
-    // wakeup tone protected from TTS admission while the listening state opens
-    // the cloud session and starts the microphone pipeline in parallel.
+    // 不要让采集串行等待提示音播放完成。播放器会在进入监听状态、打开云端
+    // 会话并并行启动麦克风链路时，保护唤醒提示音不被 TTS 抢占。
     ESP_LOGI(TAG, "Wakeup tone started; start audio upload in parallel");
     SetListeningMode(effective_mode);
     audio_player_.SetTtsUrlCallback([this]() {
@@ -1471,17 +1351,16 @@ void Application::BeginWakeup(ListeningMode mode) {
             background_tts_pending_.store(true);
         }
         if (exit_requested_.load()) {
-            // The MCP exit can race the URL notification. Keep the detector
-            // disabled even when the URL arrives after the exit request.
+            // MCP exit 可能与 URL 通知发生竞态；即使 URL 在退出请求之后到达，
+            // 也要保持唤醒检测关闭。
             audio_service_.EnableWakeWordDetection(false);
         }
         Schedule([this]() {
             if (background_music_session_) {
                 playback_intents_.Push(PlaybackIntent::kTts);
             }
-            // URL arrival precedes the first decoded PCM by several seconds
-            // for streamed TTS. Show a waiting emotion until playback really
-            // starts; the kPlaying event restores the speaking emotion.
+            // 对流式 TTS 而言，URL 到达通常会比首段解码 PCM 早数秒。真正开始
+            // 播放前先显示等待表情，kPlaying 事件再恢复讲话表情。
             if (GetDeviceState() == kDeviceStateListening ||
                 GetDeviceState() == kDeviceStateSpeaking) {
                 UiApp::SetStatusText("思考中...");
@@ -1524,9 +1403,8 @@ void Application::BeginWakeup(ListeningMode mode) {
                 }
                 iat_utterance_active_ = true;
                 if (GetDeviceState() == kDeviceStateListening) {
-                    // A valid IAT result means the user has spoken. Start a
-                    // fresh idle window so the timeout measures silence after
-                    // the utterance rather than time since wakeup.
+                    // 有效的 IAT 结果说明用户已经说话。重新开始空闲计时窗口，
+                    // 让超时统计从用户说完后的静音开始，而不是从唤醒时开始。
                     listening_started_at_us_ = esp_timer_get_time();
                     ESP_LOGI(TAG, "收到 IAT，重置录音空闲计时");
                 }
@@ -1534,10 +1412,9 @@ void Application::BeginWakeup(ListeningMode mode) {
                                         tts_waiting_for_playback_.load();
                 if (session_controller_.policy().allow_barge_in &&
                     !audio_player_.IsWakeupPending() && tts_active) {
-                    // Full duplex deliberately remains in the listening state
-                    // while TTS is playing, so DeviceStatus cannot be used as
-                    // the barge-in predicate. A non-empty IAT result is the
-                    // reliable proof that the user has started a new turn.
+                    // 全双工模式在播放 TTS 时会刻意保持监听状态，因此不能用
+                    // DeviceStatus 判断用户是否打断。非空 IAT 结果才是用户已开始
+                    // 新一轮讲话的可靠依据。
                     ESP_LOGI(TAG,
                              "非空 IAT 打断 TTS: session=%lu, waiting=%d, bytes=%u",
                              static_cast<unsigned long>(active_tts_session_id_),
@@ -1560,11 +1437,9 @@ void Application::BeginWakeup(ListeningMode mode) {
             XIAOLING_IAT_END, [this](const XiaolingEvent& event) {
                 Schedule([this, text = event.text]() {
                     iat_utterance_active_ = false;
-                    // A non-empty final IAT means the user's sentence is
-                    // complete. Show the cloud-thinking phase until a TTS URL
-                    // arrives. The URL callback sets this flag before queuing
-                    // its own UI update, which prevents a late IAT task from
-                    // flashing the UI back from speaking to thinking.
+                    // 非空的最终 IAT 表示用户已经说完。在 TTS URL 到达前显示云端
+                    // 思考状态。URL 回调会先设置此标志，再将自己的 UI 更新入队，
+                    // 避免延迟的 IAT 任务把界面从讲话状态闪回思考状态。
                     if (!text.empty() && !tts_waiting_for_playback_.load() &&
                         GetDeviceState() == kDeviceStateListening) {
                         UiApp::SetStatusText("思考中...");
@@ -1676,16 +1551,15 @@ void Application::CountWatchdogBites() {
         narrowband_mode_ = true;
     }
 }
-#endif // CONFIG_LSPLATFORM
+#endif  // 小聆平台
 
 void Application::HandleStateChangedEvent() {
     DeviceState new_state = DeviceStatus::GetState();
     if (new_state != kDeviceStateIdle) {
         keep_voice_processing_on_idle_ = false;
     }
-    // Listening now starts in parallel with the wakeup tone.  Keep that tone
-    // alive for the connecting -> listening transition; unrelated state
-    // changes still cancel it.
+    // 监听现在与唤醒提示音并行启动。在“连接中 -> 监听中”的状态切换期间保留
+    // 该提示音，其他无关状态变化仍会将其取消。
     if (new_state != kDeviceStateConnecting &&
         new_state != kDeviceStateListening &&
         audio_player_.IsWakeupPending()) {
@@ -1714,7 +1588,7 @@ void Application::HandleStateChangedEvent() {
             }
 #ifdef CONFIG_LSPLATFORM
             UiApp::DismissOverlays();
-#endif // CONFIG_LSPLATFORM
+#endif  // 小聆平台
             if (keep_voice_processing_on_idle_) {
                 keep_voice_processing_on_idle_ = false;
                 audio_service_.EnableAudioUpload(false);
@@ -1731,7 +1605,7 @@ void Application::HandleStateChangedEvent() {
 #ifdef CONFIG_LSPLATFORM
             uplink_watchdog_.Stop();
             downlink_watchdog_.Stop();
-#endif // CONFIG_LSPLATFORM
+#endif  // 小聆平台
             break;
         case kDeviceStateConnecting:
             // 唤醒提示音阶段的过渡态：连接已就绪，直接预告聆听，避免
@@ -1748,21 +1622,20 @@ void Application::HandleStateChangedEvent() {
             UiApp::SetVoicePrompt(Lang::Strings::PLEASE_SPEAK);
 #ifdef CONFIG_LSPLATFORM
             UiApp::DismissOverlays();
-#endif // CONFIG_LSPLATFORM
+#endif  // 小聆平台
 
-            // The cloud session and local AFE have independent lifecycles in
-            // full duplex. A server finish can close the former while the AEC
-            // pipeline intentionally remains running.
+            // 全双工模式下，云端会话与本地 AFE 的生命周期相互独立。服务端
+            // finish 可以关闭前者，而 AEC 链路会按设计继续运行。
             if (xiaoling_conn_ && !xiaoling_conn_->CanUploadAudio()) {
                 xiaoling_conn_->SendStartListening(listening_mode_);
             }
 
-            // Make sure the audio processor is running
+            // 确保音频处理器正在运行。
             if (!audio_service_.IsAudioProcessorRunning()) {
                 audio_service_.EnableVoiceProcessing(true);
 #ifdef CONFIG_LSPLATFORM
                 uplink_watchdog_.Start();
-#endif // CONFIG_LSPLATFORM
+#endif  // 小聆平台
             }
 
             break;
@@ -1770,14 +1643,14 @@ void Application::HandleStateChangedEvent() {
             UiApp::SetStatus(UiApp::Status::Speaking);
             UiApp::SetEmotion("说话");
 
-            // Background-music interaction is always simplex. Otherwise keep
-            // the post-AEC uplink alive only for an active realtime session.
+            // 背景音乐交互始终使用单工模式；其他情况下，仅在实时会话有效时
+            // 保持 AEC 后的上行链路运行。
             if (background_music_session_ ||
                 !session_controller_.KeepListeningDuringTts()) {
                 audio_service_.EnableVoiceProcessing(false);
 #ifdef CONFIG_LSPLATFORM
                 uplink_watchdog_.Stop();
-#endif // CONFIG_LSPLATFORM
+#endif  // 小聆平台
             }
             // GMF 解码结束后仍需排空 TTS PCM；此时 IsPlaying() 已可能为 false。
             if (active_tts_session_id_ == 0 && !tts_waiting_for_playback_.load() &&
@@ -1793,7 +1666,7 @@ void Application::HandleStateChangedEvent() {
             audio_service_.EnableVoiceProcessing(false);
             break;
         default:
-            // Do nothing
+            // 无需处理。
             break;
     }
 }
@@ -1809,9 +1682,9 @@ void Application::Schedule(std::function<void()>&& callback) {
 void Application::ScheduleUrgent(std::function<void()>&& callback) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        // Keep urgent tasks in FIFO order. In particular, the HomePresenter
-        // IAT update is subscribed before the application barge-in handler and
-        // must become visible before stopping GMF can block for pipeline drain.
+        // 紧急任务保持先进先出顺序。尤其是 HomePresenter 的 IAT 更新先于应用
+        // 打断处理器订阅，必须先让它显示出来，再执行可能因排空流水线而阻塞的
+        // GMF 停止操作。
         main_urgent_tasks_.push_back(std::move(callback));
     }
     xEventGroupSetBits(event_group_, MAIN_EVENT_SCHEDULE);
@@ -1820,7 +1693,7 @@ void Application::ScheduleUrgent(std::function<void()>&& callback) {
 
 void Application::Reboot() {
     ESP_LOGI(TAG, "Rebooting...");
-    // Disconnect the audio channel
+    // 断开音频通道。
     if (xiaoling_conn_ && xiaoling_conn_->IsConnected()) {
         xiaoling_conn_->Disconnect();
     }
@@ -1829,61 +1702,6 @@ void Application::Reboot() {
 
     vTaskDelay(pdMS_TO_TICKS(1000));
     esp_restart();
-}
-
-bool Application::UpgradeFirmware(const std::string& url, const std::string& version) {
-    auto& board = Board::GetInstance();
-
-    std::string upgrade_url = url;
-    std::string version_info = version.empty() ? "(Manual upgrade)" : version;
-
-    // Close audio channel if it's open
-    if (xiaoling_conn_ && xiaoling_conn_->IsConnected()) {
-        ESP_LOGI(TAG, "Closing audio channel before firmware upgrade");
-        xiaoling_conn_->Disconnect();
-    }
-    ESP_LOGI(TAG, "Starting firmware upgrade from URL: %s", upgrade_url.c_str());
-
-    UiApp::SetStatusText(Lang::Strings::OTA_UPGRADE);
-    UiApp::SetEmotion("download");
-    UiApp::SetChatMessage("system", Lang::Strings::UPGRADING);
-    // The confirmation tone has just been cancelled by the button handler;
-    // start directly with the "updating" prompt instead of replaying 086.
-    PlayOtaTone(87);
-
-    SetDeviceState(kDeviceStateUpgrading);
-
-    std::string message = std::string(Lang::Strings::NEW_VERSION) + version_info;
-    UiApp::SetChatMessage("system", message);
-    UiApp::ShowUpgradeProgress("APP", 0);
-
-    board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
-    audio_service_.Stop();
-    vTaskDelay(pdMS_TO_TICKS(1000));
-
-    bool upgrade_success = Ota::Upgrade(upgrade_url, [](int progress, size_t speed) {
-        UiApp::ShowUpgradeProgress("APP", progress, speed);
-    });
-
-    if (!upgrade_success) {
-        // Upgrade failed, restart audio service and continue running
-        ESP_LOGE(TAG, "Firmware upgrade failed, restarting audio service and continuing operation...");
-        audio_service_.Start(); // Restart audio service
-        board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER); // Restore power save level
-        PlayOtaTone(92);
-        Alert(Lang::Strings::ERROR, Lang::Strings::UPGRADE_FAILED, "circle_xmark", "");
-        vTaskDelay(pdMS_TO_TICKS(3000));
-        return false;
-    } else {
-        // Upgrade success, reboot immediately
-        ESP_LOGI(TAG, "Firmware upgrade successful, rebooting...");
-        Settings ota_settings("ota", true);
-        ota_settings.SetBool("app_update_pending_success", true);
-        UiApp::SetChatMessage("system", Lang::Strings::UPGRADE_SUCCESSFUL_REBOOTING);
-        vTaskDelay(pdMS_TO_TICKS(1000)); // Brief pause to show message
-        Reboot();
-        return true;
-    }
 }
 
 void Application::WakeWordInvoke(const std::string& wake_word) {
@@ -1942,12 +1760,12 @@ bool Application::CanEnterSleepMode() {
         return false;
     }
 
-    // Now it is safe to enter sleep mode
+    // 此时可以安全进入休眠模式。
     return true;
 }
 
 void Application::SendMcpMessage(const std::string& payload) {
-    // Always schedule to run in main task for thread safety
+    // 始终调度到主任务执行，以保证线程安全。
     Schedule([this, payload = std::move(payload)]() {
         if (xiaoling_conn_) {
             xiaoling_conn_->SendMcpMessage(payload);
@@ -1988,7 +1806,7 @@ void Application::SetAecMode(AecMode mode) {
                               : kListeningModeAutoStop;
         UiApp::SetDuplexMode(session_controller_.policy().mode);
 
-        // If the AEC mode is changed, close the audio channel
+        // AEC 模式变化时关闭音频通道。
         if (xiaoling_conn_ && xiaoling_conn_->IsConnected()) {
             xiaoling_conn_->Disconnect();
         }
@@ -2009,8 +1827,8 @@ void Application::SetDuplexMode(DuplexMode mode) {
         const auto state = GetDeviceState();
         const bool voice_processing_running = audio_service_.IsAudioProcessorRunning();
 
-        // End the current cloud session and stop only the uplink. Keeping the
-        // processor alive avoids tearing down AFE while returning to wake-word detection.
+        // 结束当前云端会话并只停止上行链路。保持处理器运行，可以在恢复唤醒词
+        // 检测时避免拆除并重建 AFE。
         iat_utterance_active_ = false;
         audio_service_.EnableAudioUpload(false);
         session_controller_.EndSession();
@@ -2102,7 +1920,7 @@ void Application::PrepareAlarmPlayback() {
                 ESP_LOGI(TAG, "闹钟临时音量: %d -> %d", current_volume,
                          minimum_ring_volume);
             } else {
-                // The configured value is a floor, not a fixed ring volume.
+                // 配置值是音量下限，并非固定的响铃音量。
                 alarm_previous_volume_ = -1;
                 ESP_LOGI(TAG, "闹钟保持当前音量: %d (minimum=%d)", current_volume,
                          minimum_ring_volume);
@@ -2160,41 +1978,14 @@ void Application::StopAlarmTone() {
     }
 }
 
-void Application::PlayOtaTone(uint16_t tone_id, uint8_t repeat_count) {
-    for (uint8_t repeat = 0; repeat < repeat_count; ++repeat) {
-        if (ota_confirmation_pending_.load() && ota_confirmation_decision_.load() != 0) {
-            return;
-        }
-        if (audio_player_.PlayTone(tone_id) == 0) {
-            ESP_LOGW(TAG, "OTA tone playback failed: id=%u", static_cast<unsigned>(tone_id));
-            return;
-        }
-
-        const TickType_t start = xTaskGetTickCount();
-        bool started = false;
-        while (xTaskGetTickCount() - start < pdMS_TO_TICKS(15000)) {
-            if (ota_confirmation_pending_.load() && ota_confirmation_decision_.load() != 0) {
-                audio_player_.Stop(PlaybackEndReason::kCancelled);
-                return;
-            }
-            if (audio_player_.IsPlaying()) {
-                started = true;
-            } else if (started) {
-                break;
-            }
-            vTaskDelay(pdMS_TO_TICKS(20));
-        }
-    }
-}
-
 void Application::ResetXiaolingConn() {
     Schedule([this]() {
         std::lock_guard<std::mutex> lock(xiaoling_conn_mutex_);
-        // Close audio channel if opened
+        // 如果音频通道已打开，则将其关闭。
         if (xiaoling_conn_ && xiaoling_conn_->IsConnected()) {
             xiaoling_conn_->Disconnect();
         }
-        // Reset protocol
+        // 重置协议对象。
         xiaoling_conn_.reset();
     });
 }
