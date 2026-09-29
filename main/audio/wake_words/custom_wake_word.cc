@@ -1,7 +1,7 @@
 #include "custom_wake_word.h"
 #include "audio_service.h"
 #include "system/system_info.h"
-#include "resource/assets.h"
+#include "resource/resource.h"
 
 #include <esp_log.h>
 #include <esp_mn_iface.h>
@@ -38,14 +38,13 @@ CustomWakeWord::~CustomWakeWord() {
 
 void CustomWakeWord::ParseWakenetModelConfig() {
     // Read index.json
-    auto& assets = Assets::GetInstance();
-    void* ptr = nullptr;
-    size_t size = 0;
-    if (!assets.RespakStore().GetAssetData("index.json", ptr, size)) {
+    ResourceData asset;
+    if (!Resource::Get(ResourcePackage::Respak, "index.json", asset)) {
         ESP_LOGE(TAG, "Failed to read index.json");
         return;
     }
-    cJSON* root = cJSON_ParseWithLength(static_cast<char*>(ptr), size);
+    cJSON* root = cJSON_ParseWithLength(
+        reinterpret_cast<const char*>(asset.address), asset.size);
     if (root == nullptr) {
         ESP_LOGE(TAG, "Failed to parse index.json");
         return;

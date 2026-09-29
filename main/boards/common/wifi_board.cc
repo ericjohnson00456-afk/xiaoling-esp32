@@ -7,6 +7,7 @@
 #include "shell/cmd/kv/kv_user.h"
 #include "settings.h"
 #include "application.h"
+#include "resource/resource.h"
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -38,13 +39,11 @@ std::unique_ptr<LvglImage> WifiBoard::GetProvisioningQRCode(std::string& message
     const char* path = KvUser::GetDeviceMode() == 1
         ? "/provisioning/xl_ble_prov_staging.png"
         : "/provisioning/xl_ble_prov.png";
-    void* image_data = nullptr;
-    size_t image_size = 0;
-    if (!Assets::GetInstance().RespakStore().GetAssetData(path, image_data, image_size) ||
-        image_data == nullptr || image_size == 0) {
+    ResourceData asset;
+    if (!Resource::Get(ResourcePackage::Respak, path, asset)) {
         return nullptr;
     }
-    return std::make_unique<LvglRawImage>(image_data, image_size);
+    return std::make_unique<LvglRawImage>(const_cast<uint8_t*>(asset.address), asset.size);
 #else
     message.clear();
     return nullptr;

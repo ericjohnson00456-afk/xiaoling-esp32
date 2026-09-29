@@ -3,7 +3,7 @@
 #include <esp_log.h>
 #include "emoji_display.h"
 #include "ui/i18n/lang_config.h"
-#include "assets.h"
+#include "resource/resource.h"
 
 #include <esp_lcd_panel_io.h>
 #include <freertos/FreeRTOS.h>
@@ -77,17 +77,14 @@ void EmojiPlayer::StartPlayer(const std::string& asset_name, bool repeat, int fp
 {
     if (player_handle_) {
         uint32_t start, end;
-        void *src_data = nullptr;
-        size_t src_len = 0;
-
-        auto& assets = Assets::GetInstance();
         std::string filename = emoji_asset_name_map.at(asset_name);
-        if (!assets.RespakStore().GetAssetData(filename, src_data, src_len)) {
+        ResourceData asset;
+        if (!Resource::Get(ResourcePackage::Respak, filename, asset)) {
             ESP_LOGE(TAG, "Failed to get asset data for %s", asset_name.c_str());
             return;
         }
 
-        anim_player_set_src_data(player_handle_, src_data, src_len);
+        anim_player_set_src_data(player_handle_, asset.address, asset.size);
         anim_player_get_segment(player_handle_, &start, &end);
         if(asset_name == "wake"){
             start = 7;

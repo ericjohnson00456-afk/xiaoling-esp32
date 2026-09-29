@@ -186,6 +186,7 @@ public:
     void PlaySound(const std::string_view& sound);
     bool ReadAudioData(std::vector<int16_t>& data, int sample_rate, int samples);
     void ResetDecoder();
+    bool LoadWakeWordResources(bool force_reload = false);
 #if CONFIG_USE_MICRO_WAKE_WORD
     void SetMicroWakeWordModel(const void* model_data, size_t model_size,
                                const std::string& wake_word = {},

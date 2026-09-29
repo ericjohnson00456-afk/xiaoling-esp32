@@ -35,7 +35,7 @@
 #include "display.h"
 #include "application.h"
 #include "system/system_info.h"
-#include "resource/assets.h"
+#include "resource/resource.h"
 #include "ui/utils/image/lvgl_image.h"
 
 #include "esp_blufi_api.h"
@@ -477,15 +477,13 @@ void blufi_start(void)
     auto& application = Application::GetInstance();
     application.SetDeviceState(kDeviceStateWifiConfiguring);
 
-    auto& assets = Assets::GetInstance();
-
     // Show the provisioning QR before WiFi/BLE initialization consumes the
     // remaining internal heap. The display keeps the image alive internally.
-    void* qrcode_data = nullptr;
-    size_t qrcode_size = 0;
-    if (assets.RespakStore().GetAssetData("/provisioning/xl_ble_prov.png", qrcode_data, qrcode_size) &&
-        qrcode_data != nullptr && qrcode_size != 0) {
-        auto qrcode = std::make_unique<LvglRawImage>(qrcode_data, qrcode_size);
+    ResourceData qrcode_asset;
+    if (Resource::Get(ResourcePackage::Respak,
+                           "/provisioning/xl_ble_prov.png", qrcode_asset)) {
+        auto qrcode = std::make_unique<LvglRawImage>(
+            const_cast<uint8_t*>(qrcode_asset.address), qrcode_asset.size);
         auto display = Board::GetInstance().GetDisplay();
         display->ShowActivation(std::move(qrcode), "扫码或搜索“小聆AI”小程序\n选择ESP32 - 蓝牙配网");
     } else {

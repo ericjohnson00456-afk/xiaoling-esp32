@@ -1,7 +1,7 @@
 #include "ota.h"
 
 #include "base64_codec.h"
-#include "resource/assets.h"
+#include "resource/resource.h"
 #include "settings.h"
 #include "system/system_info.h"
 #include "xiaoling/conn/xiaoling_config.h"
@@ -126,6 +126,15 @@ void ParseResources(const cJSON* root, Ota::ResourceInfo& wake_word,
     ParseResourceInfo(cJSON_GetObjectItemCaseSensitive(data, "emoji"), emoji);
 }
 
+ResourcePackage ToResourcePackage(Ota::Resource resource) {
+    switch (resource) {
+        case Ota::Resource::Tone: return ResourcePackage::Tone;
+        case Ota::Resource::Emoji: return ResourcePackage::Emoji;
+        case Ota::Resource::WakeWord: return ResourcePackage::WakeWord;
+    }
+    return ResourcePackage::Tone;
+}
+
 }  // namespace
 
 esp_err_t Ota::CheckResources() {
@@ -178,20 +187,8 @@ esp_err_t Ota::CheckResources() {
 
 bool Ota::VerifyResource(Resource resource, size_t expected_size,
                          const std::array<uint8_t, 16>& expected_md5) {
-    auto& assets = Assets::GetInstance();
-    AssetStore* target = nullptr;
-    switch (resource) {
-        case Resource::Tone: target = &assets.ToneStore(); break;
-        case Resource::Emoji: target = &assets.EmojiStore(); break;
-        case Resource::WakeWord: target = &assets.WakeWordStore(); break;
-    }
-    if (target == nullptr) {
-        return false;
-    }
-    if (!target->partition_valid()) {
-        target->Mount();
-    }
-    const esp_partition_t* partition = target->partition();
+    const esp_partition_t* partition =
+        ::Resource::GetPartition(ToResourcePackage(resource));
     if (partition == nullptr || expected_size == 0 || expected_size > partition->size) {
         ESP_LOGE(TAG, "Invalid resource partition or expected size: %u",
                  static_cast<unsigned>(expected_size));
@@ -230,40 +227,29 @@ bool Ota::VerifyResource(Resource resource, size_t expected_size,
 bool Ota::UpgradeResource(Resource resource, const std::string& url, size_t expected_size,
                           const std::array<uint8_t, 16>& expected_md5,
                           std::function<void(int progress, size_t speed)> callback) {
-    auto& assets = Assets::GetInstance();
-    AssetStore* target = nullptr;
-    switch (resource) {
-        case Resource::Tone: target = &assets.ToneStore(); break;
-        case Resource::Emoji: target = &assets.EmojiStore(); break;
-        case Resource::WakeWord: target = &assets.WakeWordStore(); break;
-    }
-    if (target == nullptr) {
-        return false;
-    }
-    if (!target->partition_valid()) {
-        target->Mount();
-    }
-    if (target->partition() == nullptr) {
+    const ResourcePackage package = ToResourcePackage(resource);
+    const esp_partition_t* partition = ::Resource::GetPartition(package);
+    if (partition == nullptr) {
         ESP_LOGE(TAG, "Split resource partition is unavailable");
         return false;
     }
-    target->Unmount();
+    ::Resource::Unload(package);
 
     auto network = Board::GetInstance().GetNetwork();
     if (network == nullptr) {
-        target->Mount();
+        ::Resource::Reload(package);
         return false;
     }
     auto http = network->CreateHttp(0);
     if (http == nullptr) {
         ESP_LOGE(TAG, "Resource download request could not create HTTP client: url=%s", url.c_str());
-        target->Mount();
+        ::Resource::Reload(package);
         return false;
     }
     ESP_LOGI(TAG, "Resource download request: method=GET url=%s body=<binary/empty>", url.c_str());
     if (!http->Open("GET", url)) {
         ESP_LOGE(TAG, "Resource download request failed to open: url=%s", url.c_str());
-        target->Mount();
+        ::Resource::Reload(package);
         return false;
     }
     const int status = http->GetStatusCode();
@@ -273,15 +259,14 @@ bool Ota::UpgradeResource(Resource resource, const std::string& url, size_t expe
     if (status != 200) {
         ESP_LOGE(TAG, "Resource download returned HTTP %d: url=%s", status, url.c_str());
         http->Close();
-        target->Mount();
+        ::Resource::Reload(package);
         return false;
     }
-    if (content_length == 0 || target->partition() == nullptr ||
-        content_length > target->partition()->size ||
+    if (content_length == 0 || content_length > partition->size ||
         (expected_size != 0 && content_length != expected_size)) {
         ESP_LOGE(TAG, "Invalid resource size: %u", static_cast<unsigned>(content_length));
         http->Close();
-        target->Mount();
+        ::Resource::Reload(package);
         return false;
     }
 
@@ -290,13 +275,13 @@ bool Ota::UpgradeResource(Resource resource, const std::string& url, size_t expe
     std::unique_ptr<char[]> buffer(new (std::nothrow) char[kBufferSize]);
     if (!buffer) {
         http->Close();
-        target->Mount();
+        ::Resource::Reload(package);
         return false;
     }
     const size_t erase_size = (content_length + kSectorSize - 1) / kSectorSize * kSectorSize;
-    if (esp_partition_erase_range(target->partition(), 0, erase_size) != ESP_OK) {
+    if (esp_partition_erase_range(partition, 0, erase_size) != ESP_OK) {
         http->Close();
-        target->Mount();
+        ::Resource::Reload(package);
         return false;
     }
 
@@ -308,7 +293,7 @@ bool Ota::UpgradeResource(Resource resource, const std::string& url, size_t expe
     int64_t last_report_time = esp_timer_get_time();
     while (written < content_length) {
         const int ret = http->Read(buffer.get(), std::min(kBufferSize, content_length - written));
-        if (ret <= 0 || esp_partition_write(target->partition(), written, buffer.get(), ret) != ESP_OK) {
+        if (ret <= 0 || esp_partition_write(partition, written, buffer.get(), ret) != ESP_OK) {
             ESP_LOGE(TAG, "Resource download/write failed at %u", static_cast<unsigned>(written));
             mbedtls_md5_free(&md5);
             http->Close();
@@ -336,5 +321,5 @@ bool Ota::UpgradeResource(Resource resource, const std::string& url, size_t expe
         // Do not expose a corrupt ROMFS image to runtime consumers.
         return false;
     }
-    return target->Mount();
+    return ::Resource::Reload(package);
 }

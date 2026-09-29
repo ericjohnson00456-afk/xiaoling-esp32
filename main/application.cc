@@ -7,7 +7,7 @@
 #include "xiaoling/conn/xiaoling_conn_activation.h"
 #include "ui/i18n/lang_config.h"
 #include "mcp_server.h"
-#include "resource/assets.h"
+#include "resource/resource.h"
 #include "settings.h"
 #include "serial_shell.h"
 #include "ui/ui_app.h"
@@ -15,7 +15,6 @@
 #include "ui/ui_page_ids.h"
 #include "ui/screens/qrcode/qrcode_presenter.h"
 #include "xiaoling/xiaoling_events.h"
-#include "player/resource/localized_audio.h"
 #include "shell/cmd/kv/kv_user.h"
 #include "ui/screens/home/home_presenter.h"
 
@@ -116,16 +115,13 @@ Application::~Application() {
 }
 
 void Application::Initialize() {
-    auto& board = Board::GetInstance();
-
-    SetDeviceState(kDeviceStateStarting);
-
-    // 在创建 UI 页面前挂载并索引全部 ROMFS 资源。此处只安装唤醒词模型，
-    // 等音频服务初始化、启动并完成回调注册后再开启唤醒检测。
-    auto& initial_assets = Assets::GetInstance();
-    if (!initial_assets.Apply()) {
+    // 先挂载 ROMFS 格式资源。
+    if (!Resource::Initialize()) {
         ESP_LOGE(TAG, "One or more required ROMFS resources are unavailable");
     }
+
+    auto& board = Board::GetInstance();
+    SetDeviceState(kDeviceStateStarting);
 
     // UIApp 负责显示设备绑定和页面初始化；Application 只提供调度器，
     // 将相关工作切换到应用主任务执行。
@@ -682,11 +678,11 @@ void Application::ShowActivationCode(const std::string& code,
         ESP_LOGW(TAG, "激活二维码 URL 为空");
     }
 
-    PlayActivationAudio(LocalizedAudio::kActivationGuideId);
+    PlayActivationAudio("activation");
     for (const char digit : code) {
         if (digit >= '0' && digit <= '9') {
-            PlayActivationAudio(static_cast<uint16_t>(
-                LocalizedAudio::kActivationDigitFirstId + digit - '0'));
+            const char name[] = {digit, '\0'};
+            PlayActivationAudio(name);
         }
     }
 }
@@ -1662,23 +1658,43 @@ void Application::SetDuplexMode(DuplexMode mode) {
 }
 
 void Application::PlayRespakAudio(const char* name) {
-    const uint8_t* data = nullptr;
-    size_t size = 0;
-    if (name == nullptr || !LocalizedAudio::GetInstance().GetData(name, &data, &size)) {
+    if (name == nullptr) {
         ESP_LOGW(TAG, "本地化提示音不存在: %s", name != nullptr ? name : "(null)");
         return;
     }
-    audio_service_.PlaySound(std::string_view(reinterpret_cast<const char*>(data), size));
+    ResourceData resource;
+    std::string path = std::string("/locales/") + Lang::CODE + "/" + name + ".ogg";
+    if (!Resource::Get(ResourcePackage::Respak, path, resource)) {
+        path = std::string("/locales/en-US/") + name + ".ogg";
+        if (!Resource::Get(ResourcePackage::Respak, path, resource)) {
+            ESP_LOGW(TAG, "本地化提示音不存在: %s", name);
+            return;
+        }
+    }
+    audio_service_.PlaySound(std::string_view(
+        reinterpret_cast<const char*>(resource.address), resource.size));
 }
 
-void Application::PlayActivationAudio(uint16_t id) {
-    const uint8_t* data = nullptr;
-    size_t size = 0;
-    if (!LocalizedAudio::GetInstance().GetActivationData(id, &data, &size)) {
-        ESP_LOGW(TAG, "激活音频不存在: id=%u", static_cast<unsigned>(id));
+void Application::PlayActivationAudio(const char* name) {
+    if (name == nullptr) {
         return;
     }
-    audio_service_.PlaySound(std::string_view(reinterpret_cast<const char*>(data), size));
+    const bool is_digit = name[0] >= '0' && name[0] <= '9' && name[1] == '\0';
+    const unsigned id = is_digit ? 301 + name[0] - '0' : 300;
+    ResourceData resource;
+    char path[96] = {};
+    std::snprintf(path, sizeof(path), "/activation/%s/%03u_%s.ogg",
+                  Lang::CODE, id, name);
+    if (!Resource::Get(ResourcePackage::Respak, path, resource)) {
+        std::snprintf(path, sizeof(path), "/activation/en-US/%03u_%s.ogg",
+                      id, name);
+        if (!Resource::Get(ResourcePackage::Respak, path, resource)) {
+            ESP_LOGW(TAG, "激活音频不存在: %s", name);
+            return;
+        }
+    }
+    audio_service_.PlaySound(std::string_view(
+        reinterpret_cast<const char*>(resource.address), resource.size));
 }
 
 void Application::PlayTone(uint16_t tone_id) {

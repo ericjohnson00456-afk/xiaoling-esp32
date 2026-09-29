@@ -1,4 +1,5 @@
 #include "audio_service.h"
+#include "resource/resource.h"
 #include "xiaoling/conn/xiaoling_config.h"
 #include <esp_log.h>
 #include <esp_heap_caps.h>
@@ -6,6 +7,7 @@
 #include <algorithm>
 #include <climits>
 #include <cstring>
+#include <cJSON.h>
 
 #if CONFIG_USE_AUDIO_PROCESSOR
 #include "processors/afe_audio_processor.h"
@@ -31,6 +33,44 @@ namespace {
 constexpr UBaseType_t kAudioCodecPriority = 11;
 constexpr UBaseType_t kAudioAlgorithmPriority = 8;
 constexpr uint32_t kAudioInputIdleYieldIntervalMs = 500;
+
+#if CONFIG_USE_MICRO_WAKE_WORD
+bool HasSuffix(std::string_view value, std::string_view suffix) {
+    return value.size() >= suffix.size() &&
+           value.compare(value.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+std::string ModelPathForDescriptor(const std::string& descriptor_path) {
+    if (!HasSuffix(descriptor_path, ".json")) {
+        return {};
+    }
+    return descriptor_path.substr(0, descriptor_path.size() - 5) + ".tflite";
+}
+
+void ParseMicroWakeWordConfig(const cJSON* descriptor, MicroWakeWordConfig& config) {
+    const cJSON* micro = cJSON_GetObjectItemCaseSensitive(descriptor, "micro");
+    if (!cJSON_IsObject(micro)) {
+        return;
+    }
+    const cJSON* cutoff = cJSON_GetObjectItemCaseSensitive(micro, "probability_cutoff");
+    if (cJSON_IsNumber(cutoff) && cutoff->valuedouble > 0.0 && cutoff->valuedouble <= 1.0) {
+        config.probability_cutoff = static_cast<float>(cutoff->valuedouble);
+    }
+    const cJSON* sliding = cJSON_GetObjectItemCaseSensitive(micro, "sliding_window_size");
+    if (cJSON_IsNumber(sliding) && sliding->valuedouble >= 1.0 && sliding->valuedouble <= 64.0) {
+        config.sliding_window_size = static_cast<size_t>(sliding->valuedouble);
+    }
+    const cJSON* step = cJSON_GetObjectItemCaseSensitive(micro, "feature_step_size");
+    if (cJSON_IsNumber(step) && step->valuedouble >= 1.0 && step->valuedouble <= 100.0) {
+        config.feature_step_size = static_cast<uint8_t>(step->valuedouble);
+    }
+    const cJSON* arena = cJSON_GetObjectItemCaseSensitive(micro, "tensor_arena_size");
+    if (cJSON_IsNumber(arena) && arena->valuedouble >= 16.0 * 1024.0 &&
+        arena->valuedouble <= 1024.0 * 1024.0) {
+        config.tensor_arena_size = static_cast<size_t>(arena->valuedouble);
+    }
+}
+#endif
 }  // namespace
 
 AudioTask::~AudioTask() {
@@ -72,6 +112,9 @@ AudioService::~AudioService() {
 
 void AudioService::Initialize(AudioCodec* codec) {
     codec_ = codec;
+    if (!LoadWakeWordResources(false)) {
+        ESP_LOGE(TAG, "Failed to configure wake-word model from resource table");
+    }
     codec_->Start();
 
     /* Setup the audio codec */
@@ -1367,6 +1410,102 @@ void AudioService::CheckAndUpdateAudioPowerState() {
     if (!codec_->input_enabled() && !codec_->output_enabled()) {
         esp_timer_stop(audio_power_timer_);
     }
+}
+
+bool AudioService::LoadWakeWordResources(bool force_reload) {
+#if CONFIG_USE_MICRO_WAKE_WORD
+    (void)force_reload;
+    std::vector<std::string> paths;
+    if (!Resource::List(ResourcePackage::WakeWord, "/", paths)) {
+        ESP_LOGE(TAG, "The wake_word resource partition is unavailable");
+        return false;
+    }
+    std::sort(paths.begin(), paths.end());
+    for (const auto& descriptor_path : paths) {
+        if (!HasSuffix(descriptor_path, ".json")) {
+            continue;
+        }
+
+        ResourceData descriptor_asset;
+        if (!Resource::Get(ResourcePackage::WakeWord, descriptor_path,
+                                descriptor_asset)) {
+            continue;
+        }
+        cJSON* descriptor = cJSON_ParseWithLength(
+            reinterpret_cast<const char*>(descriptor_asset.address), descriptor_asset.size);
+        if (descriptor == nullptr) {
+            ESP_LOGW(TAG, "Invalid wake-word descriptor: %s", descriptor_path.c_str());
+            continue;
+        }
+
+        const cJSON* wake_word = cJSON_GetObjectItemCaseSensitive(descriptor, "wake_word");
+        if (!cJSON_IsString(wake_word) || wake_word->valuestring == nullptr) {
+            cJSON_Delete(descriptor);
+            continue;
+        }
+        MicroWakeWordConfig config;
+        config.wake_word = wake_word->valuestring;
+        ParseMicroWakeWordConfig(descriptor, config);
+
+        std::string model_path = ModelPathForDescriptor(descriptor_path);
+        ResourceData model_asset;
+        bool found = !model_path.empty() &&
+                     Resource::Get(ResourcePackage::WakeWord, model_path, model_asset);
+        if (!found) {
+            const cJSON* model = cJSON_GetObjectItemCaseSensitive(descriptor, "model");
+            if (cJSON_IsString(model) && model->valuestring != nullptr) {
+                model_path = model->valuestring;
+                if (model_path.empty() || model_path.front() != '/') {
+                    const size_t slash = descriptor_path.find_last_of('/');
+                    model_path = descriptor_path.substr(0, slash + 1) + model_path;
+                }
+                found = Resource::Get(ResourcePackage::WakeWord, model_path, model_asset);
+            }
+        }
+        if (found) {
+            SetMicroWakeWordModel(model_asset.address, model_asset.size,
+                                  config.wake_word, config);
+            ESP_LOGI(TAG, "Loaded MWW model from %s (%s)", model_path.c_str(),
+                     config.wake_word.c_str());
+            cJSON_Delete(descriptor);
+            return true;
+        }
+        cJSON_Delete(descriptor);
+    }
+    ESP_LOGE(TAG, "The wake_word descriptor or TFLite model is missing");
+    return false;
+#else
+    if (models_list_ != nullptr && !force_reload) {
+        return true;
+    }
+    if (force_reload) {
+        EnableWakeWordDetection(false);
+        const bool model_owned_by_detector = wake_word_ != nullptr;
+        srmodel_list_t* old_models = models_list_;
+        wake_word_.reset();
+        wake_word_initialized_ = false;
+        models_list_ = nullptr;
+        if (!model_owned_by_detector && old_models != nullptr) {
+            esp_srmodel_deinit(old_models);
+        }
+    }
+
+    constexpr const char* kCandidates[] = {"/srmodels.bin", "/cae_esr.bin"};
+    for (const char* candidate : kCandidates) {
+        ResourceData asset;
+        if (!Resource::Get(ResourcePackage::WakeWord, candidate, asset)) {
+            continue;
+        }
+        auto* models = srmodel_load(const_cast<uint8_t*>(asset.address));
+        if (models != nullptr) {
+            SetModelsList(models);
+            ESP_LOGI(TAG, "Loaded ESP-SR model from %s", candidate);
+            return true;
+        }
+    }
+    ESP_LOGE(TAG, "The wake_word ESP-SR model is missing");
+    return false;
+#endif
 }
 
 #if CONFIG_USE_MICRO_WAKE_WORD

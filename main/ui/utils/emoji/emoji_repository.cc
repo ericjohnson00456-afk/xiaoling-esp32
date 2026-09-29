@@ -1,6 +1,6 @@
 #include "emoji_repository.h"
 
-#include "resource/store/asset_store.h"
+#include "resource/resource.h"
 
 #include <cJSON.h>
 #include <esp_log.h>
@@ -33,7 +33,19 @@ bool GetObjectInt(const cJSON* object, const char* key, int* value) {
     return true;
 }
 
-bool ParsePhase(const cJSON* json, AssetStore& assets, EmojiPhase& phase, bool loop) {
+bool GetEmojiAsset(std::string_view path, ResourceData& asset) {
+    if (Resource::Get(ResourcePackage::Emoji, path, asset)) {
+        return true;
+    }
+    constexpr std::string_view kLegacyPrefix = "/emoji/";
+    if (path.substr(0, kLegacyPrefix.size()) == kLegacyPrefix) {
+        return Resource::Get(ResourcePackage::Emoji,
+                                  path.substr(kLegacyPrefix.size()), asset);
+    }
+    return false;
+}
+
+bool ParsePhase(const cJSON* json, EmojiPhase& phase, bool loop) {
     if (json == nullptr) {
         return true;
     }
@@ -78,25 +90,14 @@ bool ParsePhase(const cJSON* json, AssetStore& assets, EmojiPhase& phase, bool l
             return false;
         }
 
-        void* data = nullptr;
-        size_t size = 0;
-        if (!assets.GetAssetData(path, data, size) || data == nullptr || size == 0) {
-            // The legacy package prefixes paths with /emoji, while the
-            // standalone emoji.bin stores emoji.json and frame directories at
-            // the ROMFS root.
-            const char* legacy_prefix = "/emoji/";
-            if (std::strncmp(path, legacy_prefix, std::strlen(legacy_prefix)) == 0) {
-                if (!assets.GetAssetData(path + std::strlen(legacy_prefix), data, size)) {
-                    ESP_LOGE(TAG, "找不到动画帧: %s", path);
-                    return false;
-                }
-            } else {
-                ESP_LOGE(TAG, "找不到动画帧: %s", path);
-                return false;
-            }
+        ResourceData asset;
+        if (!GetEmojiAsset(path, asset)) {
+            ESP_LOGE(TAG, "找不到动画帧: %s", path);
+            return false;
         }
         // ROMFS 数据映射在 Flash 中，LvglRawImage 只保存描述信息，不释放 data。
-        phase.frames.emplace_back(std::make_shared<LvglRawImage>(data, size));
+        phase.frames.emplace_back(std::make_shared<LvglRawImage>(
+            const_cast<uint8_t*>(asset.address), asset.size));
     }
 
     const cJSON* overrides = cJSON_GetObjectItemCaseSensitive(json, "interval_overrides");
@@ -149,22 +150,22 @@ void EmojiRepository::ClearAnimations() {
     default_emoji_.clear();
 }
 
-bool EmojiRepository::LoadFromAssets(AssetStore& assets, const std::string& config_path) {
+bool EmojiRepository::LoadFromResources(const std::string& config_path) {
     ClearAnimations();
 
-    void* data = nullptr;
-    size_t size = 0;
-    if (!assets.GetAssetData(config_path, data, size) || data == nullptr || size == 0) {
+    ResourceData asset;
+    if (!Resource::Get(ResourcePackage::Emoji, config_path, asset)) {
         // Split emoji.bin packages keep emoji.json at the ROMFS root, while
         // legacy assets.bin used /emoji/emoji.json.
         const std::string fallback = config_path == "/emoji.json" ? "/emoji/emoji.json" : "/emoji.json";
-        if (!assets.GetAssetData(fallback, data, size) || data == nullptr || size == 0) {
+        if (!Resource::Get(ResourcePackage::Emoji, fallback, asset)) {
             ESP_LOGE(TAG, "找不到表情配置: %s", config_path.c_str());
             return false;
         }
     }
 
-    cJSON* root = cJSON_ParseWithLength(static_cast<const char*>(data), size);
+    cJSON* root = cJSON_ParseWithLength(
+        reinterpret_cast<const char*>(asset.address), asset.size);
     if (root == nullptr) {
         ESP_LOGE(TAG, "表情配置 JSON 解析失败");
         return false;
@@ -197,9 +198,9 @@ bool EmojiRepository::LoadFromAssets(AssetStore& assets, const std::string& conf
             animation.alias = alias_json->valuestring;
         }
 
-        if (!ParsePhase(cJSON_GetObjectItemCaseSensitive(item, "intro"), assets, animation.intro, false) ||
-            !ParsePhase(cJSON_GetObjectItemCaseSensitive(item, "loop"), assets, animation.loop, true) ||
-            !ParsePhase(cJSON_GetObjectItemCaseSensitive(item, "outro"), assets, animation.outro, false)) {
+        if (!ParsePhase(cJSON_GetObjectItemCaseSensitive(item, "intro"), animation.intro, false) ||
+            !ParsePhase(cJSON_GetObjectItemCaseSensitive(item, "loop"), animation.loop, true) ||
+            !ParsePhase(cJSON_GetObjectItemCaseSensitive(item, "outro"), animation.outro, false)) {
             ESP_LOGE(TAG, "表情加载失败: %s", animation.name.c_str());
             success = false;
             continue;

@@ -1,5 +1,5 @@
 #include "display/oled_display.h"
-#include "resource/assets.h"
+#include "ui/themes/lvgl_theme_setup.h"
 #include "ui/i18n/lang_config.h"
 #include "lvgl_theme.h"
 
@@ -25,9 +25,12 @@ OledDisplay::OledDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handl
     auto& theme_manager = LvglThemeManager::GetInstance();
     theme_manager.RegisterTheme("dark", std::move(dark_theme));
     // OLED 同样会在 Application 初始化前创建界面，必须先准备字体。
-    if (!Assets::GetInstance().LoadFonts()) {
+    if (!LoadResourceFonts()) {
         ESP_LOGE(TAG, "respak 中缺少必要 UI 字体，且未启用内置回退字体");
         std::abort();
+    }
+    if (!LoadEmojiResources(false)) {
+        ESP_LOGW(TAG, "emoji 资源表不可用");
     }
     current_theme_ = theme_manager.GetTheme("dark");
 

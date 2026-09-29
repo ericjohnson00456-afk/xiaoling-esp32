@@ -15,7 +15,6 @@
 #include "backlight.h"
 #include "camera.h"
 #include "image_fetcher.h"
-#include "resource/assets.h"
 
 /**
  * Network events for unified callback

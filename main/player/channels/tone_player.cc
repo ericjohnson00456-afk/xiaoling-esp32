@@ -1,7 +1,7 @@
 #include "tone_player.h"
 
 #include "engine/player_engine.h"
-#include "resource/tone_model.h"
+#include "resource/resource.h"
 
 #include <esp_log.h>
 #include <esp_random.h>
@@ -16,8 +16,8 @@ uint32_t TonePlayer::Submit(const PlaybackRequest& request, PlayerEngine& engine
 }
 
 uint32_t TonePlayer::PlayTone(uint16_t tone_id) {
-    const char* url = ToneModel::GetInstance().GetUrl(tone_id);
-    if (url == nullptr) {
+    ResourceData resource;
+    if (!Resource::GetTone(tone_id, resource)) {
         ESP_LOGW("TonePlayer", "tone 不存在: id=%u", static_cast<unsigned>(tone_id));
         return 0;
     }
@@ -25,23 +25,27 @@ uint32_t TonePlayer::PlayTone(uint16_t tone_id) {
     request.session_id = allocate_session_();
     request.source_type = PlaybackSourceType::kRomfs;
     request.channel = PlaybackChannel::kPrompt;
-    request.source = url;
+    request.source = "embed://tone/" + std::to_string(tone_id) + "_tone.mp3";
     request.priority = 80;
     return Submit(request, *engine_);
 }
 
 std::optional<uint16_t> TonePlayer::SelectWakeupTone() {
-    auto& tones = ToneModel::GetInstance();
     uint16_t candidates[5] = {};
     size_t count = 0;
     for (uint16_t tone_id = 0; tone_id <= 4; ++tone_id) {
-        if (tones.GetUrl(tone_id) != nullptr && tone_id != last_wakeup_tone_) {
+        ResourceData resource;
+        if (Resource::GetTone(tone_id, resource) &&
+            tone_id != last_wakeup_tone_) {
             candidates[count++] = tone_id;
         }
     }
     if (count == 0) {
-        if (last_wakeup_tone_ && tones.GetUrl(*last_wakeup_tone_) != nullptr) {
-            return last_wakeup_tone_;
+        if (last_wakeup_tone_) {
+            ResourceData resource;
+            if (Resource::GetTone(*last_wakeup_tone_, resource)) {
+                return last_wakeup_tone_;
+            }
         }
         return std::nullopt;
     }

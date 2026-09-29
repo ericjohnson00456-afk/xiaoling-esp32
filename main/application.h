@@ -223,7 +223,7 @@ private:
     void RunXiaolingActivation();
     void ShowActivationCode(const std::string& code, const std::string& message,
                             const std::string& qrcode = "");
-    void PlayActivationAudio(uint16_t id);
+    void PlayActivationAudio(const char* name);
 
     /*  ========== 闹钟业务 ======== */
     // application_alarm.cc 通过这个唯一入口安装播放、时钟、唤醒词和小聆连接钩子。

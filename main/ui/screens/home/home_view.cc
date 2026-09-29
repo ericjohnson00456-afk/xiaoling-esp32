@@ -1,7 +1,7 @@
 #include "home_view.h"
 
 #include "display/display.h"
-#include "resource/assets.h"
+#include "resource/resource.h"
 #include "ui/ui_manager.h"
 #include "display/lvgl_display.h"
 #include "ui/themes/lvgl_theme.h"
@@ -209,12 +209,11 @@ void HomeView::CreateUi() {
 
     alarm_image_ = lv_image_create(right_icons);
     lv_obj_set_size(alarm_image_, 20, 20);
-    void* alarm_data = nullptr;
-    size_t alarm_size = 0;
-    if (Assets::GetInstance().RespakStore().GetAssetData(
-            "/icon/alarm/ic_status_alarm.png", alarm_data, alarm_size) &&
-        alarm_data != nullptr && alarm_size > 0) {
-        alarm_icon_ = std::make_unique<LvglRawImage>(alarm_data, alarm_size);
+    ResourceData alarm_asset;
+    if (Resource::Get(ResourcePackage::Respak,
+                           "/icon/alarm/ic_status_alarm.png", alarm_asset)) {
+        alarm_icon_ = std::make_unique<LvglRawImage>(
+            const_cast<uint8_t*>(alarm_asset.address), alarm_asset.size);
         lv_image_set_src(alarm_image_, alarm_icon_->image_dsc());
     }
     lv_obj_add_flag(alarm_image_, LV_OBJ_FLAG_HIDDEN);
@@ -592,15 +591,14 @@ void HomeView::SetAlarmActive(bool active) {
     }
 
     if (alarm_icon_ == nullptr) {
-        void* data = nullptr;
-        size_t size = 0;
-        if (!Assets::GetInstance().RespakStore().GetAssetData(
-                "/icon/alarm/ic_status_alarm.png", data, size) ||
-            data == nullptr || size == 0) {
+        ResourceData asset;
+        if (!Resource::Get(ResourcePackage::Respak,
+                                "/icon/alarm/ic_status_alarm.png", asset)) {
             lv_obj_add_flag(alarm_image_, LV_OBJ_FLAG_HIDDEN);
             return;
         }
-        alarm_icon_ = std::make_unique<LvglRawImage>(data, size);
+        alarm_icon_ = std::make_unique<LvglRawImage>(
+            const_cast<uint8_t*>(asset.address), asset.size);
         lv_image_set_src(alarm_image_, alarm_icon_->image_dsc());
     }
     lv_obj_remove_flag(alarm_image_, LV_OBJ_FLAG_HIDDEN);
@@ -645,16 +643,15 @@ void HomeView::SetBattery(int level, bool charging) {
         const std::string path = std::string(charging ? "/icon/battery/ic_status_charging" :
                                               "/icon/battery/ic_status_power") +
                                  std::to_string(icon_index) + ".png";
-        void* data = nullptr;
-        size_t size = 0;
-        if (!Assets::GetInstance().RespakStore().GetAssetData(path, data, size) ||
-            data == nullptr || size == 0) {
+        ResourceData asset;
+        if (!Resource::Get(ResourcePackage::Respak, path, asset)) {
             lv_obj_add_flag(battery_image_, LV_OBJ_FLAG_HIDDEN);
             battery_icon_.reset();
             battery_icon_index_ = -1;
             return;
         }
-        battery_icon_ = std::make_unique<LvglRawImage>(data, size);
+        battery_icon_ = std::make_unique<LvglRawImage>(
+            const_cast<uint8_t*>(asset.address), asset.size);
         battery_icon_index_ = icon_index;
         battery_icon_charging_ = charging;
     }
@@ -756,14 +753,13 @@ void HomeView::SetDuplexMode(DuplexMode mode) {
             : "/icon/duplux/ic_status_duplex_non_interruptible.png";
         auto& icon = full_duplex ? full_duplex_icon_ : half_duplex_icon_;
         if (!icon) {
-            void* data = nullptr;
-            size_t size = 0;
-            if (!Assets::GetInstance().RespakStore().GetAssetData(path, data, size) ||
-                data == nullptr || size == 0) {
+            ResourceData asset;
+            if (!Resource::Get(ResourcePackage::Respak, path, asset)) {
                 lv_obj_add_flag(duplex_image_, LV_OBJ_FLAG_HIDDEN);
                 return;
             }
-            icon = std::make_unique<LvglRawImage>(data, size);
+            icon = std::make_unique<LvglRawImage>(
+                const_cast<uint8_t*>(asset.address), asset.size);
         }
         lv_image_set_src(duplex_image_, icon->image_dsc());
         lv_obj_remove_flag(duplex_image_, LV_OBJ_FLAG_HIDDEN);

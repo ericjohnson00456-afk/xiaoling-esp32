@@ -1,7 +1,7 @@
 #include "alarm_player.h"
 
 #include "engine/player_engine.h"
-#include "resource/tone_model.h"
+#include "resource/resource.h"
 
 #include <esp_log.h>
 
@@ -51,8 +51,8 @@ uint32_t AlarmPlayer::Submit(const PlaybackRequest& request, PlayerEngine& engin
 }
 
 uint32_t AlarmPlayer::PlayTone(uint16_t tone_id) {
-    const char* url = ToneModel::GetInstance().GetUrl(tone_id);
-    if (url == nullptr) {
+    ResourceData resource;
+    if (!Resource::GetTone(tone_id, resource)) {
         ESP_LOGW(kTag, "闹钟 tone 不存在: id=%u", static_cast<unsigned>(tone_id));
         return 0;
     }
@@ -60,7 +60,7 @@ uint32_t AlarmPlayer::PlayTone(uint16_t tone_id) {
     request.session_id = allocate_session_();
     request.source_type = PlaybackSourceType::kRomfs;
     request.channel = PlaybackChannel::kAlarm;
-    request.source = url;
+    request.source = "embed://tone/" + std::to_string(tone_id) + "_tone.mp3";
     request.priority = 100;
     return Submit(request, *engine_);
 }

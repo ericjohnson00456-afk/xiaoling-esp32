@@ -1,7 +1,7 @@
 #include "gmf_player_engine.h"
 
 #include "audio_service.h"
-#include "../resource/tone_model.h"
+#include "resource/resource.h"
 #include "xiaoling/conn/network_diagnostics.h"
 
 #include <esp_err.h>
@@ -17,9 +17,12 @@
 
 #include <cstring>
 #include <cerrno>
+#include <array>
+#include <limits>
 #include <strings.h>
 #include <sys/socket.h>
 #include <utility>
+#include <vector>
 
 #define TAG "GmfPlayerEngine"
 
@@ -134,11 +137,24 @@ int GmfPlayerEngine::ConfigureInputIo(esp_asp_handle_t handle, void* ctx) {
     if (input_tag == nullptr || strcasecmp(input_tag, "io_embed_flash") != 0) {
         return ESP_GMF_ERR_OK;
     }
-    auto& tones = ToneModel::GetInstance();
-    if (!tones.initialized() || tones.EmbedItemCount() == 0) {
-        return ESP_GMF_ERR_OK;
+    std::array<embed_item_info_t, Resource::kToneCount> items{};
+    for (uint16_t id = 0; id < Resource::kToneCount; ++id) {
+        ResourceData resource;
+        if (!Resource::GetTone(id, resource)) {
+            continue;
+        }
+        if (resource.size > static_cast<size_t>(std::numeric_limits<int>::max())) {
+            ESP_LOGE(TAG, "离线音频资源过大: id=%u, size=%u",
+                     static_cast<unsigned>(id), static_cast<unsigned>(resource.size));
+            return ESP_GMF_ERR_INVALID_ARG;
+        }
+        items[id] = {
+            .address = resource.address,
+            .size = static_cast<int>(resource.size),
+        };
     }
-    return esp_gmf_io_embed_flash_set_context(input, tones.EmbedItems(), tones.EmbedItemCount());
+    return esp_gmf_io_embed_flash_set_context(
+        input, items.data(), static_cast<int>(items.size()));
 }
 
 GmfPlayerEngine::~GmfPlayerEngine() {

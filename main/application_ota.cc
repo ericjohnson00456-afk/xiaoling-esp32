@@ -1,12 +1,13 @@
 #include "application.h"
 
 #include "board.h"
-#include "resource/assets.h"
+#include "resource/resource.h"
 #include "settings.h"
 #include "shell/cmd/kv/kv_user.h"
 #include "system/time_sync.h"
 #include "ui/i18n/lang_config.h"
 #include "ui/ui_app.h"
+#include "ui/themes/lvgl_theme_setup.h"
 
 #include <esp_log.h>
 #include <esp_system.h>
@@ -137,8 +138,7 @@ bool Application::CheckAssetsVersion() {
     ota_flow_.resources_checked = true;
 
     auto& board = Board::GetInstance();
-    auto& assets = Assets::GetInstance();
-    if (!assets.RespakStore().partition_valid()) {
+    if (!Resource::IsAvailable(ResourcePackage::Respak)) {
         ESP_LOGW(kTag, "Resource partitions are unavailable for board %s", BOARD_NAME);
         return true;
     }
@@ -160,7 +160,6 @@ bool Application::CheckAssetsVersion() {
 
     bool downloaded = false;
     bool resource_tone_played = false;
-    bool tone_downloaded = false;
     bool emoji_downloaded = false;
     bool wake_word_downloaded = false;
     for (const auto& item : pending) {
@@ -193,6 +192,19 @@ bool Application::CheckAssetsVersion() {
             // The wake-word model points directly into its mapped ROMFS image.
             // Stop inference before the partition is unmapped and rewritten.
             audio_service_.EnableWakeWordDetection(false);
+        } else if (item.resource == Ota::Resource::Tone) {
+            // Every indexed tone address points into the current mmap. Do not
+            // unmap or rewrite the partition until all GMF readers have exited.
+            audio_player_.Stop(PlaybackEndReason::kCancelled);
+            const TickType_t stop_started = xTaskGetTickCount();
+            while (audio_player_.IsPlaying() &&
+                   xTaskGetTickCount() - stop_started < pdMS_TO_TICKS(3000)) {
+                vTaskDelay(pdMS_TO_TICKS(20));
+            }
+            if (audio_player_.IsPlaying()) {
+                ESP_LOGE(kTag, "Tone playback did not stop before resource update");
+                return false;
+            }
         }
         board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
         const bool success = ota_flow_.client->UpgradeResource(
@@ -207,9 +219,7 @@ bool Application::CheckAssetsVersion() {
             return false;
         }
         downloaded = true;
-        if (item.resource == Ota::Resource::Tone) {
-            tone_downloaded = true;
-        } else if (item.resource == Ota::Resource::Emoji) {
+        if (item.resource == Ota::Resource::Emoji) {
             emoji_downloaded = true;
         } else if (item.resource == Ota::Resource::WakeWord) {
             wake_word_downloaded = true;
@@ -217,13 +227,12 @@ bool Application::CheckAssetsVersion() {
     }
 
     if (downloaded) {
-        if (tone_downloaded && !assets.ReloadTone()) {
-            ESP_LOGW(kTag, "Failed to reload tone model after tone update");
-        }
-        if (emoji_downloaded && !assets.ReloadEmoji()) {
+        if (emoji_downloaded &&
+            !LoadEmojiResources()) {
             ESP_LOGW(kTag, "Failed to reload emoji resources after OTA");
         }
-        if (wake_word_downloaded && !assets.ReloadWakeWord()) {
+        if (wake_word_downloaded &&
+            !audio_service_.LoadWakeWordResources(true)) {
             ESP_LOGW(kTag, "Failed to reload wake-word resources after OTA");
         }
         PlayOtaTone(90);
