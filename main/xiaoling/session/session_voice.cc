@@ -6,6 +6,7 @@
 #include "board.h"
 #include "network_interface.h"
 #include "http.h"
+#include "system/psram_task.h"
 
 #include <cJSON.h>
 #include <esp_log.h>
@@ -14,8 +15,6 @@
 #include <opus.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
-#include <freertos/idf_additions.h>
-#include <esp_heap_caps.h>
 
 #include <cstring>
 #include <cctype>
@@ -163,16 +162,9 @@ public:
                      static_cast<unsigned long>(generation));
             return;
         }
-        worker_stack_external_ = true;
-        BaseType_t task_result = xTaskCreateWithCaps(
+        const BaseType_t task_result = PsramTask::Create(
             &TtsSubtitleFetcher::TaskEntry, "tts_subtitle", 8192,
-            this, 4, nullptr, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (task_result != pdPASS) {
-            worker_stack_external_ = false;
-            task_result = xTaskCreate(&TtsSubtitleFetcher::TaskEntry,
-                                      "tts_subtitle", 8192,
-                                      this, 4, nullptr);
-        }
+            this, 4, nullptr, &worker_stack_external_);
         if (task_result != pdPASS) {
             std::lock_guard<std::mutex> lock(mutex_);
             worker_running_ = false;
@@ -211,11 +203,7 @@ private:
             owner->WorkerLoop();
             external_stack = owner->worker_stack_external_;
         }
-        if (external_stack) {
-            vTaskDeleteWithCaps(nullptr);
-        } else {
-            vTaskDelete(nullptr);
-        }
+        PsramTask::Delete(external_stack);
     }
 
     void WorkerLoop() {

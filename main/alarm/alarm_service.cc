@@ -644,6 +644,8 @@ void AlarmService::RequestCloudSync() {
         ESP_LOGI(kTag, "云端闹钟同步已在进行，跳过重复请求");
         return;
     }
+    // SyncFromCloud() persists the result to NVS. NVS/Flash operations disable
+    // the cache temporarily, so this task's stack must remain in internal RAM.
     const BaseType_t created = xTaskCreate(
         [](void* arg) {
             auto* service = static_cast<AlarmService*>(arg);

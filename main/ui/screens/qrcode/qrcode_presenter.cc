@@ -8,6 +8,7 @@
 #include "ui/i18n/lang_config.h"
 #include "ui/utils/image/lvgl_image.h"
 #include "system/device_status.h"
+#include "system/psram_task.h"
 #include "qrcode_view.h"
 
 #include <utility>
@@ -26,6 +27,7 @@ struct FetchRequest {
     QrCodePresenter* presenter;
     std::string url;
     uint32_t generation;
+    bool external_stack = false;
 };
 
 class SharedLvglImage final : public LvglImage {
@@ -148,7 +150,10 @@ void QrCodePresenter::SetRoleConfigUrl(std::string url) {
 
 #if CONFIG_LSPLATFORM
     auto* request = new (std::nothrow) FetchRequest{this, request_url, generation};
-    if (request == nullptr || xTaskCreate(&QrCodePresenter::FetchTask, "qrcode_fetch", 6144, request, 2, nullptr) != pdPASS) {
+    if (request == nullptr ||
+        PsramTask::Create(&QrCodePresenter::FetchTask, "qrcode_fetch", 6144,
+                          request, 2, nullptr,
+                          &request->external_stack) != pdPASS) {
         delete request;
         CompleteFetch(request_url, generation, nullptr);
     }
@@ -203,17 +208,20 @@ bool QrCodePresenter::HasRoleConfigQrCode() const {
 }
 
 void QrCodePresenter::FetchTask(void* arg) {
+    bool external_stack = false;
 #if CONFIG_LSPLATFORM
     std::unique_ptr<FetchRequest> request(static_cast<FetchRequest*>(arg));
+    external_stack = request->external_stack;
     std::unique_ptr<LvglImage> image;
     if (auto* fetcher = Board::GetInstance().GetImageFetcher(); fetcher != nullptr) {
         image = fetcher->Fetch(request->url);
     }
     request->presenter->CompleteFetch(request->url, request->generation, std::move(image));
+    request.reset();
 #else
     delete static_cast<FetchRequest*>(arg);
 #endif
-    vTaskDelete(nullptr);
+    PsramTask::Delete(external_stack);
 }
 
 void QrCodePresenter::CompleteFetch(const std::string& url, uint32_t generation,

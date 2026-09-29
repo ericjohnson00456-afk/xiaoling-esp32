@@ -2,6 +2,7 @@
 
 #include "application.h"
 #include "playback_intent_manager.h"
+#include "system/psram_task.h"
 #include "ui/ui_app.h"
 
 #include <esp_log.h>
@@ -19,6 +20,7 @@ struct KuwoUrlTaskContext {
   MusicIntent *intent;
   std::string item_id;
   AudioPlayer::MusicUrlResolveCallback callback;
+  bool external_stack = false;
 };
 
 } // namespace
@@ -128,8 +130,10 @@ bool MusicIntent::QueueKuwoUrlResolve(
   context->intent = this;
   context->item_id = item_id;
   context->callback = std::move(callback);
-  if (xTaskCreate(ResolveKuwoUrlTask, "kuwo_resolve", 8192, context.get(), 4,
-                  nullptr) != pdPASS) {
+  const BaseType_t task_result = PsramTask::Create(
+      ResolveKuwoUrlTask, "kuwo_resolve", 8192, context.get(), 4, nullptr,
+      &context->external_stack);
+  if (task_result != pdPASS) {
     ESP_LOGE(kTag, "创建酷我 URL 解析任务失败");
     return false;
   }
@@ -140,6 +144,7 @@ bool MusicIntent::QueueKuwoUrlResolve(
 void MusicIntent::ResolveKuwoUrlTask(void *arg) {
   std::unique_ptr<KuwoUrlTaskContext> context(
       static_cast<KuwoUrlTaskContext *>(arg));
+  const bool external_stack = context->external_stack;
   auto *intent = context->intent;
   auto *app = intent->app_;
   std::string url;
@@ -153,7 +158,8 @@ void MusicIntent::ResolveKuwoUrlTask(void *arg) {
                  url = std::move(url)]() mutable {
     callback(success, std::move(url));
   });
-  vTaskDelete(nullptr);
+  context.reset();
+  PsramTask::Delete(external_stack);
 }
 
 void MusicIntent::OnEnter() {
