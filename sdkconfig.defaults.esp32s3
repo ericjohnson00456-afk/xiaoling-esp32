@@ -7,17 +7,32 @@ CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_SPEED_80M=y
-CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=512
-CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=65536
+# Keep small control objects in SRAM, but put ordinary payload/string buffers
+# in PSRAM early enough to leave contiguous internal memory for DMA and AES.
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=64
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=81920
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 CONFIG_SPIRAM_MEMTEST=n
 CONFIG_BT_ALLOCATION_FROM_SPIRAM_FIRST=y
 CONFIG_BT_BLE_DYNAMIC_ENV_MEMORY=y
 CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
 
-CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=3
-CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=6
-CONFIG_ESP_WIFI_RX_BA_WIN=3
-CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=16
+# Concurrent WebSocket, TTS and subtitle streams need enough hardware RX
+# descriptors to keep TCP ACKs moving. Twelve static buffers cost about 19.2 KB
+# in total and leave measured internal-heap headroom for transient allocations.
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=12
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=48
+CONFIG_ESP_WIFI_RX_BA_WIN=12
+CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=48
+# A TTS producer emits an initial burst larger than the IDF default 5760-byte
+# TCP window. Keep the whole burst in flight and give each active TCP socket
+# enough mailbox entries to drain it without advertising a zero window.
+CONFIG_LWIP_TCP_WND_DEFAULT=11520
+CONFIG_LWIP_TCP_RECVMBOX_SIZE=12
+# Never let one lossy HTTP stream retain every dynamic Wi-Fi RX buffer in its
+# TCP out-of-order queue. Field diagnostics showed exactly 16 OOSEQ pbufs with
+# a 16-buffer pool, followed by Wi-Fi allocation failures and stalled ACKs.
+CONFIG_LWIP_TCP_OOSEQ_MAX_PBUFS=4
 CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA=y
 
 CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y

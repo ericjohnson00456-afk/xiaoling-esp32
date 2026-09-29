@@ -4,7 +4,7 @@
 
 #include <esp_log.h>
 #include <esp_app_desc.h>
-#include <esp_jpeg_dec.h>
+#include <jpeg_decoder.h>
 
 #include "board.h"
 #include "network_interface.h"
@@ -68,26 +68,18 @@ std::unique_ptr<LvglImage> ImageFetcher::Fetch(const std::string& url, int timeo
             return nullptr;
         }
 
-        jpeg_dec_config_t config = DEFAULT_JPEG_DEC_CONFIG();
-        config.output_type = JPEG_PIXEL_FORMAT_RGB565_LE;
-
-        jpeg_dec_handle_t jpeg_dec = NULL;
-        ret = jpeg_dec_open(&config, &jpeg_dec);
-        if (ret != JPEG_ERR_OK) {
-            ESP_LOGE(TAG, "Failed to open JPEG decoder, ret=%d", ret);
-            return nullptr;
-        }
-
-        jpeg_dec_io_t jpeg_io = {0};
-        jpeg_io.inbuf = (uint8_t *)image_data.data();
-        jpeg_io.inbuf_len = image_data.size();
-
-        jpeg_dec_header_info_t out_info = {0};
-
-        ret = jpeg_dec_parse_header(jpeg_dec, &jpeg_io, &out_info);
-        if (ret != JPEG_ERR_OK) {
-            ESP_LOGE(TAG, "Failed to get JPEG header info, ret=%d", ret);
-            jpeg_dec_close(jpeg_dec);
+        esp_jpeg_image_cfg_t config = {
+            .indata = reinterpret_cast<uint8_t*>(image_data.data()),
+            .indata_size = static_cast<uint32_t>(image_data.size()),
+            .outbuf = nullptr,
+            .outbuf_size = 0,
+            .out_format = JPEG_IMAGE_FORMAT_RGB565,
+            .out_scale = JPEG_IMAGE_SCALE_0,
+        };
+        esp_jpeg_image_output_t out_info = {};
+        ret = esp_jpeg_get_image_info(&config, &out_info);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to get JPEG header info: %s", esp_err_to_name(ret));
             return nullptr;
         }
 
@@ -96,58 +88,41 @@ std::unique_ptr<LvglImage> ImageFetcher::Fetch(const std::string& url, int timeo
         if (out_info.width == 0 || out_info.height == 0 ||
             out_info.width > 2048 || out_info.height > 2048) {
             ESP_LOGE(TAG, "Invalid JPEG dimensions: %dx%d", out_info.width, out_info.height);
-            jpeg_dec_close(jpeg_dec);
             return nullptr;
         }
 
-        size_t out_size = LV_DRAW_BUF_SIZE(out_info.width, out_info.height, LV_COLOR_FORMAT_RGB565);
+        size_t out_size = out_info.output_len;
         if (out_size > 2 * 1024 * 1024) {
             ESP_LOGE(TAG, "Decoded image too large");
-            jpeg_dec_close(jpeg_dec);
             return nullptr;
         }
 
-        uint8_t* out_buf = (uint8_t*)jpeg_calloc_align(out_size, 16);
-        if (!out_buf) {
-            ESP_LOGE(TAG, "Failed to allocate memory for decoded image, size: %d bytes", (int)out_size);
-            jpeg_dec_close(jpeg_dec);
+        uint8_t* out_data = static_cast<uint8_t*>(heap_caps_aligned_alloc(
+            16, out_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        if (!out_data) {
+            ESP_LOGE(TAG, "Failed to allocate decoded image in PSRAM, size: %d bytes", (int)out_size);
             return nullptr;
         }
- 
-        jpeg_io.inbuf += jpeg_io.inbuf_len - jpeg_io.inbuf_remain;
-        jpeg_io.inbuf_len = jpeg_io.inbuf_remain;
-        jpeg_io.outbuf = out_buf;
 
-        ESP_LOGI(TAG, "Decoding JPEG image...");
+        config.outbuf = out_data;
+        config.outbuf_size = out_size;
 
-        ret = jpeg_dec_process(jpeg_dec, &jpeg_io);
-        if (ret != JPEG_ERR_OK) {
-            ESP_LOGE(TAG, "Failed to decode JPEG image, ret=%d", ret);
-            jpeg_free_align(out_buf);
-            jpeg_dec_close(jpeg_dec);
+        ESP_LOGI(TAG, "Decoding JPEG image with ROM decoder...");
+
+        ret = esp_jpeg_decode(&config, &out_info);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to decode JPEG image: %s", esp_err_to_name(ret));
+            heap_caps_free(out_data);
             return nullptr;
         }
 
         ESP_LOGI(TAG, "JPEG image decoded successfully, size: %d bytes", (int)out_size);
 
-        uint8_t* out_data = (uint8_t*)heap_caps_malloc(out_size, MALLOC_CAP_8BIT);
-        if (!out_data) {
-            ESP_LOGE(TAG, "Failed to allocate memory for image data copy, size: %d bytes", (int)out_size);
-            jpeg_free_align(out_buf);
-            jpeg_dec_close(jpeg_dec);
-            return nullptr;
-        }
-
-        memcpy(out_data, out_buf, out_size);
-        jpeg_free_align(out_buf);
-
         auto image = std::make_unique<LvglAllocatedImage>(
             out_data, out_size,
             out_info.width, out_info.height,
-            LV_DRAW_BUF_STRIDE(out_info.width, LV_COLOR_FORMAT_RGB565),
+            out_info.width * 2,
             LV_COLOR_FORMAT_RGB565);
-
-        jpeg_dec_close(jpeg_dec);
 
         return image;
     } catch (const std::exception& e) {

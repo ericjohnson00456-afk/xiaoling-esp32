@@ -3,6 +3,7 @@
 #include "system/system_info.h"
 #include "xiaoling/xiaoling_events.h"
 #include "xiaoling/conn/xiaoling_config.h"
+#include "xiaoling/conn/network_diagnostics.h"
 #include "board.h"
 #include "network_interface.h"
 #include "http.h"
@@ -30,8 +31,9 @@
 
 namespace {
 
-constexpr int kSubtitleHttpWaitMs = 1500;
-constexpr int kSubtitleHeaderMaxWaits = 8;
+constexpr int kSubtitleHttpWaitMs = 2500;
+constexpr int kSubtitleHeaderMaxWaits = 6;
+constexpr int kSubtitleReadMaxErrors = 12;
 
 const char* ReadString(const cJSON* object, const char* name) {
     if (!cJSON_IsObject(object)) {
@@ -313,9 +315,11 @@ private:
         if (network == nullptr || !IsCurrent(request.generation)) {
             return;
         }
+
         auto http = network->CreateHttp();
         if (http == nullptr) {
             ESP_LOGW(TAG, "创建字幕 HTTP 客户端失败");
+            NetworkDiagnostics::LogSnapshot("subtitle_http_create_failed");
             return;
         }
         // Bound every wait so a superseded subtitle request releases its TLS
@@ -341,6 +345,7 @@ private:
         if (!http->Open("GET", request.url)) {
             if (IsCurrent(request.generation)) {
                 ESP_LOGW(TAG, "字幕 HTTP 建连失败: %s", request.url.c_str());
+                NetworkDiagnostics::LogSnapshot("subtitle_http_open_failed");
             }
             http->Close();
             return;
@@ -367,6 +372,7 @@ private:
         ESP_LOGI(TAG, "字幕 HTTP 响应: status=%d", status_code);
         if (status_code != 200) {
             ESP_LOGW(TAG, "字幕 HTTP 请求失败: %s", request.url.c_str());
+            NetworkDiagnostics::LogSnapshot("subtitle_http_status_failed");
             http->Close();
             return;
         }
@@ -392,8 +398,9 @@ private:
                 }
                 // -1 既可能是等待超时，也可能是临时连接异常；短暂超时不能
                 // 结束 SSE，否则长句的后半段会永远没有字幕。
-                if (read_errors >= 20) {
+                if (read_errors >= kSubtitleReadMaxErrors) {
                     ESP_LOGW(TAG, "字幕 HTTP 连续读取失败，结束请求");
+                    NetworkDiagnostics::LogSnapshot("subtitle_http_read_failed");
                     break;
                 }
                 vTaskDelay(pdMS_TO_TICKS(250));
@@ -1110,13 +1117,13 @@ void XiaolingSessionVoice::SetPendingSubtitleUrl(const std::string& url,
         timeline_valid_ = true;
         reply_sid_ = reply_sid;
         pending_subtitle_url_ = url;
-        start_now = tts_pipeline_running_ || tts_audio_playing_;
+        start_now = tts_audio_playing_;
     }
     if (reply_sid.empty()) {
         ESP_LOGW(TAG, "timeline 字幕帧缺少旧回复 sid，本次可显示字幕但不做打断位置上报");
     }
     if (start_now) {
-        ESP_LOGI(TAG, "TTS 音频流水线已运行，字幕 URL 到达后立即请求");
+        ESP_LOGI(TAG, "TTS 首帧 PCM 已输出，字幕 URL 到达后立即请求");
         StartPendingSubtitleStream();
     } else {
         ESP_LOGI(TAG, "timeline 字幕 URL 已暂存，等待 TTS 音频流水线运行");
@@ -1167,8 +1174,10 @@ void XiaolingSessionVoice::OnTtsPipelinePlaying() {
         std::lock_guard<std::mutex> lock(subtitle_state_mutex_);
         tts_pipeline_running_ = true;
     }
-    ESP_LOGI(TAG, "TTS 音频 HTTPS 已就绪，释放 timeline 字幕请求");
-    StartPendingSubtitleStream();
+    // PLAYING means the HTTP request was sent, not that response audio has
+    // arrived. Keep the subtitle URL pending so two TLS handshakes do not
+    // overlap at the internal-memory peak.
+    ESP_LOGI(TAG, "TTS 音频 HTTPS 已就绪，字幕继续等待首帧 PCM");
 }
 
 void XiaolingSessionVoice::OnTtsOutputStarted() {

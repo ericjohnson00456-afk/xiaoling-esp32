@@ -74,6 +74,8 @@ private:
     int64_t last_tts_pcm_us_ = 0;
     bool tts_timeout_stop_pending_ = false;
     bool http_request_ready_emitted_ = false;
+    uint32_t tts_http_read_sequence_ = 0;
+    std::atomic<void*> tts_http_client_{nullptr};
     bool initialized_ = false;
     bool playing_ = false;
     bool draining_ = false;

@@ -57,20 +57,21 @@ void TonePlayer::PlayWakeup(std::function<void(bool)> completion) {
         CompleteWakeup(true);
         return;
     }
-    wakeup_session_id_ = PlayTone(*tone_id);
-    if (wakeup_session_id_ == 0) {
+    const uint32_t session_id = PlayTone(*tone_id);
+    wakeup_session_id_.store(session_id);
+    if (session_id == 0) {
         ESP_LOGW("TonePlayer", "Wakeup tone failed to start; continue listening");
         CompleteWakeup(true);
         return;
     }
     last_wakeup_tone_ = tone_id;
     ESP_LOGI("TonePlayer", "Wakeup tone: id=%u, session=%lu",
-             static_cast<unsigned>(*tone_id), static_cast<unsigned long>(wakeup_session_id_));
+             static_cast<unsigned>(*tone_id), static_cast<unsigned long>(session_id));
 }
 
 void TonePlayer::OnEvent(const PlaybackEvent& event) {
     if (!completion_ || event.channel != PlaybackChannel::kPrompt ||
-        event.session_id != wakeup_session_id_) {
+        event.session_id != wakeup_session_id_.load()) {
         return;
     }
     if (event.state == PlaybackState::kCompleted || event.state == PlaybackState::kFailed) {
@@ -78,6 +79,15 @@ void TonePlayer::OnEvent(const PlaybackEvent& event) {
     } else if (event.state == PlaybackState::kStopped) {
         CompleteWakeup(false);
     }
+}
+
+bool TonePlayer::IsWakeupTerminalEvent(const PlaybackEvent& event) const {
+    const uint32_t session_id = wakeup_session_id_.load();
+    return session_id != 0 && event.channel == PlaybackChannel::kPrompt &&
+           event.session_id == session_id &&
+           (event.state == PlaybackState::kCompleted ||
+            event.state == PlaybackState::kStopped ||
+            event.state == PlaybackState::kFailed);
 }
 
 void TonePlayer::CompleteWakeup(bool proceed) {
@@ -90,8 +100,7 @@ void TonePlayer::CompleteWakeup(bool proceed) {
 }
 
 void TonePlayer::CancelWakeup() {
-    const bool was_playing = wakeup_session_id_ != 0;
-    wakeup_session_id_ = 0;
+    const bool was_playing = wakeup_session_id_.exchange(0) != 0;
     completion_ = {};
     if (was_playing) {
         engine_->Stop(PlaybackEndReason::kCancelled);

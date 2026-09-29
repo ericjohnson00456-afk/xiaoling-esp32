@@ -98,10 +98,9 @@ private:
     static constexpr size_t kUplinkBatchPackets = 5;
     static constexpr uint32_t kUplinkBatchWaitMs = 40;
     static constexpr size_t kMaxControlMessages = 32;
-    // Keep post-AEC network handoff above capture/Opus (priority 8), while the
-    // PCM output task (priority 10) remains the highest audio task. Socket
-    // writes block/yield when the network is busy, so they do not spin here.
-    static constexpr UBaseType_t kUplinkTaskPriority = 9;
+    // Audio upload and control messages share the highest application tier
+    // with the TTS HTTP pull task. Wi-Fi/tcpip system tasks remain higher.
+    static constexpr UBaseType_t kUplinkTaskPriority = 12;
 
     std::unique_ptr<XiaolingSessionVoice> voice_;
     EventGroupHandle_t event_group_ = nullptr;

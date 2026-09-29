@@ -41,6 +41,7 @@ set(SOURCES "audio/audio_codec.cc"
             "xiaoling/conn/xiaoling_conn_message.cc"
             "xiaoling/conn/xiaoling_conn_websocket.cc"
             "xiaoling/conn/realtime_transport_scope.cc"
+            "xiaoling/conn/realtime_send_wrapper.cc"
             "xiaoling/conn/network_diagnostics.cc"
             "xiaoling/xiaoling_events.cc"
             "xiaoling/session/session_core.cc"
@@ -771,6 +772,11 @@ idf_component_register(SRCS ${SOURCES}
                     REQUIRES espressif__adc_battery_estimation esp_adc efuse console spi_flash app_update esp_app_format esp_psram 78__esp-opus bt
                     WHOLE_ARCHIVE
                     )
+
+# Enforce the short send deadline selected by RealtimeTransportScope without
+# patching the esp-ml307 managed component. Calls outside that scope pass
+# straight through to lwIP.
+target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=lwip_send")
 
 
 if(CONFIG_USE_MICRO_WAKE_WORD)

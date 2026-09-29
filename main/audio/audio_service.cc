@@ -27,6 +27,37 @@
 
 #define TAG "AudioService"
 
+namespace {
+constexpr UBaseType_t kAudioCodecPriority = 11;
+constexpr UBaseType_t kAudioAlgorithmPriority = 8;
+constexpr uint32_t kAudioInputIdleYieldIntervalMs = 500;
+}  // namespace
+
+AudioTask::~AudioTask() {
+    if (player_pcm != nullptr) {
+        heap_caps_free(player_pcm);
+    }
+}
+
+bool AudioTask::AllocatePlayerPcm(size_t samples) {
+    if (player_pcm != nullptr) {
+        heap_caps_free(player_pcm);
+        player_pcm = nullptr;
+        player_pcm_samples = 0;
+    }
+    if (samples == 0) {
+        return true;
+    }
+
+    player_pcm = static_cast<int16_t*>(heap_caps_aligned_alloc(
+        16, samples * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (player_pcm == nullptr) {
+        return false;
+    }
+    player_pcm_samples = samples;
+    return true;
+}
+
 
 AudioService::AudioService() {
     event_group_ = xEventGroupCreate();
@@ -112,43 +143,71 @@ void AudioService::Start() {
         AudioService* audio_service = (AudioService*)arg;
         audio_service->AudioInputTask();
         vTaskDelete(NULL);
-    }, "audio_input", 2048 * 3, this, 8, &audio_input_task_handle_, 0);
+    }, "audio_input", 2048 * 3, this, kAudioAlgorithmPriority,
+       &audio_input_task_handle_, 0);
 
     /* Start the audio output task */
     xTaskCreate([](void* arg) {
         AudioService* audio_service = (AudioService*)arg;
         audio_service->AudioOutputTask();
         vTaskDelete(NULL);
-    }, "audio_output", 2048 * 2, this, 10, &audio_output_task_handle_);
+    }, "audio_output", 2048 * 2, this, kAudioCodecPriority,
+       &audio_output_task_handle_);
 #else
     /* Start the audio input task */
     xTaskCreate([](void* arg) {
         AudioService* audio_service = (AudioService*)arg;
         audio_service->AudioInputTask();
         vTaskDelete(NULL);
-    }, "audio_input", 2048 * 2, this, 8, &audio_input_task_handle_);
+    }, "audio_input", 2048 * 2, this, kAudioAlgorithmPriority,
+       &audio_input_task_handle_);
 
     /* Start the audio output task */
     xTaskCreate([](void* arg) {
         AudioService* audio_service = (AudioService*)arg;
         audio_service->AudioOutputTask();
         vTaskDelete(NULL);
-    }, "audio_output", 2048 * 2, this, 10, &audio_output_task_handle_);
+    }, "audio_output", 2048 * 2, this, kAudioCodecPriority,
+       &audio_output_task_handle_);
 #endif
 
-    /* Start the opus codec task */
-    xTaskCreate([](void* arg) {
+    /* Opus needs a large stack, but its working set does not need scarce
+       internal SRAM. Keep that SRAM available for Wi-Fi RX and DMA. */
+    auto opus_task = [](void* arg) {
         AudioService* audio_service = (AudioService*)arg;
         audio_service->OpusCodecTask();
-        vTaskDelete(NULL);
-    }, "opus_codec", 2048 * 13, this, 8, &opus_codec_task_handle_);
+        const bool external_stack = audio_service->opus_codec_task_stack_external_;
+        audio_service->opus_codec_task_handle_ = nullptr;
+        if (external_stack) {
+            vTaskDeleteWithCaps(nullptr);
+        } else {
+            vTaskDelete(nullptr);
+        }
+    };
+    opus_codec_task_stack_external_ = true;
+    BaseType_t opus_task_result = xTaskCreateWithCaps(
+        opus_task, "opus_codec", 2048 * 13, this, kAudioCodecPriority,
+        &opus_codec_task_handle_, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (opus_task_result != pdPASS) {
+        opus_codec_task_stack_external_ = false;
+        opus_task_result = xTaskCreate(
+            opus_task, "opus_codec", 2048 * 13, this, kAudioCodecPriority,
+            &opus_codec_task_handle_);
+    }
+    if (opus_task_result != pdPASS) {
+        ESP_LOGE(TAG, "创建 Opus 编解码任务失败");
+    } else {
+        ESP_LOGI(TAG, "Opus 编解码任务栈: %s, bytes=%u",
+                 opus_codec_task_stack_external_ ? "PSRAM" : "internal",
+                 static_cast<unsigned>(2048 * 13));
+    }
 
 #if CONFIG_USE_MICRO_WAKE_WORD
     BaseType_t wake_task_result = xTaskCreatePinnedToCoreWithCaps([](void* arg) {
         AudioService* audio_service = (AudioService*)arg;
         audio_service->ProcessedWakeTask();
         vTaskDeleteWithCaps(nullptr);
-    }, "processed_wake", 2048 * 3, this, 5,
+    }, "processed_wake", 2048 * 3, this, kAudioAlgorithmPriority,
        &processed_wake_task_handle_, 0, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (wake_task_result != pdPASS) {
         ESP_LOGW(TAG, "PSRAM 唤醒任务栈分配失败，回退内部 SRAM");
@@ -156,10 +215,18 @@ void AudioService::Start() {
             AudioService* audio_service = (AudioService*)arg;
             audio_service->ProcessedWakeTask();
             vTaskDelete(nullptr);
-        }, "processed_wake", 2048 * 3, this, 5,
+        }, "processed_wake", 2048 * 3, this, kAudioAlgorithmPriority,
            &processed_wake_task_handle_, 0);
     }
 #endif
+
+    ESP_LOGI(TAG,
+             "音频任务优先级: output=%u, opus=%u, input=%u, wake=%u, afe=%u",
+             static_cast<unsigned>(kAudioCodecPriority),
+             static_cast<unsigned>(kAudioCodecPriority),
+             static_cast<unsigned>(kAudioAlgorithmPriority),
+             static_cast<unsigned>(kAudioAlgorithmPriority),
+             static_cast<unsigned>(kAudioAlgorithmPriority));
 }
 
 void AudioService::Stop() {
@@ -243,6 +310,7 @@ void AudioService::AudioInputTask() {
     std::vector<int16_t> wake_pending;
     std::vector<int16_t> processor_pending;
     std::vector<int16_t> testing_pending;
+    TickType_t last_idle_yield_tick = xTaskGetTickCount();
     while (true) {
         EventBits_t bits = xEventGroupWaitBits(event_group_, AS_EVENT_AUDIO_TESTING_RUNNING |
             AS_EVENT_WAKE_WORD_RUNNING | AS_EVENT_AUDIO_PROCESSOR_RUNNING,
@@ -251,6 +319,18 @@ void AudioService::AudioInputTask() {
         if (service_stopped_) {
             break;
         }
+
+        /* I2S input and synchronous AFE/AEC feed can form a continuously-ready
+         * loop while full-duplex upload is active. Periodically block for one
+         * scheduler tick so CPU0's Idle task can service the task watchdog.
+         * The codec DMA ring is substantially longer than this 10 ms tick. */
+        const TickType_t now_tick = xTaskGetTickCount();
+        if (now_tick - last_idle_yield_tick >=
+            pdMS_TO_TICKS(kAudioInputIdleYieldIntervalMs)) {
+            vTaskDelay(1);
+            last_idle_yield_tick = xTaskGetTickCount();
+        }
+
         if (audio_input_need_warmup_) {
             audio_input_need_warmup_ = false;
             vTaskDelay(pdMS_TO_TICKS(120));
@@ -416,29 +496,46 @@ void AudioService::AudioOutputTask() {
             break;
         }
 
-        /* Network TTS is bursty. Use a small startup watermark for response
-           latency, then a larger recovery watermark after a real underrun so
-           playback resumes as a coherent phrase instead of one PCM block at
-           a time. A finished stream always releases the gate for its tail. */
+        /* TTS starts with two seconds of actual PCM; other player sources use
+           a small 4 KiB gate. After an underrun, resume on the first new PCM
+           block. A completed stream always releases a tail below the target. */
         const bool is_player =
             audio_playback_queue_.front()->type == kAudioTaskTypePlayerToPlaybackQueue;
-        const size_t prebuffer_target = player_output_chunks_.load() == 0
-            ? PLAYER_PREBUFFER_TASKS : PLAYER_REBUFFER_TASKS;
+        const bool initial_prebuffer = player_output_chunks_.load() == 0;
+        const size_t prebuffer_target = initial_prebuffer
+                                            ? (player_tts_stream_
+                                                   ? TTS_INITIAL_PREBUFFER_BYTES
+                                                   : PLAYER_INITIAL_PREBUFFER_BYTES)
+                                            : PLAYER_RECOVERY_PREBUFFER_BYTES;
+        const auto queued_player_pcm_bytes = [this]() {
+            size_t bytes = 0;
+            for (const auto& queued_task : audio_playback_queue_) {
+                if (queued_task->type != kAudioTaskTypePlayerToPlaybackQueue) {
+                    break;
+                }
+                bytes += queued_task->PlaybackSamples() * sizeof(int16_t);
+            }
+            return bytes;
+        };
+        size_t prebuffered_pcm_bytes = is_player ? queued_player_pcm_bytes() : 0;
         while (!service_stopped_ && !audio_playback_queue_.empty() &&
                audio_playback_queue_.front()->type == kAudioTaskTypePlayerToPlaybackQueue &&
                player_prebuffering_ &&
-               audio_playback_queue_.size() < prebuffer_target &&
+               prebuffered_pcm_bytes < prebuffer_target &&
                !player_playback_finished_ &&
                is_player) {
             if (!player_prebuffer_wait_logged_) {
                 player_prebuffer_wait_logged_ = true;
-                ESP_LOGI(TAG, "播放器%s缓冲等待: queue=%u/%u, recovery=%lu",
-                         player_output_chunks_.load() == 0 ? "预" : "重新",
-                         static_cast<unsigned>(audio_playback_queue_.size()),
+                ESP_LOGI(TAG, "播放器%s PCM 缓冲等待: bytes=%u/%u, queue=%u",
+                         initial_prebuffer ? "首播" : "断流恢复",
+                         static_cast<unsigned>(prebuffered_pcm_bytes),
                          static_cast<unsigned>(prebuffer_target),
-                         static_cast<unsigned long>(player_rebuffer_count_));
+                         static_cast<unsigned>(audio_playback_queue_.size()));
             }
             audio_queue_cv_.wait(lock);
+            prebuffered_pcm_bytes = audio_playback_queue_.empty()
+                                         ? 0
+                                         : queued_player_pcm_bytes();
         }
         if (service_stopped_) {
             break;
@@ -449,9 +546,13 @@ void AudioService::AudioOutputTask() {
         if (is_player && player_prebuffering_) {
             player_prebuffering_ = false;
             player_prebuffer_wait_logged_ = false;
-            ESP_LOGI(TAG, "播放器缓冲释放: queue=%u/%u, stream_finished=%d, recovery=%lu",
-                     static_cast<unsigned>(audio_playback_queue_.size()),
+            ESP_LOGI(TAG,
+                     "播放器缓冲释放: initial=%d, pcm_bytes=%u/%u, queue=%u, "
+                     "stream_finished=%d, recovery=%lu",
+                     initial_prebuffer ? 1 : 0,
+                     static_cast<unsigned>(prebuffered_pcm_bytes),
                      static_cast<unsigned>(prebuffer_target),
+                     static_cast<unsigned>(audio_playback_queue_.size()),
                      player_playback_finished_ ? 1 : 0,
                      static_cast<unsigned long>(player_rebuffer_count_));
         }
@@ -464,9 +565,8 @@ void AudioService::AudioOutputTask() {
             player_prebuffering_ = true;
             player_prebuffer_wait_logged_ = false;
             ++player_rebuffer_count_;
-            ESP_LOGW(TAG, "播放器队列欠载，进入重新缓冲: recovery=%lu, target=%u",
-                     static_cast<unsigned long>(player_rebuffer_count_),
-                     static_cast<unsigned>(PLAYER_REBUFFER_TASKS));
+            ESP_LOGW(TAG, "播放器队列欠载，等待下一块 PCM: recovery=%lu",
+                     static_cast<unsigned long>(player_rebuffer_count_));
         }
         audio_output_busy_ = true;
         audio_queue_cv_.notify_all();
@@ -476,6 +576,10 @@ void AudioService::AudioOutputTask() {
         if (task->type == kAudioTaskTypePlayerToPlaybackQueue) {
             const uint32_t now_ms = esp_log_timestamp();
             const uint32_t previous_end_ms = player_output_last_end_ms_.load();
+            /* Mark activity before the potentially blocking codec write. A
+             * timeout callback can otherwise race with the first block after
+             * a long prebuffer and mistake active output for silence. */
+            player_output_last_activity_ms_.store(now_ms);
             if (previous_end_ms != 0) {
                 const uint32_t gap_ms = now_ms - previous_end_ms;
                 if (gap_ms >= 80) {
@@ -494,16 +598,16 @@ void AudioService::AudioOutputTask() {
             esp_timer_start_periodic(audio_power_timer_, AUDIO_POWER_CHECK_INTERVAL_MS * 1000);
             codec_->EnableOutput(true);
         }
-        codec_->OutputData(task->pcm);
+        codec_->OutputData(task->PlaybackData(), task->PlaybackSamples());
         if (player_output_started && callbacks_.on_player_output_started) {
             ESP_LOGI(TAG, "播放器首个 PCM 已交给 codec: samples=%u",
-                     static_cast<unsigned>(task->pcm.size()));
+                     static_cast<unsigned>(task->PlaybackSamples()));
             callbacks_.on_player_output_started();
         }
         if (task->type == kAudioTaskTypePlayerToPlaybackQueue) {
             const int sample_rate = codec_->output_sample_rate();
             const uint32_t duration_ms = sample_rate > 0
-                ? static_cast<uint32_t>((static_cast<uint64_t>(task->pcm.size()) * 1000) /
+                ? static_cast<uint32_t>((static_cast<uint64_t>(task->PlaybackSamples()) * 1000) /
                                         static_cast<uint32_t>(sample_rate))
                 : 0;
             if (duration_ms > 0) {
@@ -521,7 +625,9 @@ void AudioService::AudioOutputTask() {
         lock.unlock();
 
         if (task->type == kAudioTaskTypePlayerToPlaybackQueue) {
-            player_output_last_end_ms_.store(esp_log_timestamp());
+            const uint32_t output_end_ms = esp_log_timestamp();
+            player_output_last_end_ms_.store(output_end_ms);
+            player_output_last_activity_ms_.store(output_end_ms);
         }
 
         /* Update the last output time */
@@ -748,8 +854,7 @@ bool AudioService::PushPcmToPlaybackQueue(const uint8_t* data, size_t size, int 
     auto task = std::make_unique<AudioTask>();
     task->type = kAudioTaskTypePlayerToPlaybackQueue;
     task->timestamp = 0;
-    task->pcm.resize(size / sizeof(int16_t));
-    std::memcpy(task->pcm.data(), data, size);
+    const size_t input_samples = size / sizeof(int16_t);
 
     /* 两个播放器任务在通道切换时可能交接，重采样状态必须串行访问。 */
     {
@@ -760,13 +865,23 @@ bool AudioService::PushPcmToPlaybackQueue(const uint8_t* data, size_t size, int 
                 player_resampler_.Configure(sample_rate, codec_->output_sample_rate());
                 player_resampler_input_rate_ = sample_rate;
             }
-            int target_size = player_resampler_.GetOutputSamples(task->pcm.size());
-            std::vector<int16_t> resampled(target_size);
-            player_resampler_.Process(task->pcm.data(), task->pcm.size(), resampled.data());
-            task->pcm = std::move(resampled);
+            const int target_size = player_resampler_.GetOutputSamples(input_samples);
+            if (target_size <= 0 || !task->AllocatePlayerPcm(target_size)) {
+                ESP_LOGE(TAG, "播放器 PCM PSRAM 分配失败: samples=%d", target_size);
+                return false;
+            }
+            player_resampler_.Process(reinterpret_cast<const int16_t*>(data), input_samples,
+                                      task->player_pcm);
+        } else {
+            if (!task->AllocatePlayerPcm(input_samples)) {
+                ESP_LOGE(TAG, "播放器 PCM PSRAM 分配失败: bytes=%u",
+                         static_cast<unsigned>(size));
+                return false;
+            }
+            std::memcpy(task->player_pcm, data, size);
         }
     }
-    const size_t pcm_bytes = task->pcm.size() * sizeof(int16_t);
+    const size_t pcm_bytes = task->PlaybackSamples() * sizeof(int16_t);
 
     std::unique_lock<std::mutex> lock(audio_queue_mutex_);
     const uint32_t enqueue_wait_start_ms = esp_log_timestamp();
@@ -795,13 +910,17 @@ bool AudioService::PushPcmToPlaybackQueue(const uint8_t* data, size_t size, int 
     audio_queue_cv_.notify_all();
     if (first_chunk) {
         ESP_LOGI(TAG, "首个播放器 PCM 入队: bytes=%u, queue=%u",
-                 static_cast<unsigned>(size), static_cast<unsigned>(queue_size));
+                 static_cast<unsigned>(pcm_bytes), static_cast<unsigned>(queue_size));
     }
     return true;
 }
 
-void AudioService::BeginPlayerPlayback() {
+void AudioService::BeginPlayerPlayback(bool tts_stream) {
     ResetDecoder();
+    {
+        std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+        player_tts_stream_ = tts_stream;
+    }
     player_stream_active_.store(true);
 }
 
@@ -818,7 +937,13 @@ void AudioService::MarkPlayerPlaybackFinished() {
         const size_t padding_bytes = dma_buffer_bytes - remainder;
         auto padding = std::make_unique<AudioTask>();
         padding->type = kAudioTaskTypePlayerToPlaybackQueue;
-        padding->pcm.assign(padding_bytes / sizeof(int16_t), 0);
+        if (!padding->AllocatePlayerPcm(padding_bytes / sizeof(int16_t))) {
+            ESP_LOGE(TAG, "播放器末尾对齐 PCM PSRAM 分配失败: bytes=%u",
+                     static_cast<unsigned>(padding_bytes));
+            audio_queue_cv_.notify_all();
+            return;
+        }
+        std::memset(padding->player_pcm, 0, padding_bytes);
         audio_playback_queue_.push_back(std::move(padding));
         player_pcm_bytes_ += padding_bytes;
         ESP_LOGI(TAG, "播放器末尾 DMA 对齐: padding=%u bytes",
@@ -1211,6 +1336,7 @@ void AudioService::ResetDecoder() {
     player_resampler_input_rate_ = 0;
     player_output_chunks_.store(0);
     player_output_last_end_ms_.store(0);
+    player_output_last_activity_ms_.store(0);
     player_output_underruns_.store(0);
     player_audio_clock_ms_.store(0);
     player_pcm_bytes_ = 0;
@@ -1218,6 +1344,7 @@ void AudioService::ResetDecoder() {
     audio_decode_queue_.clear();
     audio_playback_queue_.clear();
     player_playback_finished_ = false;
+    player_tts_stream_ = false;
     player_prebuffering_ = true;
     player_prebuffer_wait_logged_ = false;
     player_rebuffer_count_ = 0;

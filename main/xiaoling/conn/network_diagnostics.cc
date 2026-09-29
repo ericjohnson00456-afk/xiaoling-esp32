@@ -553,7 +553,8 @@ void LogSnapshot(const char* reason) {
              ip, gateway, dns);
     ESP_LOGW(TAG,
              "Runtime snapshot: internal_free=%u, internal_min=%u, "
-             "internal_largest=%u, dma_free=%u, task_stack_free=%u words",
+             "internal_largest=%u, dma_free=%u, psram_free=%u, "
+             "psram_largest=%u, task_stack_free=%u words",
              static_cast<unsigned>(heap_caps_get_free_size(
                  MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
              static_cast<unsigned>(heap_caps_get_minimum_free_size(
@@ -561,6 +562,9 @@ void LogSnapshot(const char* reason) {
              static_cast<unsigned>(heap_caps_get_largest_free_block(
                  MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
              static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_DMA)),
+             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)),
+             static_cast<unsigned>(heap_caps_get_largest_free_block(
+                 MALLOC_CAP_SPIRAM)),
              static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
 }
 

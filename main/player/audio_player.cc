@@ -383,6 +383,13 @@ void AudioPlayer::PlayWakeup(std::function<void(bool)> completion) {
     }
     tone_channel_->PlayWakeup([this, completion = std::move(completion)](bool proceed) {
         wakeup_in_progress_ = false;
+        if (tts_channel_ != nullptr) {
+            if (proceed) {
+                tts_channel_->ResumeDeferredUrl();
+            } else {
+                tts_channel_->ClearDeferredUrl();
+            }
+        }
         if (completion) completion(proceed);
     });
 }
@@ -392,6 +399,9 @@ void AudioPlayer::CancelWakeup() {
         tone_channel_->CancelWakeup();
     }
     wakeup_in_progress_ = false;
+    if (tts_channel_ != nullptr) {
+        tts_channel_->ClearDeferredUrl();
+    }
 }
 
 bool AudioPlayer::IsWakeupPending() const {
@@ -535,6 +545,20 @@ void AudioPlayer::SetTtsUrlCallback(TtsUrlCallback callback) {
 }
 
 void AudioPlayer::HandleEngineEvent(const PlaybackEvent& event) {
+    // GMF 的终态在播放器已经完成 DMA 排空后到达。这里立即释放准入保护，
+    // 避免低优先级 Application/UI 队列延迟处理提示音回调时误拒绝 TTS URL。
+    if (tone_channel_ != nullptr && tone_channel_->IsWakeupTerminalEvent(event)) {
+        wakeup_in_progress_ = false;
+        if (tts_channel_ != nullptr) {
+            if (event.state == PlaybackState::kCompleted ||
+                event.state == PlaybackState::kFailed) {
+                tts_channel_->ResumeDeferredUrl();
+            } else {
+                tts_channel_->ClearDeferredUrl();
+            }
+        }
+    }
+
     EventCallback callback;
     {
         std::lock_guard<std::mutex> lock(callback_mutex_);

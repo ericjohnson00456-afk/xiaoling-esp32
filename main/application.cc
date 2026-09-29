@@ -285,6 +285,16 @@ void Application::Initialize() {
         if (connection == nullptr) {
             return;
         }
+        if (!connection->IsSessionActive() &&
+            audio_service_.GetUplinkDiagnostics().upload_enabled) {
+            // A failed WebSocket resets the cloud session immediately. Stop
+            // producing packets until the protocol reconnect callback creates
+            // a new session; otherwise the codec task keeps feeding a dead
+            // connection and floods the network worker with rejected packets.
+            ESP_LOGW(TAG, "云端语音会话已失效，暂停本地音频上行");
+            audio_service_.EnableAudioUpload(false);
+            return;
+        }
         constexpr size_t kMaxDirectHandoffPackets = 8;
         for (size_t i = 0; i < kMaxDirectHandoffPackets; ++i) {
             auto packet = audio_service_.PopPacketFromSendQueue();
@@ -710,6 +720,23 @@ void Application::InitializeXiaolingConn() {
             ESP_LOGW(TAG, "服务端采样率 %d 与设备输出采样率 %d 不一致",
                      xiaoling_conn_->server_sample_rate(), codec->output_sample_rate());
         }
+        // A transport reconnect resets the cloud voice session. If it happened
+        // while waiting for speech, establish a fresh session instead of
+        // leaving the microphone producer detached from the cloud forever.
+        Schedule([this]() {
+            if (GetDeviceState() != kDeviceStateListening ||
+                xiaoling_conn_ == nullptr || xiaoling_conn_->CanUploadAudio()) {
+                return;
+            }
+            ESP_LOGI(TAG, "WebSocket 重连完成，恢复全双工语音会话");
+            xiaoling_conn_->SendStartListening(listening_mode_);
+            if (xiaoling_conn_->CanUploadAudio()) {
+                audio_service_.EnableVoiceProcessing(true);
+#ifdef CONFIG_LSPLATFORM
+                uplink_watchdog_.Start();
+#endif  // CONFIG_LSPLATFORM
+            }
+        });
     });
 
     xiaoling_conn_->OnNetworkError([this](XiaolingError error) {
@@ -1163,8 +1190,11 @@ void Application::BeginWakeup(ListeningMode mode) {
     ESP_LOGI(TAG, "Wakeup tone started; start audio upload in parallel");
     SetListeningMode(mode);
     audio_player_.SetTtsUrlCallback([this]() {
+        const uint32_t generation = tts_url_generation_.fetch_add(1) + 1;
         tts_waiting_for_playback_.store(true);
         tts_output_started_.store(false);
+        ESP_LOGI(TAG, "TTS URL 已接纳: generation=%lu",
+                 static_cast<unsigned long>(generation));
         if (exit_requested_.load()) {
             // MCP exit 可能与 URL 通知发生竞态；即使 URL 在退出请求之后到达，
             // 也要保持唤醒检测关闭。
@@ -1187,20 +1217,34 @@ void Application::BeginWakeup(ListeningMode mode) {
                 if (xiaoling_conn_) xiaoling_conn_->SendStopListening();
             }
             if (has_music) {
-                ESP_LOGI(TAG, "音乐事件存在，收到 TTS URL 后停止录音");
+                ESP_LOGI(TAG,
+                         "音乐事件存在，收到 TTS URL 后仅停止本地录音，保持云端合成");
                 audio_service_.EnableVoiceProcessing(false);
-                if (xiaoling_conn_) xiaoling_conn_->SendStopListening();
+#ifdef CONFIG_LSPLATFORM
+                uplink_watchdog_.Stop();
+#endif  // CONFIG_LSPLATFORM
+                // 全双工下 action:cancel 会终止整个云端会话，其中也包括刚刚
+                // 发布 URL 的流式 TTS。这里只停止麦克风生产者；TTS 播放完成
+                // 后的统一收尾会调用 EndSession()。
             }
         });
     });
     if (iat_subscription_id_ == 0) {
         auto on_iat_text = [this](const XiaolingEvent& event) {
-            ScheduleUrgent([this, text = event.text]() {
-                if (text.empty() || iat_utterance_active_) {
+            /* This callback runs on the connection task before dispatch to the
+             * application task. Preserve which TTS existed at that instant. */
+            const uint32_t observed_tts_generation = tts_url_generation_.load();
+            const uint32_t received_ms = esp_log_timestamp();
+            ScheduleUrgent([this, text = event.text, observed_tts_generation,
+                            received_ms]() {
+                if (text.empty()) {
                     return;
                 }
-                iat_utterance_active_ = true;
-                if (GetDeviceState() == kDeviceStateListening) {
+                const bool first_iat = !iat_utterance_active_;
+                if (first_iat) {
+                    iat_utterance_active_ = true;
+                }
+                if (first_iat && GetDeviceState() == kDeviceStateListening) {
                     // 有效的 IAT 结果说明用户已经说话。重新开始空闲计时窗口，
                     // 让超时统计从用户说完后的静音开始，而不是从唤醒时开始。
                     listening_started_at_us_ = esp_timer_get_time();
@@ -1210,13 +1254,33 @@ void Application::BeginWakeup(ListeningMode mode) {
                                         tts_waiting_for_playback_.load();
                 if (session_controller_.policy().allow_barge_in &&
                     !audio_player_.IsWakeupPending() && tts_active) {
+                    const uint32_t current_tts_generation = tts_url_generation_.load();
+                    if (observed_tts_generation != current_tts_generation) {
+                        if (first_iat) {
+                            ESP_LOGI(TAG,
+                                     "跳过延迟 IAT 对新 TTS 的误打断: observed=%lu, "
+                                     "current=%lu, delay=%lums, bytes=%u",
+                                     static_cast<unsigned long>(observed_tts_generation),
+                                     static_cast<unsigned long>(current_tts_generation),
+                                     static_cast<unsigned long>(esp_log_timestamp() - received_ms),
+                                     static_cast<unsigned>(text.size()));
+                        }
+                        return;
+                    }
+                    if (interrupted_tts_generation_ == current_tts_generation) {
+                        return;
+                    }
+                    interrupted_tts_generation_ = current_tts_generation;
                     // 全双工模式在播放 TTS 时会刻意保持监听状态，因此不能用
                     // DeviceStatus 判断用户是否打断。非空 IAT 结果才是用户已开始
                     // 新一轮讲话的可靠依据。
                     ESP_LOGI(TAG,
-                             "非空 IAT 打断 TTS: session=%lu, waiting=%d, bytes=%u",
+                             "非空 IAT 打断 TTS: session=%lu, generation=%lu, "
+                             "waiting=%d, delay=%lums, bytes=%u",
                              static_cast<unsigned long>(active_tts_session_id_),
+                             static_cast<unsigned long>(current_tts_generation),
                              tts_waiting_for_playback_.load() ? 1 : 0,
+                             static_cast<unsigned long>(esp_log_timestamp() - received_ms),
                              static_cast<unsigned>(text.size()));
                     if (xiaoling_conn_) {
                         xiaoling_conn_->HandleIatBargeIn();
@@ -1391,13 +1455,13 @@ void Application::HandleStateChangedEvent() {
                 xiaoling_conn_->SendStartListening(listening_mode_);
             }
 
-            // 确保音频处理器正在运行。
-            if (!audio_service_.IsAudioProcessorRunning()) {
-                audio_service_.EnableVoiceProcessing(true);
+            // EnableVoiceProcessing() always opens the upload gate and only
+            // starts the processor when needed. This also recovers a processor
+            // left running after a transient transport reset disabled upload.
+            audio_service_.EnableVoiceProcessing(true);
 #ifdef CONFIG_LSPLATFORM
-                uplink_watchdog_.Start();
+            uplink_watchdog_.Start();
 #endif  // 小聆平台
-            }
 
             break;
         case kDeviceStateSpeaking:

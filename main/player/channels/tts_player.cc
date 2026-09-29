@@ -15,9 +15,7 @@ TtsPlayer::TtsPlayer(PlayerEngine& engine, SessionAllocator allocate_session)
     : engine_(&engine), allocate_session_(std::move(allocate_session)) {
     subscription_id_ = XiaolingEventBus::GetInstance().Subscribe(
         XIAOLING_TTS_URL, [this](const XiaolingEvent& event) {
-            if (PlayUrlInternal(event.text, true) == 0) {
-                ESP_LOGE(TAG, "订阅到 TTS URL，但提交流式播放失败");
-            }
+            HandleSubscribedUrl(event.text);
         });
 }
 
@@ -49,6 +47,24 @@ uint32_t TtsPlayer::PlayUrl(const std::string& url) {
     return PlayUrlInternal(url, false);
 }
 
+void TtsPlayer::HandleSubscribedUrl(std::string url) {
+    if (!IsHttpUrl(url)) {
+        ESP_LOGE(TAG, "拒绝无效的 TTS URL, bytes=%u", static_cast<unsigned>(url.size()));
+        return;
+    }
+    if (admission_callback_ && !admission_callback_()) {
+        {
+            std::lock_guard<std::mutex> lock(deferred_mutex_);
+            deferred_url_ = std::move(url);
+        }
+        ESP_LOGI(TAG, "唤醒提示音尚未排空，暂存 TTS URL");
+        return;
+    }
+    if (SubmitUrl(url, true) == 0) {
+        ESP_LOGE(TAG, "订阅到 TTS URL，但提交流式播放失败");
+    }
+}
+
 uint32_t TtsPlayer::PlayUrlInternal(const std::string& url, bool notify) {
     if (!IsHttpUrl(url)) {
         ESP_LOGE(TAG, "拒绝无效的 TTS URL, bytes=%u", static_cast<unsigned>(url.size()));
@@ -57,6 +73,10 @@ uint32_t TtsPlayer::PlayUrlInternal(const std::string& url, bool notify) {
     if (admission_callback_ && !admission_callback_()) {
         return 0;
     }
+    return SubmitUrl(url, notify);
+}
+
+uint32_t TtsPlayer::SubmitUrl(const std::string& url, bool notify) {
     if (notify && url_callback_) {
         url_callback_();
     }
@@ -69,6 +89,37 @@ uint32_t TtsPlayer::PlayUrlInternal(const std::string& url, bool notify) {
     return Submit(request, *engine_);
 }
 
+bool TtsPlayer::ResumeDeferredUrl() {
+    std::string url;
+    {
+        std::lock_guard<std::mutex> lock(deferred_mutex_);
+        if (deferred_url_.empty()) {
+            return false;
+        }
+        url = std::move(deferred_url_);
+        deferred_url_.clear();
+    }
+
+    if (admission_callback_ && !admission_callback_()) {
+        std::lock_guard<std::mutex> lock(deferred_mutex_);
+        if (deferred_url_.empty()) {
+            deferred_url_ = std::move(url);
+        }
+        return false;
+    }
+    if (SubmitUrl(url, true) == 0) {
+        ESP_LOGE(TAG, "恢复暂存的 TTS URL 失败");
+        return false;
+    }
+    ESP_LOGI(TAG, "唤醒提示音已排空，提交暂存的 TTS URL");
+    return true;
+}
+
+void TtsPlayer::ClearDeferredUrl() {
+    std::lock_guard<std::mutex> lock(deferred_mutex_);
+    deferred_url_.clear();
+}
+
 void TtsPlayer::SetUrlCallback(UrlCallback callback) {
     url_callback_ = std::move(callback);
 }
@@ -78,5 +129,6 @@ void TtsPlayer::SetAdmissionCallback(AdmissionCallback callback) {
 }
 
 void TtsPlayer::Cancel(PlayerEngine& engine) {
+    ClearDeferredUrl();
     engine.Stop(PlaybackEndReason::kCancelled);
 }

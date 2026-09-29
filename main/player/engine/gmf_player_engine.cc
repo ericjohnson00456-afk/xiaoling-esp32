@@ -2,8 +2,10 @@
 
 #include "audio_service.h"
 #include "../resource/tone_model.h"
+#include "xiaoling/conn/network_diagnostics.h"
 
 #include <esp_err.h>
+#include <esp_http_client.h>
 #include <esp_log.h>
 #include <sdkconfig.h>
 #include <esp_audio_simple_player_advance.h>
@@ -14,7 +16,9 @@
 #include <freertos/idf_additions.h>
 
 #include <cstring>
+#include <cerrno>
 #include <strings.h>
+#include <sys/socket.h>
 #include <utility>
 
 #define TAG "GmfPlayerEngine"
@@ -25,11 +29,28 @@ namespace {
 // An 8 KiB request therefore turns a live MP3 stream into multi-second bursts.
 // Keep each network read small, while retaining enough asynchronous buffering
 // to absorb short cloud-generation stalls.
+// A live TTS response may only have part of the next MP3 frame available.
+// The service generates speech in segments and can expose less than one MP3
+// frame at a time. Keep reads small so those bytes reach the decoder instead
+// of waiting for a larger batch in esp_http_client_read().
+// One MP3 frame is 216 bytes for the current 48 kbps/16 kHz stream. Reading
+// 1 KiB at a time drains a server burst fast enough to keep the small lwIP
+// receive window moving, while the 50 ms body timeout below still releases a
+// partial read promptly when fewer bytes are available.
 constexpr size_t kStreamingHttpReadSize = 1024;
 constexpr size_t kStreamingHttpBufferSize = 32 * 1024;
+// esp_http_client_read() otherwise waits for the whole requested length. A
+// short body-only timeout makes it return a partial body as soon as a sparse
+// live TTS chunk has arrived. Header/connect operations retain the GMF default.
+constexpr int kStreamingHttpBodyReadTimeoutMs = 50;
 constexpr size_t kPlayerCommandStackSize = 4096;
-constexpr UBaseType_t kPlayerCommandPriority = 8;
-constexpr uint64_t kTtsPcmTimeoutUs = 5ULL * 1000ULL * 1000ULL;
+constexpr UBaseType_t kPlayerCommandPriority = 7;
+constexpr UBaseType_t kNetworkStreamPriority = 12;
+constexpr UBaseType_t kPlayerDecodePriority = 11;
+// Apply the same deadline to initial synthesis and a mid-stream synthesis
+// stall. The initial deadline starts when the HTTP stream is submitted.
+constexpr uint64_t kTtsFirstPcmTimeoutUs = 5ULL * 1000ULL * 1000ULL;
+constexpr uint64_t kTtsPcmStallTimeoutUs = 5ULL * 1000ULL * 1000ULL;
 #if CONFIG_FREERTOS_NUMBER_OF_CORES > 1
 constexpr BaseType_t kPlayerCommandCore = 1;
 #else
@@ -76,9 +97,9 @@ int GmfPlayerEngine::ConfigureInputIo(esp_asp_handle_t handle, void* ctx) {
         // it and creates its task/data bus. This overrides the generic HTTP
         // defaults only for playback, without patching managed_components.
         auto* io = static_cast<esp_gmf_io_t*>(input);
-        // Keep TTS network work away from the core-0 AFE path. The audio
-        // output task remains above it at priority 10.
-        io->io_cfg.thread.prio = 9;
+        // Pull network data before decoder/output tasks consume their buffers.
+        // Keep TTS network work away from the core-0 AFE path.
+        io->io_cfg.thread.prio = kNetworkStreamPriority;
         io->io_cfg.thread.core = kPlayerCommandCore;
         io->io_cfg.thread.stack_in_ext = true;
         io->io_cfg.buffer_cfg.io_size = kStreamingHttpReadSize;
@@ -97,9 +118,13 @@ int GmfPlayerEngine::ConfigureInputIo(esp_asp_handle_t handle, void* ctx) {
             }
         }
 
-        ESP_LOGI(TAG, "TTS HTTP 流式输入已配置: read=%u, ringbuffer=%u bytes",
+        ESP_LOGI(TAG,
+                 "TTS HTTP 流式输入已配置: read=%u, ringbuffer=%u bytes, "
+                 "priority=%u, core=%d",
                  static_cast<unsigned>(kStreamingHttpReadSize),
-                 static_cast<unsigned>(kStreamingHttpBufferSize));
+                 static_cast<unsigned>(kStreamingHttpBufferSize),
+                 static_cast<unsigned>(kNetworkStreamPriority),
+                 kPlayerCommandCore);
         // Keep the component's acquire_read implementation intact. The hook
         // above only observes request lifecycle and its engine context has the
         // same lifetime as the player handle.
@@ -154,9 +179,8 @@ bool GmfPlayerEngine::Initialize(AudioService* audio_service, EventCallback call
     esp_asp_cfg_t config = {};
     config.out.cb = OutputCallback;
     config.out.user_ctx = this;
-    // TTS decode is the latency-sensitive downlink path. Keep it on the
-    // secondary core with enough stack and priority to run ahead of AFE work.
-    config.task_prio = 9;
+    // Decode follows the network input task on the secondary core.
+    config.task_prio = kPlayerDecodePriority;
     config.task_stack = 8 * 1024;
     config.task_core = 1;
     // The decoder task has an 8 KiB stack. Keeping it in PSRAM preserves
@@ -172,6 +196,8 @@ bool GmfPlayerEngine::Initialize(AudioService* audio_service, EventCallback call
         handle_ = nullptr;
         return false;
     }
+    ESP_LOGI(TAG, "播放器解码任务优先级: priority=%u, core=%d",
+             static_cast<unsigned>(kPlayerDecodePriority), config.task_core);
     if (esp_audio_simple_player_set_event(handle_, EventCallbackAdapter, this) != ESP_GMF_ERR_OK) {
         ESP_LOGE(TAG, "注册 GMF 播放事件失败");
         esp_audio_simple_player_destroy(handle_);
@@ -247,7 +273,12 @@ bool GmfPlayerEngine::DoPlay(const PlaybackRequest& request) {
     DisarmTtsPcmTimeout();
 
     // 新媒体开始前清掉旧下行 Opus 和残留 PCM，物理 I2S 仍由 AudioOutputTask 独占。
-    audio_service_->BeginPlayerPlayback();
+    audio_service_->BeginPlayerPlayback(request.channel == PlaybackChannel::kTts);
+    playback_started_ms_ = esp_log_timestamp();
+    ESP_LOGI(TAG, "开始流式播放: session=%lu, channel=%d, host=%s, url_bytes=%u",
+             static_cast<unsigned long>(request.session_id), static_cast<int>(request.channel),
+             UrlHostForLog(request.source).c_str(),
+             static_cast<unsigned>(request.source.size()));
     const int64_t started_us = esp_timer_get_time();
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -256,6 +287,7 @@ bool GmfPlayerEngine::DoPlay(const PlaybackRequest& request) {
         playing_ = true;
         draining_ = false;
         http_request_ready_emitted_ = false;
+        tts_http_client_ = nullptr;
         tts_timeout_session_id_ = request.channel == PlaybackChannel::kTts
                                       ? request.session_id
                                       : 0;
@@ -264,18 +296,14 @@ bool GmfPlayerEngine::DoPlay(const PlaybackRequest& request) {
                                       : 0;
         last_tts_pcm_us_ = 0;
         tts_timeout_stop_pending_ = false;
+        tts_http_read_sequence_ = 0;
     }
 
-    ESP_LOGI(TAG, "开始流式播放: session=%lu, channel=%d, host=%s, url_bytes=%u",
-             static_cast<unsigned long>(request.session_id), static_cast<int>(request.channel),
-             UrlHostForLog(request.source).c_str(),
-             static_cast<unsigned>(request.source.size()));
-    playback_started_ms_ = esp_log_timestamp();
     output_chunks_ = 0;
     const auto result = esp_audio_simple_player_run(handle_, request.source.c_str(), nullptr);
     if (result == ESP_GMF_ERR_OK) {
         if (request.channel == PlaybackChannel::kTts) {
-            ArmTtsPcmTimeout(kTtsPcmTimeoutUs);
+            ArmTtsPcmTimeout(kTtsFirstPcmTimeoutUs);
         }
         command_pending_playback_ = false;
         ESP_LOGI(TAG, "GMF run 已提交: session=%lu, elapsed=%lums",
@@ -286,6 +314,9 @@ bool GmfPlayerEngine::DoPlay(const PlaybackRequest& request) {
 
     ESP_LOGE(TAG, "启动流式播放失败: session=%lu, error=0x%x",
              static_cast<unsigned long>(request.session_id), result);
+    if (request.source_type == PlaybackSourceType::kUrl) {
+        NetworkDiagnostics::LogSnapshot("player_http_start_failed");
+    }
     DisarmTtsPcmTimeout();
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -353,7 +384,9 @@ bool GmfPlayerEngine::DoResume() {
         }
     }
     if (resumed && is_tts) {
-        ArmTtsPcmTimeout(kTtsPcmTimeoutUs);
+        ArmTtsPcmTimeout(output_chunks_.load() == 0
+                             ? kTtsFirstPcmTimeoutUs
+                             : kTtsPcmStallTimeoutUs);
     }
     return resumed;
 }
@@ -509,7 +542,7 @@ void GmfPlayerEngine::HandleTtsPcmTimeout() {
     PlaybackEndReason timeout_reason = PlaybackEndReason::kNone;
     uint32_t session_id = 0;
     uint64_t remaining_us = 0;
-    const int64_t now_us = esp_timer_get_time();
+    void* http_client = nullptr;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!playing_ || current_request_.channel != PlaybackChannel::kTts ||
@@ -518,20 +551,42 @@ void GmfPlayerEngine::HandleTtsPcmTimeout() {
             return;
         }
         const bool received_pcm = output_chunks_.load() != 0;
-        const int64_t reference_us = received_pcm
-                                         ? last_tts_pcm_us_
-                                         : tts_timeout_started_us_;
+        int64_t reference_us = received_pcm
+                                   ? last_tts_pcm_us_
+                                   : tts_timeout_started_us_;
+        if (received_pcm) {
+            /* Once playback has started, an upstream synthesis pause is not
+             * an audible stall while the PCM reserve is still draining. Use
+             * the speaker's last completed output block as the deadline so
+             * the five-second timeout measures actual silence. */
+            const uint32_t last_output_ms =
+                audio_service_->GetPlayerOutputLastActivityMs();
+            if (last_output_ms != 0) {
+                reference_us = static_cast<int64_t>(last_output_ms) * 1000;
+            }
+        }
         if (reference_us <= 0) {
             return;
         }
-        const uint64_t elapsed_us = static_cast<uint64_t>(now_us - reference_us);
-        if (elapsed_us < kTtsPcmTimeoutUs) {
-            remaining_us = kTtsPcmTimeoutUs - elapsed_us;
+        /* Sample time after taking mutex_. A PCM callback can refresh the
+         * reference while this timer callback is waiting for the lock; using
+         * a timestamp captured before the lock would make the subtraction
+         * negative and its unsigned conversion look like a huge timeout. */
+        const int64_t now_us = esp_timer_get_time();
+        const uint64_t timeout_us = received_pcm
+                                        ? kTtsPcmStallTimeoutUs
+                                        : kTtsFirstPcmTimeoutUs;
+        const uint64_t elapsed_us = now_us >= reference_us
+                                        ? static_cast<uint64_t>(now_us - reference_us)
+                                        : 0;
+        if (elapsed_us < timeout_us) {
+            remaining_us = timeout_us - elapsed_us;
         } else {
             timeout_reason = received_pcm
                                  ? PlaybackEndReason::kPcmStallTimeout
                                  : PlaybackEndReason::kFirstPcmTimeout;
             session_id = current_request_.session_id;
+            http_client = tts_http_client_.exchange(nullptr);
             tts_timeout_stop_pending_ = true;
         }
     }
@@ -541,11 +596,35 @@ void GmfPlayerEngine::HandleTtsPcmTimeout() {
         return;
     }
 
-    ESP_LOGE(TAG, "TTS PCM 超时: session=%lu, type=%s, timeout=5000ms",
+    const unsigned long timeout_ms = static_cast<unsigned long>(
+        (timeout_reason == PlaybackEndReason::kFirstPcmTimeout
+             ? kTtsFirstPcmTimeoutUs
+             : kTtsPcmStallTimeoutUs) / 1000ULL);
+    ESP_LOGE(TAG, "TTS PCM 超时: session=%lu, type=%s, timeout=%lums",
              static_cast<unsigned long>(session_id),
              timeout_reason == PlaybackEndReason::kFirstPcmTimeout
                  ? "first_pcm"
-                 : "pcm_stall");
+                 : "pcm_stall",
+             timeout_ms);
+    NetworkDiagnostics::LogSnapshot("tts_pcm_timeout");
+    if (http_client != nullptr) {
+        const int fd = esp_http_client_get_socket(
+            static_cast<esp_http_client_handle_t>(http_client));
+        if (fd >= 0) {
+            errno = 0;
+            const int shutdown_result = shutdown(fd, SHUT_RDWR);
+            const int shutdown_errno = shutdown_result == 0 ? 0 : errno;
+            ESP_LOGW(TAG,
+                     "TTS HTTP 超时主动中断 socket: session=%lu, fd=%d, "
+                     "result=%d, errno=%d(%s)",
+                     static_cast<unsigned long>(session_id), fd,
+                     shutdown_result, shutdown_errno,
+                     std::strerror(shutdown_errno));
+        } else {
+            ESP_LOGW(TAG, "TTS HTTP 超时时 socket 已关闭: session=%lu",
+                     static_cast<unsigned long>(session_id));
+        }
+    }
     if (!Stop(timeout_reason)) {
         ESP_LOGE(TAG, "提交 TTS PCM 超时停止命令失败: session=%lu",
                  static_cast<unsigned long>(session_id));
@@ -553,7 +632,9 @@ void GmfPlayerEngine::HandleTtsPcmTimeout() {
             std::lock_guard<std::mutex> lock(mutex_);
             tts_timeout_stop_pending_ = false;
         }
-        ArmTtsPcmTimeout(kTtsPcmTimeoutUs);
+        ArmTtsPcmTimeout(timeout_reason == PlaybackEndReason::kFirstPcmTimeout
+                             ? kTtsFirstPcmTimeoutUs
+                             : kTtsPcmStallTimeoutUs);
     }
 }
 
@@ -569,7 +650,97 @@ int GmfPlayerEngine::HttpIoEventCallback(http_stream_event_msg_t* event) {
 }
 
 int GmfPlayerEngine::HandleHttpIoEvent(http_stream_event_msg_t* event) {
-    if (event == nullptr || event->event_id != HTTP_STREAM_POST_REQUEST) {
+    if (event == nullptr) {
+        return ESP_GMF_ERR_OK;
+    }
+
+    if (event->event_id == HTTP_STREAM_PRE_REQUEST) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (playing_ && current_request_.channel == PlaybackChannel::kTts) {
+            // Keep the handle so the five-second timeout can unblock a read
+            // that is waiting inside esp_http_client.
+            tts_http_client_ = event->http_client;
+        }
+        return ESP_GMF_ERR_OK;
+    }
+    if (event->event_id == HTTP_STREAM_ON_RESPONSE) {
+        uint32_t session_id = 0;
+        uint32_t read_sequence = 0;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!playing_ || current_request_.channel != PlaybackChannel::kTts ||
+                event->buffer == nullptr || event->buffer_len <= 0) {
+                return ESP_GMF_ERR_OK;
+            }
+            session_id = current_request_.session_id;
+            read_sequence = ++tts_http_read_sequence_;
+        }
+
+        // A positive return tells GMF that the callback filled its buffer.
+        // Retry short body timeouts until data arrives, EOF is reached, the
+        // request is cancelled, or the common five-second deadline expires.
+        const auto client = static_cast<esp_http_client_handle_t>(event->http_client);
+        const int64_t started_us = esp_timer_get_time();
+
+        if (read_sequence == 1) {
+            const esp_err_t timeout_result = esp_http_client_set_timeout_ms(
+                client, kStreamingHttpBodyReadTimeoutMs);
+            if (timeout_result != ESP_OK) {
+                ESP_LOGW(TAG, "TTS HTTP 正文短超时设置失败: %s",
+                         esp_err_to_name(timeout_result));
+            }
+            ESP_LOGI(TAG,
+                     "TTS HTTP 响应就绪: session=%lu, status=%d, content_length=%ld, "
+                     "chunked=%d, body_timeout=%dms",
+                     static_cast<unsigned long>(session_id),
+                     esp_http_client_get_status_code(client),
+                     static_cast<long>(esp_http_client_get_content_length(client)),
+                     esp_http_client_is_chunked_response(client) ? 1 : 0,
+                     kStreamingHttpBodyReadTimeoutMs);
+        }
+
+        int read_len = 0;
+        int read_errno = 0;
+        uint32_t eagain_retries = 0;
+        do {
+            errno = 0;
+            read_len = esp_http_client_read(
+                client, static_cast<char*>(event->buffer), event->buffer_len);
+            read_errno = errno;
+            if (read_len != -ESP_ERR_HTTP_EAGAIN) {
+                break;
+            }
+            ++eagain_retries;
+
+            bool request_active = false;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                request_active = playing_ &&
+                    current_request_.channel == PlaybackChannel::kTts &&
+                    current_request_.session_id == session_id;
+            }
+            if (!request_active ||
+                esp_timer_get_time() - started_us >=
+                    static_cast<int64_t>(kTtsPcmStallTimeoutUs)) {
+                break;
+            }
+        } while (true);
+        const int64_t ended_us = esp_timer_get_time();
+        const unsigned long elapsed_ms = static_cast<unsigned long>(
+            (ended_us - started_us) / 1000);
+        if (elapsed_ms >= 250 || read_len <= 0) {
+            ESP_LOGW(TAG,
+                     "TTS HTTP read: session=%lu, seq=%lu, request=%d, "
+                     "read=%d, elapsed=%lums, retries=%lu, errno=%d",
+                     static_cast<unsigned long>(session_id),
+                     static_cast<unsigned long>(read_sequence),
+                     event->buffer_len, read_len, elapsed_ms,
+                     static_cast<unsigned long>(eagain_retries),
+                     read_errno);
+        }
+        return read_len;
+    }
+    if (event->event_id != HTTP_STREAM_POST_REQUEST) {
         return ESP_GMF_ERR_OK;
     }
 
@@ -580,6 +751,7 @@ int GmfPlayerEngine::HandleHttpIoEvent(http_stream_event_msg_t* event) {
             current_request_.channel != PlaybackChannel::kTts) {
             return ESP_GMF_ERR_OK;
         }
+        tts_http_client_ = event->http_client;
         http_request_ready_emitted_ = true;
         playback_event.session_id = current_request_.session_id;
         playback_event.channel = current_request_.channel;
@@ -609,7 +781,8 @@ int GmfPlayerEngine::HandleOutput(uint8_t* data, int data_size) {
         if (playing_ && current_request_.channel == PlaybackChannel::kTts &&
             current_request_.session_id == tts_timeout_session_id_ &&
             !tts_timeout_stop_pending_) {
-            last_tts_pcm_us_ = esp_timer_get_time();
+            const int64_t now_us = esp_timer_get_time();
+            last_tts_pcm_us_ = now_us;
         }
     }
 
@@ -703,6 +876,7 @@ int GmfPlayerEngine::HandleEvent(esp_asp_event_pkt_t* event) {
                 break;
         }
         if (terminal) {
+            tts_http_client_ = nullptr;
             tts_timeout_session_id_ = 0;
             tts_timeout_started_us_ = 0;
             last_tts_pcm_us_ = 0;
@@ -715,6 +889,9 @@ int GmfPlayerEngine::HandleEvent(esp_asp_event_pkt_t* event) {
     }
     if (terminal) {
         DisarmTtsPcmTimeout();
+    }
+    if (state == ESP_ASP_STATE_ERROR) {
+        NetworkDiagnostics::LogSnapshot("player_stream_error");
     }
     ESP_LOGI(TAG, "GMF 状态事件: state=%s, elapsed=%lums, pcm_chunks=%lu",
              esp_audio_simple_player_state_to_str(state),

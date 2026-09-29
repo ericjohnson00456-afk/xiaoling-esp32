@@ -650,7 +650,16 @@ void AlarmService::RequestCloudSync() {
         [](void* arg) {
             auto* service = static_cast<AlarmService*>(arg);
             bool success = false;
+            bool deferral_logged = false;
             for (int attempt = 1; attempt <= 3 && !success; ++attempt) {
+                while (Application::GetInstance().GetDeviceState() == kDeviceStateListening ||
+                       Application::GetInstance().GetDeviceState() == kDeviceStateSpeaking) {
+                    if (!deferral_logged) {
+                        ESP_LOGI(kTag, "语音交互进行中，延后云端闹钟同步");
+                        deferral_logged = true;
+                    }
+                    vTaskDelay(pdMS_TO_TICKS(500));
+                }
                 success = service->SyncFromCloud();
                 if (!success && attempt < 3) {
                     ESP_LOGW(kTag, "云端闹钟同步失败，第 %d/3 次，稍后重试", attempt);

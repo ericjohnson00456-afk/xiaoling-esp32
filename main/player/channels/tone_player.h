@@ -2,6 +2,7 @@
 
 #include "player_channel.h"
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -21,6 +22,7 @@ public:
     void PlayWakeup(std::function<void(bool)> completion);
     void CancelWakeup();
     bool IsWakeupPending() const { return static_cast<bool>(completion_); }
+    bool IsWakeupTerminalEvent(const PlaybackEvent& event) const;
 
 private:
     std::optional<uint16_t> SelectWakeupTone();
@@ -29,6 +31,6 @@ private:
     PlayerEngine* engine_;
     SessionAllocator allocate_session_;
     std::optional<uint16_t> last_wakeup_tone_;
-    uint32_t wakeup_session_id_ = 0;
+    std::atomic<uint32_t> wakeup_session_id_{0};
     std::function<void(bool)> completion_;
 };

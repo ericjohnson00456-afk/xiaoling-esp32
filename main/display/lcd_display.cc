@@ -121,10 +121,20 @@ SpiLcdDisplay::SpiLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_h
     // receiving resources. Keep LVGL above it so progress/result pages remain
     // responsive while the download is in progress.
     port_cfg.task_priority = 3;
+#if CONFIG_SPIRAM
+    // LVGL is a low-priority UI task and its 7 KiB stack does not participate
+    // in ISR/DMA work. Keep that stack out of scarce internal SRAM on boards
+    // with PSRAM; boards built without PSRAM retain the component default.
+    if (esp_psram_is_initialized()) {
+        port_cfg.task_stack_caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
+        ESP_LOGI(TAG, "LVGL task stack allocated from PSRAM: %d bytes",
+                 port_cfg.task_stack);
+    }
+#endif
 #if CONFIG_SOC_CPU_CORES_NUM > 1
     port_cfg.task_affinity = 1;
 #endif
-    lvgl_port_init(&port_cfg);
+    ESP_ERROR_CHECK(lvgl_port_init(&port_cfg));
 
     ESP_LOGI(TAG, "Adding LCD display");
     const lvgl_port_display_cfg_t display_cfg = {

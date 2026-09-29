@@ -1,5 +1,6 @@
 #include <esp_log.h>
 #include <esp_err.h>
+#include <esp_heap_caps.h>
 #include <nvs_flash.h>
 #include <esp_ota_ops.h>
 
@@ -9,6 +10,18 @@
 
 extern "C" void app_main(void)
 {
+    const size_t entry_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    const size_t entry_largest = heap_caps_get_largest_free_block(
+        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    const size_t entry_dma = heap_caps_get_free_size(MALLOC_CAP_DMA);
+    const size_t entry_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    ESP_LOGI(TAG,
+             "app_main entry heap: internal=%u, largest=%u, dma=%u, psram=%u",
+             static_cast<unsigned>(entry_internal),
+             static_cast<unsigned>(entry_largest),
+             static_cast<unsigned>(entry_dma),
+             static_cast<unsigned>(entry_psram));
+
     // Initialize NVS flash for WiFi configuration
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {

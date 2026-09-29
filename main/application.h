@@ -186,6 +186,10 @@ private:
     // 在这段空档期保持界面处于“思考中”状态。
     std::atomic_bool tts_waiting_for_playback_{false};
     std::atomic_bool tts_output_started_{false};
+    /* Incremented synchronously when each TTS URL is admitted. Delayed IAT
+       work may only interrupt the TTS generation present when it arrived. */
+    std::atomic_uint32_t tts_url_generation_{0};
+    uint32_t interrupted_tts_generation_ = 0;
     std::atomic_bool exit_requested_{false};
     uint32_t iat_subscription_id_ = 0;
     uint32_t iat_update_subscription_id_ = 0;

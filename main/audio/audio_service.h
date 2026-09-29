@@ -50,14 +50,12 @@
  * multi-second gaps between network reads; the queue is allocated in PSRAM
  * on this board. Short clips bypass the gate when the stream finishes. */
 #define MAX_PLAYER_PLAYBACK_TASKS_IN_QUEUE 192
-/* Keep about 0.8 seconds before opening the DAC. Recent traces show the cloud
- * commonly pauses 400-700 ms again immediately after the first MP3 frame, so
- * the previous 12-block watermark could underrun during the first phrase. */
-#define PLAYER_PREBUFFER_TASKS 24
-/* Once a live TTS stream has actually run dry, accumulate about 3.5 seconds.
- * This cannot hide an arbitrarily long server stall, but it avoids a cascade
- * of short start/stop cycles after the connection resumes. */
-#define PLAYER_REBUFFER_TASKS 96
+/* Two seconds of 16 kHz, mono, 16-bit PCM is 64 KiB. Start TTS as soon as
+ * that amount is decoded; short streams are released at EOF. */
+#define PLAYER_INITIAL_PREBUFFER_BYTES (4 * 1024)
+#define TTS_INITIAL_PREBUFFER_BYTES (64 * 1024)
+/* After a mid-stream underrun, resume as soon as any PCM block arrives. */
+#define PLAYER_RECOVERY_PREBUFFER_BYTES 1
 #define MAX_DECODE_PACKETS_IN_QUEUE (2400 / OPUS_FRAME_DURATION_MS)
 #define MAX_SEND_PACKETS_IN_QUEUE (2400 / OPUS_FRAME_DURATION_MS)
 // Wake inference must never build a stale backlog while AEC/TTS are active.
@@ -96,8 +94,26 @@ enum AudioTaskType {
 struct AudioTask {
     AudioTaskType type;
     std::vector<int16_t> pcm;
+    /* Streamed-player PCM is explicitly allocated in PSRAM. Keeping a
+       separate buffer leaves latency-sensitive capture/AEC/Opus PCM using
+       its existing allocator and access pattern. */
+    int16_t* player_pcm = nullptr;
+    size_t player_pcm_samples = 0;
     uint32_t timestamp = 0;
     uint32_t uplink_generation = 0;
+
+    AudioTask() = default;
+    ~AudioTask();
+    AudioTask(const AudioTask&) = delete;
+    AudioTask& operator=(const AudioTask&) = delete;
+
+    bool AllocatePlayerPcm(size_t samples);
+    int16_t* PlaybackData() {
+        return player_pcm != nullptr ? player_pcm : pcm.data();
+    }
+    size_t PlaybackSamples() const {
+        return player_pcm != nullptr ? player_pcm_samples : pcm.size();
+    }
 };
 
 struct DebugStatistics {
@@ -158,10 +174,13 @@ public:
 
     bool PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> packet, bool wait = false);
     bool PushPcmToPlaybackQueue(const uint8_t* data, size_t size, int sample_rate, bool wait = true);
-    void BeginPlayerPlayback();
+    void BeginPlayerPlayback(bool tts_stream = false);
     void MarkPlayerPlaybackFinished();
     void ClearPlaybackQueue();
     void WaitForPlaybackComplete();
+    uint32_t GetPlayerOutputLastActivityMs() const {
+        return player_output_last_activity_ms_.load();
+    }
     std::unique_ptr<AudioStreamPacket> PopPacketFromSendQueue();
     AudioUplinkDiagnostics GetUplinkDiagnostics();
     void PlaySound(const std::string_view& sound);
@@ -208,6 +227,7 @@ private:
     TaskHandle_t audio_input_task_handle_ = nullptr;
     TaskHandle_t audio_output_task_handle_ = nullptr;
     TaskHandle_t opus_codec_task_handle_ = nullptr;
+    bool opus_codec_task_stack_external_ = false;
 #if CONFIG_USE_MICRO_WAKE_WORD
     TaskHandle_t processed_wake_task_handle_ = nullptr;
     std::mutex processed_wake_mutex_;
@@ -224,6 +244,7 @@ private:
     std::deque<std::unique_ptr<AudioTask>> audio_playback_queue_;
     bool audio_output_busy_ = false;
     bool player_playback_finished_ = false;
+    bool player_tts_stream_ = false;
     bool player_prebuffering_ = true;
     bool player_prebuffer_wait_logged_ = false;
     uint32_t player_rebuffer_count_ = 0;
@@ -232,6 +253,7 @@ private:
        output task and reset when a new player session starts. */
     std::atomic<uint32_t> player_output_chunks_{0};
     std::atomic<uint32_t> player_output_last_end_ms_{0};
+    std::atomic<uint32_t> player_output_last_activity_ms_{0};
     std::atomic<uint32_t> player_output_underruns_{0};
     std::atomic<uint32_t> player_audio_clock_ms_{0};
     std::atomic_bool player_stream_active_{false};

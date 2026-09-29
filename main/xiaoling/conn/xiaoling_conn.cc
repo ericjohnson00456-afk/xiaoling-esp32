@@ -266,9 +266,8 @@ void XiaolingConn::OnDisconnected(std::function<void()> callback) {
 bool XiaolingConn::StartSupervisor() {
     desired_connected_ = true;
     if (!running_.exchange(true)) {
-        // Uplink audio is latency-sensitive in full duplex. Run above the
-        // capture/codec and subtitle workers, but below PCM playback so AEC
-        // packets keep flowing while HTTP TTS is decoded and rendered.
+        // Uplink audio and WebSocket control messages share the highest
+        // application priority with the TTS HTTP pull task.
         if (xTaskCreate(TaskEntry, "xiaoling_conn", 6144, this,
                         kUplinkTaskPriority, &task_handle_) != pdPASS) {
             ESP_LOGE(TAG, "创建小聆连接管理任务失败");

@@ -27,6 +27,7 @@ public:
     virtual void EnableOutput(bool enable);
 
     virtual void OutputData(std::vector<int16_t>& data);
+    void OutputData(const int16_t* data, size_t samples);
     virtual size_t OutputDmaBufferBytes() const {
         return AUDIO_CODEC_DMA_FRAME_NUM * sizeof(int32_t);
     }
