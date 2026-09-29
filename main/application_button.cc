@@ -3,10 +3,7 @@
 #include "alarm/alarm_service.h"
 #include "boards/common/board.h"
 #include "system/system_reset.h"
-#include "ui/ui_manager.h"
-#include "ui/ui_page_ids.h"
-#include "ui/ui_app.h"
-#include "ui/screens/qrcode/qrcode_presenter.h"
+#include "ui/ui.h"
 
 #include <esp_log.h>
 #include <ssid_manager.h>
@@ -68,9 +65,8 @@ void Application::ProcessButtonClick(uint8_t click_count) {
         case 1:
             // 单击：非主页时先返回主页；启动期允许进入配网；
             // 其余情况用于开始或结束语音交互。
-            if (UiManager::GetInstance().lvgl_display() != nullptr &&
-                UiManager::GetInstance().TopScreenId() != UI_PAGE_HOME) {
-                UiApp::NavigateHome();
+            if (!Ui::IsHome()) {
+                Ui::NavigateHome();
                 break;
             }
             if (GetDeviceState() == kDeviceStateStarting &&
@@ -89,16 +85,14 @@ void Application::ProcessButtonClick(uint8_t click_count) {
             break;
         case 3: {
             // 三击：打开角色配置二维码；尚无角色配置时展示通用配网入口。
-            auto& qrcode_presenter = QrCodePresenter::GetInstance();
-            const bool has_role_config_qrcode = qrcode_presenter.HasRoleConfigQrCode();
-            qrcode_presenter.SelectRoleConfig();
-            UiApp::NavigateToQrCode();
+            const bool has_role_config_qrcode = Ui::HasRoleConfigQrCode();
+            Ui::ShowRoleConfigQrCode();
             PlayTone(has_role_config_qrcode ? kDeviceConfigToneId : kProvisioningToneId);
             break;
         }
         case 4:
             // 四击：切换 UI 语言。
-            UiApp::ToggleLanguage();
+            Ui::ToggleLanguage();
             break;
         case 5:
             // 五击：清除已保存的 Wi-Fi，断开小聆并重新进入配网。

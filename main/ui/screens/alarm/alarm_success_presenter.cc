@@ -1,7 +1,6 @@
 #include "alarm_success_presenter.h"
 
 #include "alarm_success_view.h"
-#include "ui/ui_app.h"
 #include "ui/ui_manager.h"
 #include "ui/ui_page_ids.h"
 
@@ -25,26 +24,15 @@ const UiNavScreen& AlarmSuccessPresenter::Screen() {
     return screen;
 }
 
-void AlarmSuccessPresenter::ShowAlarm(const AlarmSnapshot& alarm, bool newly_created) {
-    UiManager::GetInstance().Dispatch([alarm, newly_created]() {
-        auto& presenter = GetInstance();
-        presenter.alarm_ = alarm;
-        if (UiManager::GetInstance().lvgl_display() == nullptr) {
-            UiApp::ShowNotification("闹钟设置成功", 3000);
-            return;
-        }
-        if (UiManager::GetInstance().TopScreenId() == UI_PAGE_ALARM_RING) {
-            if (newly_created) {
-                UiApp::ShowToast("新闹钟创建成功", 3000);
-            } else {
-                UiApp::ShowNotification("闹钟设置成功", 3000);
-            }
-            return;
-        }
-        UiManager::GetInstance().NavigateTo(UI_PAGE_ALARM_SUCCESS);
-        presenter.Refresh();
-        presenter.StartTimeout();
-    });
+void AlarmSuccessPresenter::ShowAlarm(const AlarmSnapshot& alarm) {
+    alarm_ = alarm;
+    auto& manager = UiManager::GetInstance();
+    if (manager.TopScreenId() == UI_PAGE_ALARM_SUCCESS) {
+        Refresh();
+        StartTimeout();
+    } else {
+        manager.NavigateTo(UI_PAGE_ALARM_SUCCESS);
+    }
 }
 
 int AlarmSuccessPresenter::Open(const UiNavScreen*, void** data) {

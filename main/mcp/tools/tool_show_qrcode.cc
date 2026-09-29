@@ -4,8 +4,7 @@
 #include "board.h"
 #include "image_fetcher.h"
 #include "mcp_server.h"
-#include "ui/ui_app.h"
-#include "ui/screens/qrcode/qrcode_presenter.h"
+#include "ui/ui.h"
 #include <esp_log.h>
 
 namespace {
@@ -30,8 +29,7 @@ MCP_REGISTER_TOOL(RegisterShowQrcode, McpToolGroup::kCommon, 60) {
         auto message = properties["message"].value<std::string>();
         const auto err_code = properties["err_code"].value<std::string>();
         if (!err_code.empty()) message += "\n" + err_code;
-        QrCodePresenter::GetInstance().SetCustomQrCode(std::move(image), std::move(message));
-        UiApp::NavigateToQrCode();
+        Ui::ShowQrCode(std::move(image), std::move(message));
         return std::string("Operation completed");
       });
 #endif

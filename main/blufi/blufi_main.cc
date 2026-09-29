@@ -31,8 +31,7 @@
 #include "ssid_manager.h"
 #include "settings.h"
 #include "ui/i18n/lang_config.h"
-#include "board.h"
-#include "display.h"
+#include "ui/ui.h"
 #include "application.h"
 #include "system/system_info.h"
 #include "resource/resource.h"
@@ -484,8 +483,8 @@ void blufi_start(void)
                            "/provisioning/xl_ble_prov.png", qrcode_asset)) {
         auto qrcode = std::make_unique<LvglRawImage>(
             const_cast<uint8_t*>(qrcode_asset.address), qrcode_asset.size);
-        auto display = Board::GetInstance().GetDisplay();
-        display->ShowActivation(std::move(qrcode), "扫码或搜索“小聆AI”小程序\n选择ESP32 - 蓝牙配网");
+        Ui::ShowQrCode(std::move(qrcode),
+                       "扫码或搜索“小聆AI”小程序\n选择ESP32 - 蓝牙配网");
     } else {
         BLUFI_ERROR("Provisioning image is missing from respak");
     }

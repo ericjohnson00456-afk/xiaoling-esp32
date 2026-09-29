@@ -10,13 +10,9 @@
 #include "resource/resource.h"
 #include "settings.h"
 #include "serial_shell.h"
-#include "ui/ui_app.h"
-#include "ui/ui_manager.h"
-#include "ui/ui_page_ids.h"
-#include "ui/screens/qrcode/qrcode_presenter.h"
+#include "ui/ui.h"
 #include "xiaoling/xiaoling_events.h"
 #include "shell/cmd/kv/kv_user.h"
-#include "ui/screens/home/home_presenter.h"
 
 #ifdef CONFIG_LSPLATFORM
 #include "image_fetcher.h"
@@ -123,35 +119,22 @@ void Application::Initialize() {
     auto& board = Board::GetInstance();
     SetDeviceState(kDeviceStateStarting);
 
-    // UIApp 负责显示设备绑定和页面初始化；Application 只提供调度器，
-    // 将相关工作切换到应用主任务执行。
-    auto& ui_manager = UiManager::GetInstance();
-    ui_manager.SetTaskScheduler([this](std::function<void()>&& task) {
-        Schedule(std::move(task));
-    });
-    ui_manager.SetUrgentTaskScheduler([this](std::function<void()>&& task) {
-        ScheduleUrgent(std::move(task));
-    });
-    HomePresenter::GetInstance().SetWakeWordProvider([this]() {
-        return audio_service_.GetWakeWordName();
-    });
-    UiApp::SetBannerIdleProvider([this]() {
-        return GetDeviceState() == kDeviceStateIdle;
-    });
-    if (!UiApp::Initialize()) {
+    // UI 模块自行创建任务并串行处理界面更新，Application 只发送状态。
+    if (!Ui::Initialize()) {
         ESP_LOGE(TAG, "Home 页面初始化失败");
     }
     // 网络和激活检查完成前显示配网齿轮；加载协议时会在建立 WebSocket 前
     // 切换为 AI 图标。
-    UiApp::SetEmotion("gear");
+    Ui::SetEmotion("gear");
     PublishWifiIcon();
-    UiApp::SetDuplexMode(session_controller_.policy().mode);
+    Ui::SetDuplexMode(session_controller_.policy().mode);
     // 显示开发板名称和版本信息。
-    UiApp::SetChatMessage("system", SystemInfo::GetUserAgent());
+    Ui::SetChatMessage("system", SystemInfo::GetUserAgent());
 
     // 初始化音频服务。
     auto codec = board.GetAudioCodec();
     audio_service_.Initialize(codec);
+    Ui::SetWakeWord(audio_service_.GetWakeWordName());
     audio_service_.EnableDeviceAec(aec_mode_ == kAecOnDeviceSide);
     audio_service_.Start();
 
@@ -177,8 +160,8 @@ void Application::Initialize() {
                 session_controller_.StartTts(event.session_id);
                 // 与收到 URL 的事件不同，kPlaying 表示 HTTP 响应中已经产生
                 // 可以解码的 TTS 音频数据。
-                UiApp::SetStatus(UiApp::Status::Speaking);
-                UiApp::SetEmotion("说话");
+                Ui::SetStatus(Ui::Status::Speaking);
+                Ui::SetEmotion("说话");
                 if (!exit_requested_.load() &&
                     tts_output_started_.exchange(false) &&
                     (GetDeviceState() == kDeviceStateIdle ||
@@ -230,8 +213,8 @@ void Application::Initialize() {
                     // kPlaying 只直接更新了 UI，没有修改 DeviceStatus，因此再次
                     // 切换为空闲状态不会触发任何操作，讲话表情会继续显示；这里
                     // 需要显式恢复空闲界面。
-                    UiApp::SetStatus(UiApp::Status::Standby);
-                    UiApp::SetEmotion("待机");
+                    Ui::SetStatus(Ui::Status::Standby);
+                    Ui::SetEmotion("待机");
                 }
                 audio_service_.EnableWakeWordDetection(false);
                 xEventGroupClearBits(event_group_, MAIN_EVENT_WAKE_WORD_DETECTED);
@@ -349,29 +332,29 @@ void Application::Initialize() {
     board.SetNetworkEventCallback([this](NetworkEvent event, const std::string& data) {
         switch (event) {
             case NetworkEvent::Scanning:
-                UiApp::ShowNotification(UiApp::Notification::ScanningWifi, 30000);
+                Ui::ShowNotification(Ui::Notification::ScanningWifi, 30000);
                 network_connected_ = false;
                 xEventGroupSetBits(event_group_, MAIN_EVENT_NETWORK_DISCONNECTED);
                 break;
             case NetworkEvent::Connecting: {
                 if (data.empty()) {
                     // 蜂窝网络正在注册，暂时还没有运营商信息。
-                    UiApp::SetStatus(UiApp::Status::RegisteringNetwork);
+                    Ui::SetStatus(Ui::Status::RegisteringNetwork);
                 } else {
                     // Wi-Fi，或已经取得运营商信息的蜂窝网络。
-                    UiApp::ShowNotification(UiApp::Notification::ConnectingToNetwork, 30000, data);
+                    Ui::ShowNotification(Ui::Notification::ConnectingToNetwork, 30000, data);
                 }
                 break;
             }
             case NetworkEvent::Connected: {
-                UiApp::ShowNotification(UiApp::Notification::ConnectedToNetwork, 30000, data);
+                Ui::ShowNotification(Ui::Notification::ConnectedToNetwork, 30000, data);
                 network_connected_ = true;
                 xEventGroupSetBits(event_group_, MAIN_EVENT_NETWORK_CONNECTED);
                 break;
             }
             case NetworkEvent::Disconnected:
                 network_connected_ = false;
-                QrCodePresenter::GetInstance().ClearRoleConfigUrl();
+                Ui::ClearRoleConfigQrCode();
                 xEventGroupSetBits(event_group_, MAIN_EVENT_NETWORK_DISCONNECTED);
                 break;
             case NetworkEvent::WifiConfigModeEnter:
@@ -382,7 +365,7 @@ void Application::Initialize() {
                 break;
             // 蜂窝网络模块专用事件。
             case NetworkEvent::ModemDetecting:
-                UiApp::SetStatus(UiApp::Status::DetectingModule);
+                Ui::SetStatus(Ui::Status::DetectingModule);
                 break;
             case NetworkEvent::ModemErrorNoSim:
                 Alert(Lang::Strings::ERROR, Lang::Strings::PIN_ERROR, "triangle_exclamation", "err_pin");
@@ -391,11 +374,11 @@ void Application::Initialize() {
                 Alert(Lang::Strings::ERROR, Lang::Strings::REG_ERROR, "triangle_exclamation", "err_reg");
                 break;
             case NetworkEvent::ModemErrorInitFailed:
-                UiApp::SetStatus(UiApp::Status::DetectingModule);
-                UiApp::SetChatMessage("system", Lang::Strings::DETECTING_MODULE);
+                Ui::SetStatus(Ui::Status::DetectingModule);
+                Ui::SetChatMessage("system", Lang::Strings::DETECTING_MODULE);
                 break;
             case NetworkEvent::ModemErrorTimeout:
-                UiApp::SetStatus(UiApp::Status::RegisteringNetwork);
+                Ui::SetStatus(Ui::Status::RegisteringNetwork);
                 break;
         }
         PublishWifiIcon();
@@ -405,7 +388,7 @@ void Application::Initialize() {
     board.StartNetwork();
 
     // 立即更新状态栏以显示当前网络状态。
-    UiApp::UpdateStatusBar(true);
+    Ui::UpdateStatusBar(true);
 
     // 启动串口调试终端；该模块相互独立，启动失败不影响主流程。
     if (!SerialShell::GetInstance().Initialize()) {
@@ -431,8 +414,8 @@ void Application::Initialize() {
     SystemInfo::PrintHeapStats();
     SetDeviceState(kDeviceStateIdle);
     const std::string version = esp_app_get_description()->version;
-    UiApp::ShowNotification(std::string(Lang::Strings::VERSION) + version);
-    UiApp::SetChatMessage("system", "");
+    Ui::ShowNotification(std::string(Lang::Strings::VERSION) + version);
+    Ui::SetChatMessage("system", "");
     PlayTone(59);
 
     // 小聆会维持 WebSocket，并建立对时延敏感的 TTS HTTP 流。
@@ -519,7 +502,7 @@ void Application::ProcessMainEvents(EventBits_t bits) {
             alarm_flow_.on_clock_tick();
         }
         PublishWifiIcon();
-        UiApp::UpdateStatusBar();
+        Ui::UpdateStatusBar();
 
         if (GetDeviceState() == kDeviceStateListening ||
             GetDeviceState() == kDeviceStateSpeaking) {
@@ -609,14 +592,14 @@ void Application::HandleNetworkConnectedEvent() {
     }
 
     // 立即更新状态栏以显示当前网络状态。
-    UiApp::UpdateStatusBar(true);
+    Ui::UpdateStatusBar(true);
 }
 
 void Application::HandleNetworkDisconnectedEvent() {
     audio_player_.Stop(PlaybackEndReason::kCancelled);
 
     // 立即更新状态栏以显示当前网络状态。
-    UiApp::UpdateStatusBar(true);
+    Ui::UpdateStatusBar(true);
 }
 
 void Application::RunXiaolingActivation() {
@@ -641,7 +624,7 @@ void Application::RunXiaolingActivation() {
         const esp_err_t result = activation.Submit();
         if (result == ESP_OK) {
             ESP_LOGI(TAG, "设备绑定成功");
-            Board::GetInstance().GetDisplay()->DismissActivation();
+            Ui::DismissQrCode();
             return;
         }
 
@@ -668,9 +651,7 @@ void Application::ShowActivationCode(const std::string& code,
         auto* fetcher = Board::GetInstance().GetImageFetcher();
         auto image = fetcher != nullptr ? fetcher->Fetch(qrcode) : nullptr;
         if (image) {
-            QrCodePresenter::GetInstance().SetCustomQrCode(
-                std::move(image), activation_text);
-            UiManager::GetInstance().NavigateTo(UI_PAGE_QRCODE);
+            Ui::ShowQrCode(std::move(image), activation_text);
         } else {
             ESP_LOGE(TAG, "激活二维码图片下载失败");
         }
@@ -691,7 +672,7 @@ void Application::InitializeXiaolingConn() {
     auto& board = Board::GetInstance();
     auto codec = board.GetAudioCodec();
 
-    UiApp::SetStatus(UiApp::Status::LoadingProtocol);
+    Ui::SetStatus(Ui::Status::LoadingProtocol);
 
     // 小聆只使用 HTTP 鉴权和 WebSocket 会话。
     xiaoling_conn_ = std::make_unique<XiaolingConn>();
@@ -711,7 +692,7 @@ void Application::InitializeXiaolingConn() {
     xiaoling_conn_->OnConnected([this, codec, &board]() {
         DismissAlert();
         board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
-        UiApp::SetDuplexVisible(true);
+        Ui::SetDuplexVisible(true);
         if (xiaoling_conn_->server_sample_rate() != codec->output_sample_rate()) {
             ESP_LOGW(TAG, "服务端采样率 %d 与设备输出采样率 %d 不一致",
                      xiaoling_conn_->server_sample_rate(), codec->output_sample_rate());
@@ -767,12 +748,12 @@ void Application::InitializeXiaolingConn() {
 
     xiaoling_conn_->OnDisconnected([this, &board]() {
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
-        UiApp::SetDuplexVisible(false);
+        Ui::SetDuplexVisible(false);
         Schedule([this]() {
             if (GetDeviceState() == kDeviceStateWifiConfiguring) {
                 return;
             }
-            UiApp::SetChatMessage("system", "");
+            Ui::SetChatMessage("system", "");
             if (audio_player_.IsWakeupPending()) {
                 CancelWakeup();
                 return;
@@ -811,10 +792,7 @@ void Application::InitializeXiaolingConn() {
             }
 
             if (strcmp(sub->valuestring, "setting") == 0) {
-                HomePresenter::GetInstance().HandleSettingMessage(data);
-                // 先将横幅 UI 更新放入队列，再由二维码 Presenter 排队启动下载，
-                // 避免网络和图片处理延迟首条横幅的显示。
-                QrCodePresenter::GetInstance().HandleSettingMessage(data);
+                Ui::HandleSettingMessage(data);
             }
             return;
         }
@@ -863,7 +841,7 @@ void Application::InitializeXiaolingConn() {
         }
     });
 
-    UiApp::SetEmotion("microchip_ai");
+    Ui::SetEmotion("microchip_ai");
     if (xiaoling_conn_->Start()) {
         ESP_LOGI(TAG, "小聆连接和语音模块已就绪");
     } else {
@@ -888,9 +866,9 @@ bool Application::EnsureXiaolingReadyForWakeup() {
 
 void Application::Alert(const char* status, const char* message, const char* emotion, const std::string_view& sound) {
     ESP_LOGW(TAG, "Alert [%s] %s: %s", emotion, status, message);
-    UiApp::SetStatusText(status);
-    UiApp::SetEmotion(emotion);
-    UiApp::SetChatMessage("system", message);
+    Ui::SetStatusText(status);
+    Ui::SetEmotion(emotion);
+    Ui::SetChatMessage("system", message);
     if (!sound.empty()) {
         PlayRespakAudio(std::string(sound).c_str());
     }
@@ -898,17 +876,17 @@ void Application::Alert(const char* status, const char* message, const char* emo
 
 void Application::Alert(const char* status, const char* message, const char* emotion, uint16_t tone_id) {
     ESP_LOGW(TAG, "Alert [%s] %s: %s", emotion, status, message);
-    UiApp::SetStatusText(status);
-    UiApp::SetEmotion(emotion);
-    UiApp::SetChatMessage("system", message);
+    Ui::SetStatusText(status);
+    Ui::SetEmotion(emotion);
+    Ui::SetChatMessage("system", message);
     PlayTone(tone_id);
 }
 
 void Application::DismissAlert() {
     if (GetDeviceState() == kDeviceStateIdle) {
-        UiApp::SetStatus(UiApp::Status::Standby);
-        UiApp::SetEmotion("neutral");
-        UiApp::SetChatMessage("system", "");
+        Ui::SetStatus(Ui::Status::Standby);
+        Ui::SetEmotion("neutral");
+        Ui::SetChatMessage("system", "");
     }
 }
 
@@ -1087,9 +1065,7 @@ void Application::PublishWifiIcon() {
                network_icon != nullptr) {
         icon = network_icon;
     }
-    UiManager::GetInstance().Dispatch([icon = std::move(icon)]() {
-        HomePresenter::GetInstance().SetWifiIcon(icon);
-    });
+    Ui::SetWifiIcon(std::move(icon));
 }
 
 void Application::AbortSpeaking(AbortReason reason) {
@@ -1203,8 +1179,8 @@ void Application::BeginWakeup(ListeningMode mode) {
             // 播放前先显示等待表情，kPlaying 事件再恢复讲话表情。
             if (GetDeviceState() == kDeviceStateListening ||
                 GetDeviceState() == kDeviceStateSpeaking) {
-                UiApp::SetStatusText("思考中...");
-                UiApp::SetEmotion("等待");
+                Ui::SetStatusText("思考中...");
+                Ui::SetEmotion("等待");
             }
             if (session_controller_.policy().mode == DuplexMode::kHalfDuplex &&
                 GetDeviceState() == kDeviceStateListening) {
@@ -1300,8 +1276,8 @@ void Application::BeginWakeup(ListeningMode mode) {
                     // 避免延迟的 IAT 任务把界面从讲话状态闪回思考状态。
                     if (!text.empty() && !tts_waiting_for_playback_.load() &&
                         GetDeviceState() == kDeviceStateListening) {
-                        UiApp::SetStatusText("思考中...");
-                        UiApp::SetEmotion("等待");
+                        Ui::SetStatusText("思考中...");
+                        Ui::SetEmotion("等待");
                     }
                 });
             });
@@ -1401,14 +1377,14 @@ void Application::HandleStateChangedEvent() {
             listening_started_at_us_ = 0;
             session_controller_.EndSession();
             if (tts_waiting_for_playback_.load() && !exit_requested_.load()) {
-                UiApp::SetStatusText("思考中...");
-                UiApp::SetEmotion("等待");
+                Ui::SetStatusText("思考中...");
+                Ui::SetEmotion("等待");
             } else {
-                UiApp::SetStatus(UiApp::Status::Standby);
-                UiApp::SetEmotion("待机");
+                Ui::SetStatus(Ui::Status::Standby);
+                Ui::SetEmotion("待机");
             }
 #ifdef CONFIG_LSPLATFORM
-            UiApp::DismissOverlays();
+            Ui::DismissOverlays();
 #endif  // 小聆平台
             if (keep_voice_processing_on_idle_) {
                 keep_voice_processing_on_idle_ = false;
@@ -1431,18 +1407,18 @@ void Application::HandleStateChangedEvent() {
         case kDeviceStateConnecting:
             // 唤醒提示音阶段的过渡态：连接已就绪，直接预告聆听，避免
             // "连接中..." 一闪而过。
-            UiApp::SetStatus(UiApp::Status::Listening);
-            UiApp::SetEmotion("聆听");
-            UiApp::SetChatMessage("system", "");
+            Ui::SetStatus(Ui::Status::Listening);
+            Ui::SetEmotion("聆听");
+            Ui::SetChatMessage("system", "");
             break;
         case kDeviceStateListening:
             listening_started_at_us_ = esp_timer_get_time();
             session_controller_.StartListening(listening_mode_ == kListeningModeRealtime);
-            UiApp::SetStatus(UiApp::Status::Listening);
-            UiApp::SetEmotion("聆听");
-            UiApp::SetVoicePrompt(Lang::Strings::PLEASE_SPEAK);
+            Ui::SetStatus(Ui::Status::Listening);
+            Ui::SetEmotion("聆听");
+            Ui::SetVoicePrompt(Lang::Strings::PLEASE_SPEAK);
 #ifdef CONFIG_LSPLATFORM
-            UiApp::DismissOverlays();
+            Ui::DismissOverlays();
 #endif  // 小聆平台
 
             // 全双工模式下，云端会话与本地 AFE 的生命周期相互独立。服务端
@@ -1461,8 +1437,8 @@ void Application::HandleStateChangedEvent() {
 
             break;
         case kDeviceStateSpeaking:
-            UiApp::SetStatus(UiApp::Status::Speaking);
-            UiApp::SetEmotion("说话");
+            Ui::SetStatus(Ui::Status::Speaking);
+            Ui::SetEmotion("说话");
 
             // 音乐位于语音事件下层时停止录音；其他情况下仅在实时会话有效时
             // 保持 AEC 后的上行链路运行。
@@ -1503,9 +1479,8 @@ void Application::Schedule(std::function<void()>&& callback) {
 void Application::ScheduleUrgent(std::function<void()>&& callback) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        // 紧急任务保持先进先出顺序。尤其是 HomePresenter 的 IAT 更新先于应用
-        // 打断处理器订阅，必须先让它显示出来，再执行可能因排空流水线而阻塞的
-        // GMF 停止操作。
+        // 紧急任务保持先进先出顺序，用于让 IAT 打断等实时语音事件
+        // 先于可能阻塞的普通应用任务执行。
         main_urgent_tasks_.push_back(std::move(callback));
     }
     xEventGroupSetBits(event_group_, MAIN_EVENT_SCHEDULE);
@@ -1585,16 +1560,16 @@ void Application::SetAecMode(AecMode mode) {
         switch (aec_mode_) {
         case kAecOff:
             audio_service_.EnableDeviceAec(false);
-            UiApp::ShowNotification(Lang::Strings::RTC_MODE_OFF);
+            Ui::ShowNotification(Lang::Strings::RTC_MODE_OFF);
             break;
         case kAecOnServerSide:
             audio_service_.EnableDeviceAec(false);
-            UiApp::ShowNotification(Lang::Strings::RTC_MODE_ON);
+            Ui::ShowNotification(Lang::Strings::RTC_MODE_ON);
             break;
         case kAecOnDeviceSide:
             audio_service_.EnableDeviceAec(true);
             session_controller_.SetMode(DuplexMode::kFullDuplex);
-            UiApp::ShowNotification(Lang::Strings::RTC_MODE_ON);
+            Ui::ShowNotification(Lang::Strings::RTC_MODE_ON);
             break;
         }
         if (aec_mode_ != kAecOnDeviceSide) {
@@ -1603,7 +1578,7 @@ void Application::SetAecMode(AecMode mode) {
         listening_mode_ = session_controller_.policy().mode == DuplexMode::kFullDuplex
                               ? kListeningModeRealtime
                               : kListeningModeAutoStop;
-        UiApp::SetDuplexMode(session_controller_.policy().mode);
+        Ui::SetDuplexMode(session_controller_.policy().mode);
 
         // AEC 模式变化时关闭音频通道。
         if (xiaoling_conn_ && xiaoling_conn_->IsConnected()) {
@@ -1636,7 +1611,7 @@ void Application::SetDuplexMode(DuplexMode mode) {
         }
 
         session_controller_.SetMode(mode);
-        UiApp::SetDuplexMode(mode);
+        Ui::SetDuplexMode(mode);
         listening_mode_ = mode == DuplexMode::kFullDuplex
                               ? kListeningModeRealtime
                               : kListeningModeAutoStop;

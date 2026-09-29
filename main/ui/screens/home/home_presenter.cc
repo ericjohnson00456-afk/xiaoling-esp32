@@ -8,6 +8,7 @@
 #include "ui/ui_page_ids.h"
 #include "ui/utils/image/lvgl_image.h"
 #include "xiaoling/xiaoling_events.h"
+#include "system/device_status.h"
 
 #include <utility>
 #include <cstring>
@@ -75,14 +76,9 @@ const UiNavScreen& HomePresenter::Screen() {
     return screen;
 }
 
-void HomePresenter::SetBannerIdleProvider(std::function<bool()> provider) {
-    std::lock_guard<std::mutex> lock(banner_mutex_);
-    banner_idle_provider_ = std::move(provider);
-}
-
-void HomePresenter::SetWakeWordProvider(std::function<std::string()> provider) {
+void HomePresenter::SetWakeWord(std::string wake_word) {
     std::lock_guard<std::mutex> lock(wake_word_mutex_);
-    wake_word_provider_ = std::move(provider);
+    wake_word_ = std::move(wake_word);
 }
 
 int HomePresenter::Open(const UiNavScreen* screen, void** data) {
@@ -197,7 +193,7 @@ void HomePresenter::SubscribeVoiceEvents() {
         }));
     voice_event_subscriptions_.push_back(events.Subscribe(
         XIAOLING_TTS_TXT_INTERRUPT, [this](const XiaolingEvent&) {
-            UiManager::GetInstance().DispatchUrgent(
+            UiManager::GetInstance().Dispatch(
                 [this]() { OnTtsTextInterrupt(); });
         }));
     voice_event_subscriptions_.push_back(events.Subscribe(
@@ -205,7 +201,7 @@ void HomePresenter::SubscribeVoiceEvents() {
             const uint32_t generation = tts_progress_generation_.fetch_add(1) + 1;
             latest_tts_audio_clock_ms_.store(0);
             tts_progress_dispatch_pending_.store(false);
-            UiManager::GetInstance().DispatchUrgent([this, generation]() {
+            UiManager::GetInstance().Dispatch([this, generation]() {
                 if (generation == tts_progress_generation_.load()) {
                     OnTtsPlaying();
                 }
@@ -252,7 +248,7 @@ void HomePresenter::QueueIatText(std::string text) {
         }
     }
     if (schedule) {
-        UiManager::GetInstance().DispatchUrgent([this]() { DrainIatText(); });
+        UiManager::GetInstance().Dispatch([this]() { DrainIatText(); });
     }
 }
 
@@ -297,7 +293,7 @@ void HomePresenter::DrainIatText() {
         }
     }
     if (reschedule) {
-        UiManager::GetInstance().DispatchUrgent([this]() { DrainIatText(); });
+        UiManager::GetInstance().Dispatch([this]() { DrainIatText(); });
     }
 }
 
@@ -314,7 +310,7 @@ void HomePresenter::QueueTtsAudioProgress(uint32_t audio_clock_ms) {
         return;
     }
     const uint32_t generation = tts_progress_generation_.load();
-    UiManager::GetInstance().DispatchUrgent([this, generation]() {
+    UiManager::GetInstance().Dispatch([this, generation]() {
         if (generation != tts_progress_generation_.load()) {
             return;
         }
@@ -571,25 +567,17 @@ void HomePresenter::SetImage(std::unique_ptr<LvglImage> image) {
     if (image == nullptr) {
         return;
     }
-    auto shared = std::shared_ptr<LvglImage>(std::move(image));
-    UiManager::GetInstance().Dispatch([shared = std::move(shared)]() mutable {
-        auto& home = HomePresenter::GetInstance();
-        home.image_ = std::move(shared);
-        if (home.view_ != nullptr && home.image_ != nullptr &&
-            UiManager::GetInstance().TopScreenId() == UI_PAGE_HOME) {
-            home.view_->ShowImage(std::make_unique<SharedLvglImage>(home.image_));
-        }
-    });
+    image_ = std::shared_ptr<LvglImage>(std::move(image));
+    if (view_ != nullptr && UiManager::GetInstance().TopScreenId() == UI_PAGE_HOME) {
+        view_->ShowImage(std::make_unique<SharedLvglImage>(image_));
+    }
 }
 
 void HomePresenter::ClearImage() {
-    UiManager::GetInstance().Dispatch([]() {
-        auto& home = HomePresenter::GetInstance();
-        home.image_.reset();
-        if (home.view_ != nullptr) {
-            home.view_->HideImage();
-        }
-    });
+    image_.reset();
+    if (view_ != nullptr) {
+        view_->HideImage();
+    }
 }
 #endif
 
@@ -618,9 +606,7 @@ void HomePresenter::HandleSettingMessage(const cJSON* data) {
             }
         }
     }
-    UiManager::GetInstance().Dispatch([texts = std::move(texts), interval_ms]() mutable {
-        HomePresenter::GetInstance().SetBanners(std::move(texts), interval_ms);
-    });
+    SetBanners(std::move(texts), interval_ms);
 }
 
 std::string HomePresenter::SubstituteWakeWord(const std::string& text) const {
@@ -628,15 +614,11 @@ std::string HomePresenter::SubstituteWakeWord(const std::string& text) const {
     if (text.find(kPlaceholder) == std::string::npos) {
         return text;
     }
-    std::function<std::string()> provider;
+    std::string wake_word;
     {
         std::lock_guard<std::mutex> lock(wake_word_mutex_);
-        provider = wake_word_provider_;
+        wake_word = wake_word_;
     }
-    if (!provider) {
-        return text;
-    }
-    const std::string wake_word = provider();
     if (wake_word.empty()) {
         return text;
     }
@@ -658,7 +640,7 @@ void HomePresenter::SetBanners(std::vector<std::string> texts, uint32_t interval
         banner_texts_ = std::move(texts);
         banner_index_ = 0;
         has_banners = !banner_texts_.empty();
-        if (has_banners && (!banner_idle_provider_ || banner_idle_provider_())) {
+        if (has_banners && DeviceStatus::GetState() == kDeviceStateIdle) {
             first_text = banner_texts_[banner_index_];
             banner_index_ = (banner_index_ + 1) % banner_texts_.size();
         }
@@ -706,7 +688,7 @@ void HomePresenter::OnBannerTick() {
     {
         std::lock_guard<std::mutex> lock(banner_mutex_);
         if (banner_texts_.empty() ||
-            (banner_idle_provider_ && !banner_idle_provider_())) {
+            DeviceStatus::GetState() != kDeviceStateIdle) {
             return;
         }
         text = banner_texts_[banner_index_];

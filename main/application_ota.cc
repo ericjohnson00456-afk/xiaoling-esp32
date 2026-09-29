@@ -6,7 +6,7 @@
 #include "shell/cmd/kv/kv_user.h"
 #include "system/time_sync.h"
 #include "ui/i18n/lang_config.h"
-#include "ui/ui_app.h"
+#include "ui/ui.h"
 #include "ui/themes/lvgl_theme_setup.h"
 
 #include <esp_log.h>
@@ -187,7 +187,7 @@ bool Application::CheckAssetsVersion() {
             PlayOtaTone(89);
             resource_tone_played = true;
         }
-        UiApp::ShowUpgradeProgress(item.updating_text, 0);
+        Ui::ShowUpgradeProgress(item.updating_text, 0);
         if (item.resource == Ota::Resource::WakeWord) {
             // The wake-word model points directly into its mapped ROMFS image.
             // Stop inference before the partition is unmapped and rewritten.
@@ -210,7 +210,7 @@ bool Application::CheckAssetsVersion() {
         const bool success = ota_flow_.client->UpgradeResource(
             item.resource, item.remote.url, item.remote.size, item.remote.md5,
             [label = std::string(item.updating_text)](int progress, size_t speed) {
-                UiApp::ShowUpgradeProgress(label, progress, speed);
+                Ui::ShowUpgradeProgress(label, progress, speed);
             });
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
         if (!success) {
@@ -231,24 +231,27 @@ bool Application::CheckAssetsVersion() {
             !LoadEmojiResources()) {
             ESP_LOGW(kTag, "Failed to reload emoji resources after OTA");
         }
-        if (wake_word_downloaded &&
-            !audio_service_.LoadWakeWordResources(true)) {
-            ESP_LOGW(kTag, "Failed to reload wake-word resources after OTA");
+        if (wake_word_downloaded) {
+            if (!audio_service_.LoadWakeWordResources(true)) {
+                ESP_LOGW(kTag, "Failed to reload wake-word resources after OTA");
+            } else {
+                Ui::SetWakeWord(audio_service_.GetWakeWordName());
+            }
         }
         PlayOtaTone(90);
-        UiApp::ShowUpgradeResult(Lang::Strings::RESOURCE_UPDATE_SUCCESSFUL);
+        Ui::ShowUpgradeResult(Lang::Strings::RESOURCE_UPDATE_SUCCESSFUL);
         vTaskDelay(pdMS_TO_TICKS(3000));
         esp_restart();
         return true;
     }
 
-    UiApp::SetChatMessage("system", "");
-    UiApp::SetEmotion("microchip_ai");
+    Ui::SetChatMessage("system", "");
+    Ui::SetEmotion("microchip_ai");
     return true;
 }
 
 bool Application::CheckNewVersion() {
-    UiApp::SetStatus(UiApp::Status::CheckingNewVersion);
+    Ui::SetStatus(Ui::Status::CheckingNewVersion);
     if (ota_flow_.client == nullptr) {
         return false;
     }
@@ -283,9 +286,9 @@ bool Application::CheckNewVersion() {
             std::snprintf(confirmation, sizeof(confirmation), Lang::Strings::OTA_CONFIRM,
                           ota_flow_.client->GetFirmwareVersion().c_str(), description.c_str());
         }
-        UiApp::SetStatusText(Lang::Strings::OTA_UPGRADE);
-        UiApp::SetEmotion("download");
-        UiApp::SetChatMessage("system", confirmation);
+        Ui::SetStatusText(Lang::Strings::OTA_UPGRADE);
+        Ui::SetEmotion("download");
+        Ui::SetChatMessage("system", confirmation);
 
         ota_flow_.confirmation_decision.store(0);
         ota_flow_.confirmation_pending.store(true);
@@ -306,7 +309,7 @@ bool Application::CheckNewVersion() {
             ESP_LOGW(kTag, "APP OTA failed; continuing with the current firmware");
         } else {
             ESP_LOGI(kTag, "User skipped APP OTA");
-            UiApp::SetChatMessage("system", "");
+            Ui::SetChatMessage("system", "");
         }
     }
     if (KvOta::IsDisabled(KvOta::UpdateType::App) &&
@@ -323,28 +326,28 @@ bool Application::UpgradeFirmware(const std::string& url, const std::string& ver
 
     ESP_LOGI(kTag, "Starting firmware upgrade from URL: %s", url.c_str());
 
-    UiApp::SetStatusText(Lang::Strings::OTA_UPGRADE);
-    UiApp::SetEmotion("download");
-    UiApp::SetChatMessage("system", Lang::Strings::UPGRADING);
+    Ui::SetStatusText(Lang::Strings::OTA_UPGRADE);
+    Ui::SetEmotion("download");
+    Ui::SetChatMessage("system", Lang::Strings::UPGRADING);
     PlayOtaTone(87);
     SetDeviceState(kDeviceStateUpgrading);
 
-    UiApp::SetChatMessage("system", std::string(Lang::Strings::NEW_VERSION) + version_info);
-    UiApp::ShowUpgradeProgress("APP", 0);
+    Ui::SetChatMessage("system", std::string(Lang::Strings::NEW_VERSION) + version_info);
+    Ui::ShowUpgradeProgress("APP", 0);
 
     board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
     audio_service_.Stop();
     vTaskDelay(pdMS_TO_TICKS(1000));
 
     const bool upgrade_success = Ota::Upgrade(url, [](int progress, size_t speed) {
-        UiApp::ShowUpgradeProgress("APP", progress, speed);
+        Ui::ShowUpgradeProgress("APP", progress, speed);
     });
     if (!upgrade_success) {
         ESP_LOGW(kTag, "Firmware upgrade interrupted; treating the current firmware as latest and continuing");
         audio_service_.Start();
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
-        UiApp::SetChatMessage("system", "");
-        UiApp::SetEmotion("microchip_ai");
+        Ui::SetChatMessage("system", "");
+        Ui::SetEmotion("microchip_ai");
         SetDeviceState(kDeviceStateActivating);
         return false;
     }
@@ -352,7 +355,7 @@ bool Application::UpgradeFirmware(const std::string& url, const std::string& ver
     ESP_LOGI(kTag, "Firmware upgrade successful, rebooting...");
     Settings ota_settings("ota", true);
     ota_settings.SetBool("app_update_pending_success", true);
-    UiApp::SetChatMessage("system", Lang::Strings::UPGRADE_SUCCESSFUL_REBOOTING);
+    Ui::SetChatMessage("system", Lang::Strings::UPGRADE_SUCCESSFUL_REBOOTING);
     vTaskDelay(pdMS_TO_TICKS(1000));
     esp_restart();
     return true;

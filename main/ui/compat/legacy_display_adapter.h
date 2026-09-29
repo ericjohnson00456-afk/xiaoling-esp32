@@ -2,8 +2,7 @@
 
 #include "display/display.h"
 
-// Bridges the legacy Display semantic API to the current presenter/view UI.
-// It owns no LVGL objects; all rendering remains in the active View.
+// 旧板级代码到 Ui::XXX() 的薄适配层；不保存状态，也不直接访问 Presenter/View。
 class LegacyDisplayAdapter final : public DisplayUiAdapter {
 public:
     bool HandleStatus(const char* status) override;

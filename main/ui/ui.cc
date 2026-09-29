@@ -1,5 +1,6 @@
-#include "ui_app.h"
+#include "ui.h"
 
+#include "alarm/alarm_service.h"
 #include "board.h"
 #include "display/display.h"
 #include "system/device_status.h"
@@ -11,11 +12,15 @@
 #include "ui/screens/alarm/alarm_success_presenter.h"
 #include "ui/screens/qrcode/qrcode_presenter.h"
 #include "ui/screens/upgrade/upgrade_presenter.h"
+#include "ui/themes/lvgl_theme.h"
 #include "ui/ui_manager.h"
 #include "ui/ui_page_ids.h"
+#include "ui/utils/emoji/emoji_repository.h"
+#include "ui/utils/image/lvgl_image.h"
 #include "ui/widgets/toast.h"
 
 #include <esp_log.h>
+#include <cJSON.h>
 
 #include <string>
 #include <cstdio>
@@ -24,50 +29,50 @@
 
 namespace {
 
-constexpr char kTag[] = "UiApp";
+constexpr char kTag[] = "Ui";
 constexpr char kUiSettingsNamespace[] = "ui";
 constexpr char kLanguageSettingsKey[] = "language";
-std::optional<UiApp::Status> current_localized_status;
+std::optional<Ui::Status> current_localized_status;
 
-std::string LocalizeStatus(UiApp::Status status) {
+std::string LocalizeStatus(Ui::Status status) {
     switch (status) {
-        case UiApp::Status::Initializing:
+        case Ui::Status::Initializing:
             return Lang::Strings::INITIALIZING;
-        case UiApp::Status::ScanningWifi:
+        case Ui::Status::ScanningWifi:
             return Lang::Strings::SCANNING_WIFI;
-        case UiApp::Status::RegisteringNetwork:
+        case Ui::Status::RegisteringNetwork:
             return Lang::Strings::REGISTERING_NETWORK;
-        case UiApp::Status::DetectingModule:
+        case Ui::Status::DetectingModule:
             return Lang::Strings::DETECTING_MODULE;
-        case UiApp::Status::CheckingNewVersion:
+        case Ui::Status::CheckingNewVersion:
             return Lang::Strings::CHECKING_NEW_VERSION;
-        case UiApp::Status::LoadingProtocol:
+        case Ui::Status::LoadingProtocol:
             return Lang::Strings::LOADING_PROTOCOL;
-        case UiApp::Status::Standby:
+        case Ui::Status::Standby:
             return Lang::Strings::STANDBY;
-        case UiApp::Status::Connecting:
+        case Ui::Status::Connecting:
             return Lang::Strings::CONNECTING;
-        case UiApp::Status::Listening:
+        case Ui::Status::Listening:
             return Lang::Strings::LISTENING;
-        case UiApp::Status::Speaking:
+        case Ui::Status::Speaking:
             return Lang::Strings::SPEAKING;
     }
     return Lang::Strings::INITIALIZING;
 }
 
-std::string LocalizeNotification(UiApp::Notification notification, const std::string& detail) {
+std::string LocalizeNotification(Ui::Notification notification, const std::string& detail) {
     switch (notification) {
-        case UiApp::Notification::ScanningWifi:
+        case Ui::Notification::ScanningWifi:
             return Lang::Strings::SCANNING_WIFI;
-        case UiApp::Notification::ConnectingToNetwork:
+        case Ui::Notification::ConnectingToNetwork:
             return std::string(Lang::Strings::CONNECT_TO) + detail + "...";
-        case UiApp::Notification::ConnectedToNetwork:
+        case Ui::Notification::ConnectedToNetwork:
             return std::string(Lang::Strings::CONNECTED_TO) + detail;
-        case UiApp::Notification::SwitchTo4G:
+        case Ui::Notification::SwitchTo4G:
             return Lang::Strings::SWITCH_TO_4G_NETWORK;
-        case UiApp::Notification::SwitchToWifi:
+        case Ui::Notification::SwitchToWifi:
             return Lang::Strings::SWITCH_TO_WIFI_NETWORK;
-        case UiApp::Notification::EnteringWifiConfigMode:
+        case Ui::Notification::EnteringWifiConfigMode:
             return Lang::Strings::ENTERING_WIFI_CONFIG_MODE;
     }
     return {};
@@ -78,6 +83,17 @@ void ShowNotificationOnDisplay(std::string text, int32_t duration_ms) {
         HomePresenter::GetInstance().ShowNotification(std::move(text), duration_ms);
     } else if (auto* display = UiManager::GetInstance().display(); display != nullptr) {
         display->ShowNotification(text, duration_ms);
+    }
+}
+
+void UpdateStatusBarOnUi(bool update_all) {
+    auto& manager = UiManager::GetInstance();
+    if (manager.lvgl_display() != nullptr) {
+        auto& home = HomePresenter::GetInstance();
+        home.SetAlarmActive(AlarmService::GetInstance().HasActiveCountdown());
+        home.UpdateBattery();
+    } else if (auto* display = manager.display(); display != nullptr) {
+        display->UpdateStatusBar(update_all);
     }
 }
 
@@ -103,13 +119,10 @@ bool ShouldIgnoreStandbyEmotion(const std::string& emotion) {
 
 }  // namespace
 
-namespace UiApp {
-
-void SetBannerIdleProvider(std::function<bool()> provider) {
-    HomePresenter::GetInstance().SetBannerIdleProvider(std::move(provider));
-}
+namespace Ui {
 
 bool Initialize() {
+    // 第一步：确定界面语言。用户 KV 的显式选择优先，其次使用 UI 自己保存的语言。
     Settings settings(kUiSettingsNamespace);
     const auto saved_language = settings.GetString(kLanguageSettingsKey);
     const auto user_language = KvUser::GetUiLanguage();
@@ -120,6 +133,8 @@ bool Initialize() {
         ESP_LOGW(kTag, "Ignoring unsupported saved language: %s", saved_language.c_str());
     }
 
+    // 第二步：从 Board 取得显示设备并绑定到 UiManager。
+    // Display 的面板和 LVGL 底层已经由 Board 创建，UI 这里只保存指针，不重复初始化硬件。
     auto& ui = UiManager::GetInstance();
     if (!ui.initialized()) {
         auto& board = Board::GetInstance();
@@ -131,6 +146,8 @@ bool Initialize() {
         ui.Initialize(display);
     }
 
+    // 第三步：把所有页面加入导航表，并把 Home 设置为默认页面。
+    // 注册阶段只建立页面描述和导航关系，还没有启动 UI 命令任务。
     if (ui.RegisterScreen(&HomePresenter::Screen()) != 0 ||
         ui.RegisterScreen(&AlarmSuccessPresenter::Screen()) != 0 ||
         ui.RegisterScreen(&AlarmRingPresenter::Screen()) != 0 ||
@@ -139,10 +156,14 @@ bool Initialize() {
         ui.SetDefaultScreen(UI_PAGE_HOME) != 0) {
         return false;
     }
-    return true;
+
+    // 第四步：最后启动 UI 专用任务。此后 Ui::SetXxx()/ShowXxx() 只负责投递命令，
+    // 真正的 Presenter/View 更新都由该任务按 FIFO 顺序执行。
+    return ui.StartTask();
 }
 
 void SetStatus(Status status) {
+    // 这里只把操作放入队列，不在调用者（网络、音频或 Application）任务中直接改 UI。
     UiManager::GetInstance().Dispatch([status]() {
         current_localized_status = status;
         HomePresenter::GetInstance().SetStatus(LocalizeStatus(status));
@@ -208,6 +229,24 @@ void SetVoicePrompt(std::string text) {
     });
 }
 
+void SetWakeWord(std::string wake_word) {
+    UiManager::GetInstance().Dispatch([wake_word = std::move(wake_word)]() mutable {
+        HomePresenter::GetInstance().SetWakeWord(std::move(wake_word));
+    });
+}
+
+void SetWifiIcon(std::string icon) {
+    UiManager::GetInstance().Dispatch([icon = std::move(icon)]() mutable {
+        HomePresenter::GetInstance().SetWifiIcon(std::move(icon));
+    });
+}
+
+void SetClockText(std::string text) {
+    UiManager::GetInstance().Dispatch([text = std::move(text)]() mutable {
+        HomePresenter::GetInstance().SetTime(std::move(text));
+    });
+}
+
 void SetEmotion(std::string emotion) {
     if (ShouldIgnoreStandbyEmotion(emotion)) {
         return;
@@ -236,11 +275,45 @@ void SetAlarmActive(bool active) {
     });
 }
 
+void ShowAlarmRing(const AlarmSnapshot& alarm) {
+    UiManager::GetInstance().Dispatch([alarm]() {
+        if (UiManager::GetInstance().lvgl_display() == nullptr) {
+            ShowNotificationOnDisplay(
+                alarm.spec.text.empty() ? "闹钟响了" : alarm.spec.text, 15000);
+            return;
+        }
+        AlarmRingPresenter::GetInstance().ShowAlarm(alarm);
+    });
+}
+
+void DismissAlarmRing() {
+    UiManager::GetInstance().Dispatch([]() {
+        AlarmRingPresenter::GetInstance().Dismiss();
+    });
+}
+
+void ShowAlarmSuccess(const AlarmSnapshot& alarm, bool newly_created) {
+    UiManager::GetInstance().Dispatch([alarm, newly_created]() {
+        auto& manager = UiManager::GetInstance();
+        if (manager.lvgl_display() == nullptr) {
+            ShowNotificationOnDisplay("闹钟设置成功", 3000);
+            return;
+        }
+        if (manager.TopScreenId() == UI_PAGE_ALARM_RING) {
+            if (newly_created) {
+                Toast::GetInstance().Show("新闹钟创建成功", 3000);
+            } else {
+                HomePresenter::GetInstance().ShowNotification("闹钟设置成功", 3000);
+            }
+            return;
+        }
+        AlarmSuccessPresenter::GetInstance().ShowAlarm(alarm);
+    });
+}
+
 void UpdateStatusBar(bool update_all) {
     UiManager::GetInstance().Dispatch([update_all]() {
-        if (auto* display = UiManager::GetInstance().display(); display != nullptr) {
-            display->UpdateStatusBar(update_all);
-        }
+        UpdateStatusBarOnUi(update_all);
     });
 }
 
@@ -288,9 +361,7 @@ void ToggleLanguage() {
         if (current_localized_status.has_value()) {
             HomePresenter::GetInstance().SetStatus(LocalizeStatus(*current_localized_status));
         }
-        if (auto* display = UiManager::GetInstance().display(); display != nullptr) {
-            display->UpdateStatusBar(true);
-        }
+        UpdateStatusBarOnUi(true);
         ShowNotificationOnDisplay(Lang::Strings::LANGUAGE_SWITCHED, 3000);
         ESP_LOGI(kTag, "Display language switched to %s", Lang::GetLanguageCode());
     });
@@ -309,9 +380,7 @@ void SetLanguageMode(int32_t mode) {
         if (current_localized_status.has_value()) {
             HomePresenter::GetInstance().SetStatus(LocalizeStatus(*current_localized_status));
         }
-        if (auto* display = UiManager::GetInstance().display(); display != nullptr) {
-            display->UpdateStatusBar(true);
-        }
+        UpdateStatusBarOnUi(true);
         ShowNotificationOnDisplay(Lang::Strings::LANGUAGE_SWITCHED, 3000);
         ESP_LOGI(kTag, "Display language set to %s", Lang::GetLanguageCode());
     });
@@ -366,20 +435,16 @@ void SetDuplexVisible(bool visible) {
 }
 
 void ShowUpgradeProgress(std::string target, int progress, size_t speed) {
-    auto& manager = UiManager::GetInstance();
-    if (manager.lvgl_display() != nullptr) {
-        // Progress callbacks originate in the OTA task (priority 2). Apply
-        // them immediately under the LVGL lock instead of queueing behind the
-        // application task, otherwise the progress page can visibly freeze.
-        auto& presenter = UpgradePresenter::GetInstance();
-        presenter.SetProgress(std::move(target), progress, speed);
-        if (manager.TopScreenId() != UI_PAGE_UPGRADE) {
-            manager.NavigateTo(UI_PAGE_UPGRADE);
-        }
-        return;
-    }
-
     UiManager::GetInstance().Dispatch([target = std::move(target), progress, speed]() mutable {
+        auto& manager = UiManager::GetInstance();
+        if (manager.lvgl_display() != nullptr) {
+            auto& presenter = UpgradePresenter::GetInstance();
+            presenter.SetProgress(std::move(target), progress, speed);
+            if (manager.TopScreenId() != UI_PAGE_UPGRADE) {
+                manager.NavigateTo(UI_PAGE_UPGRADE);
+            }
+            return;
+        }
         if (auto* display = UiManager::GetInstance().display(); display != nullptr) {
             char text[80];
             std::snprintf(text, sizeof(text), "%s %d%%", target.c_str(), progress);
@@ -389,23 +454,118 @@ void ShowUpgradeProgress(std::string target, int progress, size_t speed) {
 }
 
 void ShowUpgradeResult(std::string message) {
-    auto& manager = UiManager::GetInstance();
     ESP_LOGI(kTag, "Showing OTA result: %s", message.c_str());
-    if (manager.lvgl_display() != nullptr) {
-        auto& presenter = UpgradePresenter::GetInstance();
-        if (manager.TopScreenId() != UI_PAGE_UPGRADE) {
-            manager.NavigateTo(UI_PAGE_UPGRADE);
+    UiManager::GetInstance().Dispatch([message = std::move(message)]() mutable {
+        auto& manager = UiManager::GetInstance();
+        if (manager.lvgl_display() != nullptr) {
+            auto& presenter = UpgradePresenter::GetInstance();
+            if (manager.TopScreenId() != UI_PAGE_UPGRADE) {
+                manager.NavigateTo(UI_PAGE_UPGRADE);
+            }
+            presenter.SetResult(std::move(message));
+        } else if (auto* display = manager.display(); display != nullptr) {
+            display->SetChatMessage("system", message.c_str());
         }
-        presenter.SetResult(std::move(message));
-    } else if (auto* display = manager.display(); display != nullptr) {
-        display->SetChatMessage("system", message.c_str());
-    }
+    });
 }
 
-void NavigateToQrCode() {
+void HandleSettingMessage(const cJSON* data) {
+    if (data == nullptr) {
+        return;
+    }
+    // 服务端回调返回后原始 cJSON 会失效，复制一份再交给 UI 任务统一解析。
+    auto copy = std::shared_ptr<cJSON>(cJSON_Duplicate(data, true), cJSON_Delete);
+    if (copy == nullptr) {
+        ESP_LOGE(kTag, "Failed to copy UI setting message");
+        return;
+    }
+    UiManager::GetInstance().Dispatch([copy = std::move(copy)]() {
+        HomePresenter::GetInstance().HandleSettingMessage(copy.get());
+        QrCodePresenter::GetInstance().HandleSettingMessage(copy.get());
+    });
+}
+
+void ClearRoleConfigQrCode() {
     UiManager::GetInstance().Dispatch([]() {
+        QrCodePresenter::GetInstance().ClearRoleConfigUrl();
+    });
+}
+
+bool HasRoleConfigQrCode() {
+    return QrCodePresenter::GetInstance().HasRoleConfigQrCode();
+}
+
+void ShowRoleConfigQrCode() {
+    UiManager::GetInstance().Dispatch([]() {
+        QrCodePresenter::GetInstance().SelectRoleConfig();
         UiManager::GetInstance().NavigateTo(UI_PAGE_QRCODE);
     });
+}
+
+void ShowQrCode(std::unique_ptr<LvglImage> image, std::string message) {
+    if (image == nullptr) {
+        return;
+    }
+    // std::function 要求闭包可复制，用共享 holder 跨任务传递唯一所有权。
+    auto pending = std::make_shared<std::unique_ptr<LvglImage>>(std::move(image));
+    UiManager::GetInstance().Dispatch(
+        [pending = std::move(pending), message = std::move(message)]() mutable {
+            QrCodePresenter::GetInstance().SetCustomQrCode(
+                std::move(*pending), std::move(message));
+            UiManager::GetInstance().NavigateTo(UI_PAGE_QRCODE);
+        });
+}
+
+void DismissQrCode() {
+    UiManager::GetInstance().Dispatch([]() {
+        auto& manager = UiManager::GetInstance();
+        if (manager.TopScreenId() == UI_PAGE_QRCODE) {
+            manager.NavigateHome();
+        }
+    });
+}
+
+void ShowImage(std::unique_ptr<LvglImage> image) {
+#ifdef CONFIG_LSPLATFORM
+    if (image == nullptr) {
+        return;
+    }
+    auto pending = std::make_shared<std::unique_ptr<LvglImage>>(std::move(image));
+    UiManager::GetInstance().Dispatch([pending = std::move(pending)]() mutable {
+        HomePresenter::GetInstance().SetImage(std::move(*pending));
+    });
+#else
+    (void)image;
+#endif
+}
+
+void DismissImage() {
+    UiManager::GetInstance().Dispatch([]() {
+#ifdef CONFIG_LSPLATFORM
+        auto& manager = UiManager::GetInstance();
+        if (manager.lvgl_display() != nullptr) {
+            HomePresenter::GetInstance().ClearImage();
+        } else if (auto* display = manager.display(); display != nullptr) {
+            display->DismissImage();
+        }
+#endif
+    });
+}
+
+bool IsHome() {
+    auto& manager = UiManager::GetInstance();
+    return manager.lvgl_display() == nullptr ||
+           manager.TopScreenId() == UI_PAGE_HOME;
+}
+
+std::vector<std::string> GetEmotionNames() {
+    auto* display = UiManager::GetInstance().display();
+    auto* theme = display != nullptr
+                      ? dynamic_cast<LvglTheme*>(display->GetTheme())
+                      : nullptr;
+    auto repository = theme != nullptr ? theme->emoji_repository() : nullptr;
+    return repository != nullptr ? repository->GetNames()
+                                 : std::vector<std::string>{};
 }
 
 void NavigateHome() {
@@ -414,4 +574,4 @@ void NavigateHome() {
     });
 }
 
-}  // UiApp 命名空间
+}  // Ui 命名空间

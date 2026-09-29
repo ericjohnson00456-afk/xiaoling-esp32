@@ -6,6 +6,7 @@
 
 #include <esp_log.h>
 
+#include <deque>
 #include <utility>
 
 #define TAG "UiManager"
@@ -28,9 +29,12 @@ void UiManager::Initialize(Display* display) {
     }
     legacy_display_adapter_.reset();
     display_ = display;
-    // OLED / NoDisplay 场景下转型失败，仅页面导航不可用，banner 等通用能力不受影响
+
+    // LCD 的 LVGL 页面使用 lvgl_display_ 完成页面导航；OLED / NoDisplay 转型会失败，
+    // 此时仍保留基础 Display 接口，可继续显示通知等兼容内容。
     lvgl_display_ = dynamic_cast<LvglDisplay*>(display);
     if (lvgl_display_ != nullptr) {
+        // 旧 Display 接口仍有调用者时，由适配器把这些调用转给新的 UI 页面。
         legacy_display_adapter_ = std::make_unique<LegacyDisplayAdapter>();
         display_->SetUiAdapter(legacy_display_adapter_.get());
     }
@@ -38,28 +42,58 @@ void UiManager::Initialize(Display* display) {
              display_->width(), display_->height(), lvgl_display_ != nullptr ? "yes" : "no");
 }
 
-void UiManager::SetTaskScheduler(std::function<void(std::function<void()>&&)> scheduler) {
-    task_scheduler_ = std::move(scheduler);
-}
-
-void UiManager::SetUrgentTaskScheduler(
-        std::function<void(std::function<void()>&&)> scheduler) {
-    urgent_task_scheduler_ = std::move(scheduler);
+bool UiManager::StartTask() {
+    // 重复初始化时不再创建第二个 UI 任务。
+    if (task_handle_ != nullptr) {
+        return true;
+    }
+    if (xTaskCreate(TaskEntry, "ui", 6144, this, tskIDLE_PRIORITY + 2,
+                    &task_handle_) != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create UI task");
+        task_handle_ = nullptr;
+        return false;
+    }
+    // Dispatch() 允许在任务启动前入队，因此启动后主动通知一次，处理已有命令。
+    xTaskNotifyGive(task_handle_);
+    ESP_LOGI(TAG, "UI task started");
+    return true;
 }
 
 void UiManager::Dispatch(std::function<void()>&& task) {
-    if (task_scheduler_) {
-        task_scheduler_(std::move(task));
-    } else if (task) {
-        task();
+    if (!task) {
+        return;
+    }
+    TaskHandle_t task_handle = nullptr;
+    {
+        // 这里只保护命令队列；具体 UI 操作留到 TaskLoop() 中执行。
+        std::lock_guard<std::mutex> lock(task_mutex_);
+        tasks_.push_back(std::move(task));
+        task_handle = task_handle_;
+    }
+    if (task_handle != nullptr) {
+        // FreeRTOS task notification 仅用于唤醒，不承载命令；命令本体保存在 tasks_。
+        xTaskNotifyGive(task_handle);
     }
 }
 
-void UiManager::DispatchUrgent(std::function<void()>&& task) {
-    if (urgent_task_scheduler_) {
-        urgent_task_scheduler_(std::move(task));
-    } else {
-        Dispatch(std::move(task));
+void UiManager::TaskEntry(void* arg) {
+    static_cast<UiManager*>(arg)->TaskLoop();
+}
+
+void UiManager::TaskLoop() {
+    while (true) {
+        // 没有 UI 命令时阻塞休眠，不占用 CPU。
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+        // 一次取走当前全部命令。执行期间不持有队列锁，其他任务仍可继续投递。
+        std::deque<std::function<void()>> pending;
+        {
+            std::lock_guard<std::mutex> lock(task_mutex_);
+            pending.swap(tasks_);
+        }
+        for (auto& task : pending) {
+            task();
+        }
     }
 }
 

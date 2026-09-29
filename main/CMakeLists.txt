@@ -748,7 +748,7 @@ elseif(CONFIG_LANGUAGE_SR_RS)
     set(LANG_DIR "sr-RS")
 endif()
 
-# Define generation path
+# 语言配置只供 UI 文案使用，生成到 UI 目录，不在 main 下创建通用 assets 目录。
 set(LANG_JSON "${CMAKE_CURRENT_SOURCE_DIR}/resource/assets/respak/locales/${LANG_DIR}/language.json")
 set(ENGLISH_LANG_JSON "${CMAKE_CURRENT_SOURCE_DIR}/resource/assets/respak/locales/en-US/language.json")
 set(LANG_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/ui/i18n/lang_config.h")

@@ -12,7 +12,8 @@ public:
     static AlarmSuccessPresenter& GetInstance();
     static const UiNavScreen& Screen();
 
-    void ShowAlarm(const AlarmSnapshot& alarm, bool newly_created = false);
+    // 由 ui.cc 在 UI 任务中调用。
+    void ShowAlarm(const AlarmSnapshot& alarm);
 
 private:
     static int Open(const UiNavScreen*, void** data);

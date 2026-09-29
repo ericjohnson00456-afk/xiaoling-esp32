@@ -23,8 +23,7 @@ public:
     static HomePresenter& GetInstance();
     static const UiNavScreen& Screen();
 
-    void SetBannerIdleProvider(std::function<bool()> provider);
-    void SetWakeWordProvider(std::function<std::string()> provider);
+    void SetWakeWord(std::string wake_word);
     void HandleSettingMessage(const cJSON* data);
     void SetEmotion(std::string emotion);
     void ShowEmotionOnce(std::string emotion);
@@ -84,7 +83,6 @@ private:
     std::vector<std::string> banner_texts_;
     size_t banner_index_ = 0;
     esp_timer_handle_t banner_timer_ = nullptr;
-    std::function<bool()> banner_idle_provider_;
     std::vector<uint32_t> voice_event_subscriptions_;
     std::vector<SubtitleSegment> subtitle_segments_;
     size_t subtitle_index_ = 0;
@@ -100,7 +98,7 @@ private:
     bool iat_dispatch_pending_ = false;
     bool iat_text_visible_ = false;
     mutable std::mutex wake_word_mutex_;
-    std::function<std::string()> wake_word_provider_;
+    std::string wake_word_;
     std::string last_emotion_;
     std::string last_chat_role_;
     std::string last_chat_text_;

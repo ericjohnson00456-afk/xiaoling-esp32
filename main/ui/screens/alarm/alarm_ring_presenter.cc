@@ -1,7 +1,6 @@
 #include "alarm_ring_presenter.h"
 
 #include "alarm_ring_view.h"
-#include "ui/ui_app.h"
 #include "ui/ui_manager.h"
 #include "ui/ui_page_ids.h"
 
@@ -26,24 +25,19 @@ const UiNavScreen& AlarmRingPresenter::Screen() {
 }
 
 void AlarmRingPresenter::ShowAlarm(const AlarmSnapshot& alarm) {
-    UiManager::GetInstance().DispatchUrgent([alarm]() {
-        auto& presenter = GetInstance();
-        presenter.alarm_ = alarm;
-        if (UiManager::GetInstance().lvgl_display() == nullptr) {
-            UiApp::ShowNotification(alarm.spec.text.empty() ? "闹钟响了" : alarm.spec.text, 15000);
-            return;
-        }
-        UiManager::GetInstance().NavigateTo(UI_PAGE_ALARM_RING);
-        presenter.Refresh();
-    });
+    alarm_ = alarm;
+    auto& manager = UiManager::GetInstance();
+    if (manager.TopScreenId() == UI_PAGE_ALARM_RING) {
+        Refresh();
+    } else {
+        manager.NavigateTo(UI_PAGE_ALARM_RING);
+    }
 }
 
 void AlarmRingPresenter::Dismiss() {
-    UiManager::GetInstance().DispatchUrgent([]() {
-        if (UiManager::GetInstance().TopScreenId() == UI_PAGE_ALARM_RING) {
-            UiManager::GetInstance().NavigateHome();
-        }
-    });
+    if (UiManager::GetInstance().TopScreenId() == UI_PAGE_ALARM_RING) {
+        UiManager::GetInstance().NavigateHome();
+    }
 }
 
 int AlarmRingPresenter::Open(const UiNavScreen*, void** data) {

@@ -17,8 +17,7 @@ public:
     static QrCodePresenter& GetInstance();
     static const UiNavScreen& Screen();
 
-    // External modules push QR-code content into the page presenter. The
-    // presenter owns the asynchronous role-config cache and page state.
+    // 以下写操作由 ui.cc 在 UI 任务中调用；下载完成回调会自行切回 UI 任务。
     void HandleSettingMessage(const cJSON* data);
     void ClearRoleConfigUrl();
     void SelectRoleConfig();

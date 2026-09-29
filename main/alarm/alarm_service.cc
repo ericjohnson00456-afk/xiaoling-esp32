@@ -2,9 +2,7 @@
 
 #include "application.h"
 #include "system/time_sync.h"
-#include "ui/ui_app.h"
-#include "ui/screens/alarm/alarm_ring_presenter.h"
-#include "ui/screens/alarm/alarm_success_presenter.h"
+#include "ui/ui.h"
 
 #include <algorithm>
 #include <array>
@@ -222,8 +220,8 @@ bool AlarmService::Create(const AlarmSpec& spec, std::string& error) {
         error = "保存闹钟失败";
         return false;
     }
-    UiApp::SetAlarmActive(HasActiveCountdown());
-    AlarmSuccessPresenter::GetInstance().ShowAlarm(alarm, true);
+    Ui::SetAlarmActive(HasActiveCountdown());
+    Ui::ShowAlarmSuccess(alarm, true);
     return true;
 }
 
@@ -245,8 +243,8 @@ bool AlarmService::Update(const AlarmSpec& spec, std::string& error) {
         error = "保存闹钟失败";
         return false;
     }
-    UiApp::SetAlarmActive(HasActiveCountdown());
-    AlarmSuccessPresenter::GetInstance().ShowAlarm(replacement);
+    Ui::SetAlarmActive(HasActiveCountdown());
+    Ui::ShowAlarmSuccess(replacement);
     return true;
 }
 
@@ -266,7 +264,7 @@ bool AlarmService::Delete(const std::string& id, std::string& error) {
         error = "删除闹钟保存失败";
         return false;
     }
-    UiApp::SetAlarmActive(HasActiveCountdown());
+    Ui::SetAlarmActive(HasActiveCountdown());
     return true;
 }
 
@@ -443,7 +441,7 @@ void AlarmService::Tick() {
         time_reconciled_ = true;
         if (changed) {
             Save();
-            UiApp::SetAlarmActive(HasActiveCountdown());
+            Ui::SetAlarmActive(HasActiveCountdown());
         }
     }
     if (ringing_) {
@@ -485,7 +483,7 @@ void AlarmService::StartRinging(const AlarmSnapshot& alarm, int64_t now) {
     tone_session_id_ = Application::GetInstance().StartAlarmTone(kAlarmToneId);
     if (tone_session_id_ == 0) BeginAlarmTts();
     if (current_pre_advanced_) AdvanceOrRemove(alarm.spec.id, now);
-    AlarmRingPresenter::GetInstance().ShowAlarm(current_alarm_);
+    Ui::ShowAlarmRing(current_alarm_);
     ESP_LOGI(kTag, "闹钟响铃: id=%s, text=%s", alarm.spec.id.c_str(), alarm.spec.text.c_str());
 }
 
@@ -570,10 +568,10 @@ void AlarmService::Snooze() {
         alarms_[index].next_trigger = std::time(nullptr) +
                                       current_alarm_.spec.snooze_interval * 60;
         Save();
-        UiApp::SetAlarmActive(HasActiveCountdown());
+        Ui::SetAlarmActive(HasActiveCountdown());
     }
     FinishRinging(false);
-    UiApp::ShowToast("稍后提醒您~");
+    Ui::ShowToast("稍后提醒您~");
 }
 
 void AlarmService::Stop(bool show_toast) {
@@ -582,7 +580,7 @@ void AlarmService::Stop(bool show_toast) {
     const bool recurring = current_alarm_.spec.type != AlarmType::kOnce;
     FinishRinging(!current_pre_advanced_);
     if (show_toast) {
-        UiApp::ShowToast(recurring ? "本次闹钟已关闭" : "闹钟关闭成功!");
+        Ui::ShowToast(recurring ? "本次闹钟已关闭" : "闹钟关闭成功!");
     }
 }
 
@@ -596,7 +594,7 @@ void AlarmService::FinishRinging(bool advance_schedule) {
     Application::GetInstance().StopAlarmTone();
     if (advance_schedule) AdvanceOrRemove(id, std::time(nullptr));
     current_pre_advanced_ = false;
-    AlarmRingPresenter::GetInstance().Dismiss();
+    Ui::DismissAlarmRing();
 }
 
 void AlarmService::AdvanceOrRemove(const std::string& id, int64_t after) {
@@ -610,7 +608,7 @@ void AlarmService::AdvanceOrRemove(const std::string& id, int64_t after) {
         if (alarms_[index].next_trigger <= after) alarms_.erase(alarms_.begin() + index);
     }
     Save();
-    UiApp::SetAlarmActive(HasActiveCountdown());
+    Ui::SetAlarmActive(HasActiveCountdown());
 }
 
 void AlarmService::HandlePlaybackEvent(const PlaybackEvent& event) {
@@ -735,7 +733,7 @@ bool AlarmService::SyncFromCloud() {
             return false;
         }
         time_reconciled_ = true;
-        UiApp::SetAlarmActive(HasActiveCountdown());
+        Ui::SetAlarmActive(HasActiveCountdown());
         ESP_LOGI(kTag, "已按云端列表更新本地闹钟，共 %u 个",
                  static_cast<unsigned>(alarms_.size()));
     }

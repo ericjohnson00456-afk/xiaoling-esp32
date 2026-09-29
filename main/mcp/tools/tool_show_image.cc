@@ -5,7 +5,7 @@
 #include "display/display.h"
 #include "image_fetcher.h"
 #include "mcp_server.h"
-#include "ui/screens/home/home_presenter.h"
+#include "ui/ui.h"
 #include <esp_log.h>
 
 namespace {
@@ -26,7 +26,7 @@ MCP_REGISTER_TOOL(RegisterShowImage, McpToolGroup::kCommon, 70) {
                      ESP_LOGE(TAG, "Failed to fetch image: %s", url.c_str());
                      throw std::runtime_error("图片下载失败");
                    }
-                   HomePresenter::GetInstance().SetImage(std::move(image));
+                   Ui::ShowImage(std::move(image));
                    return std::string("已完成操作");
                  });
 #endif

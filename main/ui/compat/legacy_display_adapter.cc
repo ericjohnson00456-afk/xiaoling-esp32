@@ -1,10 +1,6 @@
 #include "legacy_display_adapter.h"
 
-#include "alarm/alarm_service.h"
-#include "ui/ui_manager.h"
-#include "ui/ui_page_ids.h"
-#include "ui/screens/home/home_presenter.h"
-#include "ui/screens/qrcode/qrcode_presenter.h"
+#include "ui/ui.h"
 #include "ui/utils/image/lvgl_image.h"
 
 #include <utility>
@@ -18,63 +14,42 @@ std::string CopyText(const char* text) {
 }  // namespace
 
 bool LegacyDisplayAdapter::HandleStatus(const char* status) {
-    auto value = CopyText(status);
-    UiManager::GetInstance().Dispatch([value = std::move(value)]() mutable {
-        HomePresenter::GetInstance().SetStatus(std::move(value));
-    });
+    Ui::SetStatusText(CopyText(status));
     return true;
 }
 
 bool LegacyDisplayAdapter::HandleNotification(const char* notification, int duration_ms) {
-    auto value = CopyText(notification);
-    UiManager::GetInstance().Dispatch([value = std::move(value), duration_ms]() mutable {
-        HomePresenter::GetInstance().ShowNotification(std::move(value), duration_ms);
-    });
+    Ui::ShowNotification(CopyText(notification), duration_ms);
     return true;
 }
 
 bool LegacyDisplayAdapter::HandleEmotion(const char* emotion, bool once) {
     auto value = CopyText(emotion);
-    UiManager::GetInstance().Dispatch([value = std::move(value), once]() mutable {
-        if (once) {
-            HomePresenter::GetInstance().ShowEmotionOnce(std::move(value));
-        } else {
-            HomePresenter::GetInstance().SetEmotion(std::move(value));
-        }
-    });
+    if (once) {
+        Ui::ShowEmotionOnce(std::move(value));
+    } else {
+        Ui::SetEmotion(std::move(value));
+    }
     return true;
 }
 
 bool LegacyDisplayAdapter::HandleChatMessage(const char* role, const char* content) {
-    auto role_value = CopyText(role);
-    auto content_value = CopyText(content);
-    UiManager::GetInstance().Dispatch([role = std::move(role_value),
-                                       content = std::move(content_value)]() mutable {
-        HomePresenter::GetInstance().SetChatMessage(std::move(role), std::move(content));
-    });
+    Ui::SetChatMessage(CopyText(role), CopyText(content));
     return true;
 }
 
 bool LegacyDisplayAdapter::HandleNetworkIcon(const char* icon) {
-    auto value = CopyText(icon);
-    UiManager::GetInstance().Dispatch([value = std::move(value)]() mutable {
-        HomePresenter::GetInstance().SetWifiIcon(std::move(value));
-    });
+    Ui::SetWifiIcon(CopyText(icon));
     return true;
 }
 
 bool LegacyDisplayAdapter::HandleDuplexMode(DuplexMode mode) {
-    UiManager::GetInstance().Dispatch([mode]() {
-        HomePresenter::GetInstance().SetDuplexMode(mode);
-    });
+    Ui::SetDuplexMode(mode);
     return true;
 }
 
 bool LegacyDisplayAdapter::HandleClockText(const char* text) {
-    auto value = CopyText(text);
-    UiManager::GetInstance().Dispatch([value = std::move(value)]() mutable {
-        HomePresenter::GetInstance().SetTime(std::move(value));
-    });
+    Ui::SetClockText(CopyText(text));
     return true;
 }
 
@@ -82,35 +57,26 @@ bool LegacyDisplayAdapter::HandleHomeVisible(bool visible) {
     if (!visible) {
         return true;
     }
-    UiManager::GetInstance().Dispatch([]() {
-        UiManager::GetInstance().NavigateHome();
-    });
+    Ui::NavigateHome();
     return true;
 }
 
 bool LegacyDisplayAdapter::HandleStatusBarUpdate(bool update_all) {
-    (void)update_all;
-    // The legacy application still refreshes the status bar once per clock
-    // tick. Use that existing path to refresh runtime countdown and battery.
-    HomePresenter::GetInstance().SetAlarmActive(
-        AlarmService::GetInstance().HasActiveCountdown());
-    HomePresenter::GetInstance().UpdateBattery();
+    Ui::UpdateStatusBar(update_all);
     return true;
 }
 
 bool LegacyDisplayAdapter::HandlePowerSaveMode(bool on) {
-    UiManager::GetInstance().Dispatch([on]() {
-        HomePresenter::GetInstance().SetPowerSaveMode(on);
-    });
+    Ui::SetPowerSaveMode(on);
     return true;
 }
 
 #ifdef CONFIG_LSPLATFORM
 bool LegacyDisplayAdapter::HandlePreviewImage(std::unique_ptr<LvglImage> image) {
     if (image != nullptr) {
-        HomePresenter::GetInstance().SetImage(std::move(image));
+        Ui::ShowImage(std::move(image));
     } else {
-        HomePresenter::GetInstance().ClearImage();
+        Ui::DismissImage();
     }
     return true;
 }
@@ -120,19 +86,12 @@ bool LegacyDisplayAdapter::HandleActivation(std::unique_ptr<LvglImage> qrcode,
     if (qrcode == nullptr) {
         return true;
     }
-    QrCodePresenter::GetInstance().SetCustomQrCode(std::move(qrcode), message);
-    UiManager::GetInstance().Dispatch([]() {
-        UiManager::GetInstance().NavigateTo(UI_PAGE_QRCODE);
-    });
+    Ui::ShowQrCode(std::move(qrcode), message);
     return true;
 }
 
 bool LegacyDisplayAdapter::HandleDismissActivation() {
-    UiManager::GetInstance().Dispatch([]() {
-        if (UiManager::GetInstance().TopScreenId() == UI_PAGE_QRCODE) {
-            UiManager::GetInstance().NavigateHome();
-        }
-    });
+    Ui::DismissQrCode();
     return true;
 }
 
@@ -141,7 +100,7 @@ bool LegacyDisplayAdapter::HandleImage(std::unique_ptr<LvglImage> image) {
 }
 
 bool LegacyDisplayAdapter::HandleDismissImage() {
-    HomePresenter::GetInstance().ClearImage();
+    Ui::DismissImage();
     return true;
 }
 #endif // CONFIG_LSPLATFORM

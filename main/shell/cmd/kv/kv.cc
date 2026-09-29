@@ -5,7 +5,7 @@
 #include "backlight.h"
 #include "board.h"
 #include "settings.h"
-#include "ui/ui_app.h"
+#include "ui/ui.h"
 #include "xiaoling/session/session_core.h"
 
 #include <cerrno>
@@ -163,7 +163,7 @@ void SetUserIntValue(UserIntKey key, int32_t value) {
             break;
         case UserIntKey::UiLanguage:
             KvUser::SetUiLanguage(value);
-            UiApp::SetLanguageMode(value);
+            Ui::SetLanguageMode(value);
             break;
         case UserIntKey::FullDuplexTimeoutMs:
             KvUser::SetFullDuplexTimeoutMs(value);

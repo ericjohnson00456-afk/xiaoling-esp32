@@ -4,7 +4,7 @@
 #include "display/display.h"
 #include "ui/ui_manager.h"
 #include "ui/ui_page_ids.h"
-#include "ui/ui_app.h"
+#include "ui/ui.h"
 #include "ui/i18n/lang_config.h"
 #include "ui/utils/image/lvgl_image.h"
 #include "system/device_status.h"
@@ -123,10 +123,7 @@ void QrCodePresenter::HandleSettingMessage(const cJSON* data) {
     const auto* role_config = cJSON_IsObject(guide) ? cJSON_GetObjectItemCaseSensitive(guide, "role_config") : nullptr;
     const auto* image_url = cJSON_IsObject(role_config) ? cJSON_GetObjectItemCaseSensitive(role_config, "image_url") : nullptr;
     if (cJSON_IsString(image_url) && image_url->valuestring != nullptr && image_url->valuestring[0] != '\0') {
-        std::string url(image_url->valuestring);
-        UiManager::GetInstance().Dispatch([url = std::move(url)]() mutable {
-            QrCodePresenter::GetInstance().SetRoleConfigUrl(std::move(url));
-        });
+        SetRoleConfigUrl(image_url->valuestring);
     }
 }
 
@@ -176,12 +173,9 @@ void QrCodePresenter::SelectRoleConfig() {
         custom_image_.reset();
         custom_message_.clear();
     }
-    UiManager::GetInstance().Dispatch([]() {
-        auto& presenter = QrCodePresenter::GetInstance();
-        if (presenter.view_ != nullptr && UiManager::GetInstance().TopScreenId() == UI_PAGE_QRCODE) {
-            presenter.Refresh();
-        }
-    });
+    if (view_ != nullptr && UiManager::GetInstance().TopScreenId() == UI_PAGE_QRCODE) {
+        Refresh();
+    }
 }
 
 void QrCodePresenter::SetCustomQrCode(std::unique_ptr<LvglImage> image, std::string message) {
@@ -194,12 +188,9 @@ void QrCodePresenter::SetCustomQrCode(std::unique_ptr<LvglImage> image, std::str
         custom_message_ = std::move(message);
         custom_selected_ = true;
     }
-    UiManager::GetInstance().Dispatch([]() {
-        auto& presenter = QrCodePresenter::GetInstance();
-        if (presenter.view_ != nullptr && UiManager::GetInstance().TopScreenId() == UI_PAGE_QRCODE) {
-            presenter.Refresh();
-        }
-    });
+    if (view_ != nullptr && UiManager::GetInstance().TopScreenId() == UI_PAGE_QRCODE) {
+        Refresh();
+    }
 }
 
 bool QrCodePresenter::HasRoleConfigQrCode() const {
@@ -281,7 +272,7 @@ void QrCodePresenter::DestroyTimeoutTimer() {
 
 void QrCodePresenter::TimeoutCallback(void* arg) {
     (void)arg;
-    UiApp::NavigateHome();
+    Ui::NavigateHome();
 }
 
 void QrCodePresenter::Refresh() {

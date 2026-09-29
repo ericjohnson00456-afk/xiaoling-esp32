@@ -3,7 +3,7 @@
 #include "application.h"
 #include "playback_intent_manager.h"
 #include "system/psram_task.h"
-#include "ui/ui_app.h"
+#include "ui/ui.h"
 
 #include <esp_log.h>
 #include <freertos/FreeRTOS.h>
@@ -78,8 +78,8 @@ void MusicIntent::ReturnToStandby() {
   if (app_->GetDeviceState() != kDeviceStateIdle) {
     app_->SetDeviceState(kDeviceStateIdle);
   } else {
-    UiApp::SetStatus(UiApp::Status::Standby);
-    UiApp::SetEmotion("待机");
+    Ui::SetStatus(Ui::Status::Standby);
+    Ui::SetEmotion("待机");
   }
   ESP_LOGI(kTag, "音乐工具已停止录音并回到待命，等待语音事件自然结束");
 }
