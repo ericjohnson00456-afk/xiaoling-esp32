@@ -323,10 +323,8 @@ void Application::Initialize() {
     // 启动时钟定时器，用于更新状态栏。
     esp_timer_start_periodic(clock_timer_handle_, 1000000);
 
-    // 注册 MCP 通用工具，初始化期间只执行一次。
-    auto& mcp_server = McpServer::GetInstance();
-    mcp_server.AddCommonTools();
-    board.RegisterMcpTools(mcp_server);
+    // 构造一次本地 MCP 工具表；WebSocket 首连和重连时直接复用。
+    McpServer::GetInstance().Initialize();
 
     // 注册网络事件回调，用于更新 UI 和处理网络状态。
     board.SetNetworkEventCallback([this](NetworkEvent event, const std::string& data) {

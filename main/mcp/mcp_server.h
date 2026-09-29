@@ -414,8 +414,8 @@ public:
         return instance;
     }
 
-    void AddCommonTools();
-    void AddUserOnlyTools();
+    // 启动时构造一次本地工具表，WebSocket 重连时直接复用。
+    void Initialize();
     void AddTool(McpTool* tool);
     void AddTool(const std::string& name, const std::string& description, const PropertyList& properties, std::function<ReturnValue(const PropertyList&)> callback);
     void AddUserOnlyTool(const std::string& name, const std::string& description, const PropertyList& properties, std::function<ReturnValue(const PropertyList&)> callback);
@@ -426,6 +426,8 @@ private:
     McpServer();
     ~McpServer();
 
+    void AddCommonTools();
+    void AddUserOnlyTools();
     void ParseCapabilities(const cJSON* capabilities);
 
     void ReplyResult(const std::string& method, const std::string& id, const std::string& result);
@@ -435,6 +437,7 @@ private:
     void DoToolCall(const std::string& id, const std::string& tool_name, const cJSON* tool_arguments);
 
     std::vector<McpTool*> tools_;
+    bool initialized_ = false;
 };
 
 #endif // MCP_SERVER_H

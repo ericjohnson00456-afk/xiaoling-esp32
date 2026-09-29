@@ -64,6 +64,17 @@ McpServer::~McpServer() {
   }
 }
 
+void McpServer::Initialize() {
+  if (initialized_) {
+    return;
+  }
+  initialized_ = true;
+
+  // 工具表只在设备启动时构造一次，连接和重连不会重复注册。
+  AddCommonTools();
+  Board::GetInstance().RegisterMcpTools(*this);
+}
+
 void McpServer::AddCommonTools() {
   // 通用工具需排在板级工具前，以便云端复用前缀提示缓存。
   auto original_tools = std::move(tools_);
