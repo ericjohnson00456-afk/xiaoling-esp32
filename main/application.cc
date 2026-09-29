@@ -123,11 +123,8 @@ void Application::Initialize() {
     if (!Ui::Initialize()) {
         ESP_LOGE(TAG, "Home 页面初始化失败");
     }
-    // 网络和激活检查完成前显示配网齿轮；加载协议时会在建立 WebSocket 前
     // 切换为 AI 图标。
     Ui::SetEmotion("gear");
-    PublishWifiIcon();
-    Ui::SetDuplexMode(session_controller_.policy().mode);
     // 显示开发板名称和版本信息。
     Ui::SetChatMessage("system", SystemInfo::GetUserAgent());
 
@@ -690,6 +687,7 @@ void Application::InitializeXiaolingConn() {
     xiaoling_conn_->OnConnected([this, codec, &board]() {
         DismissAlert();
         board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
+        Ui::SetDuplexMode(session_controller_.policy().mode);
         Ui::SetDuplexVisible(true);
         if (xiaoling_conn_->server_sample_rate() != codec->output_sample_rate()) {
             ESP_LOGW(TAG, "服务端采样率 %d 与设备输出采样率 %d 不一致",
