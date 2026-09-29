@@ -363,10 +363,20 @@ void Application::Initialize() {
                 Ui::SetStatus(Ui::Status::DetectingModule);
                 break;
             case NetworkEvent::ModemErrorNoSim:
-                Alert(Lang::Strings::ERROR, Lang::Strings::PIN_ERROR, "triangle_exclamation", "err_pin");
+                ESP_LOGW(TAG, "[%s] %s: %s", "triangle_exclamation",
+                         Lang::Strings::ERROR, Lang::Strings::PIN_ERROR);
+                Ui::SetStatusText(Lang::Strings::ERROR);
+                Ui::SetEmotion("triangle_exclamation");
+                Ui::SetChatMessage("system", Lang::Strings::PIN_ERROR);
+                PlayRespakAudio("err_pin");
                 break;
             case NetworkEvent::ModemErrorRegDenied:
-                Alert(Lang::Strings::ERROR, Lang::Strings::REG_ERROR, "triangle_exclamation", "err_reg");
+                ESP_LOGW(TAG, "[%s] %s: %s", "triangle_exclamation",
+                         Lang::Strings::ERROR, Lang::Strings::REG_ERROR);
+                Ui::SetStatusText(Lang::Strings::ERROR);
+                Ui::SetEmotion("triangle_exclamation");
+                Ui::SetChatMessage("system", Lang::Strings::REG_ERROR);
+                PlayRespakAudio("err_reg");
                 break;
             case NetworkEvent::ModemErrorInitFailed:
                 Ui::SetStatus(Ui::Status::DetectingModule);
@@ -399,7 +409,10 @@ void Application::Initialize() {
     if (!WaitForOtaFlowCompletion()) {
         ESP_LOGE(TAG, "OTA 流程失败，停止设备激活和小聆连接");
         SetDeviceState(kDeviceStateIdle);
-        Alert(Lang::Strings::ERROR, last_error_message_.c_str(), "circle_xmark", 94);
+        Ui::SetStatusText(Lang::Strings::ERROR);
+        Ui::SetEmotion("circle_xmark");
+        Ui::SetChatMessage("system", last_error_message_);
+        PlayTone(94);
         return;
     }
 
@@ -440,7 +453,12 @@ bool Application::WaitForOtaFlowCompletion() {
 void Application::ProcessMainEvents(EventBits_t bits) {
     if (bits & MAIN_EVENT_ERROR) {
         SetDeviceState(kDeviceStateIdle);
-        Alert(Lang::Strings::ERROR, last_error_message_.c_str(), "circle_xmark", 94);
+        ESP_LOGW(TAG, "[circle_xmark] %s: %s",
+                 Lang::Strings::ERROR, last_error_message_.c_str());
+        Ui::SetStatusText(Lang::Strings::ERROR);
+        Ui::SetEmotion("circle_xmark");
+        Ui::SetChatMessage("system", last_error_message_);
+        PlayTone(94);
     }
 
     if (bits & MAIN_EVENT_NETWORK_CONNECTED) {
@@ -685,7 +703,11 @@ void Application::InitializeXiaolingConn() {
 #endif  // 小聆平台
 
     xiaoling_conn_->OnConnected([this, codec, &board]() {
-        DismissAlert();
+        if (GetDeviceState() == kDeviceStateIdle) {
+            Ui::SetStatus(Ui::Status::Standby);
+            Ui::SetEmotion("neutral");
+            Ui::SetChatMessage("system", "");
+        }
         board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
         Ui::SetDuplexMode(session_controller_.policy().mode);
         Ui::SetDuplexVisible(true);
@@ -858,32 +880,6 @@ bool Application::EnsureXiaolingReadyForWakeup() {
         PlayTone(64);
     }
     return false;
-}
-
-void Application::Alert(const char* status, const char* message, const char* emotion, const std::string_view& sound) {
-    ESP_LOGW(TAG, "Alert [%s] %s: %s", emotion, status, message);
-    Ui::SetStatusText(status);
-    Ui::SetEmotion(emotion);
-    Ui::SetChatMessage("system", message);
-    if (!sound.empty()) {
-        PlayRespakAudio(std::string(sound).c_str());
-    }
-}
-
-void Application::Alert(const char* status, const char* message, const char* emotion, uint16_t tone_id) {
-    ESP_LOGW(TAG, "Alert [%s] %s: %s", emotion, status, message);
-    Ui::SetStatusText(status);
-    Ui::SetEmotion(emotion);
-    Ui::SetChatMessage("system", message);
-    PlayTone(tone_id);
-}
-
-void Application::DismissAlert() {
-    if (GetDeviceState() == kDeviceStateIdle) {
-        Ui::SetStatus(Ui::Status::Standby);
-        Ui::SetEmotion("neutral");
-        Ui::SetChatMessage("system", "");
-    }
 }
 
 void Application::ToggleChatState() {

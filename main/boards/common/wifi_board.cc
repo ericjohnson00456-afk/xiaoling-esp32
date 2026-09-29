@@ -3,6 +3,7 @@
 #include "audio_codec.h"
 #include "display/display.h"
 #include "ui/i18n/lang_config.h"
+#include "ui/ui.h"
 #include "system/system_info.h"
 #include "shell/cmd/kv/kv_user.h"
 #include "settings.h"
@@ -225,8 +226,10 @@ void WifiBoard::StartWifiConfigMode() {
         hint += wifi_manager.GetApSsid();
         hint += Lang::Strings::ACCESS_VIA_BROWSER;
         hint += wifi_manager.GetApWebUrl();
-        Application::GetInstance().Alert(Lang::Strings::WIFI_CONFIG_MODE, hint.c_str(),
-                                         "gear", static_cast<uint16_t>(70));
+        Ui::SetStatusText(Lang::Strings::WIFI_CONFIG_MODE);
+        Ui::SetEmotion("gear");
+        Ui::SetChatMessage("system", hint);
+        Application::GetInstance().PlayTone(70);
     });
 #endif
 #if CONFIG_USE_ACOUSTIC_WIFI_PROVISIONING

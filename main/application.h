@@ -89,13 +89,6 @@ public:
     void ScheduleUrgent(std::function<void()>&& callback);
 
     /**
-     * 显示包含状态、消息和表情的警告，可选择播放本地化提示音。
-     */
-    void Alert(const char* status, const char* message, const char* emotion = "", const std::string_view& sound = "");
-    void Alert(const char* status, const char* message, const char* emotion, uint16_t tone_id);
-    void DismissAlert();
-
-    /**
      * 根据原因中止当前语音交互。
      * 唤醒词会停止当前 TTS 并上报打断位置；退出指令只结束上行并允许 TTS 播放完成。
      * 本方法会同步操作语音会话和播放器，应在 Application 主任务中调用。
