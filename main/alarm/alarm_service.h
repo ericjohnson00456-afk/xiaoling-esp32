@@ -64,7 +64,6 @@ public:
     bool CanSnooze() const;
     void Snooze();
     void Stop(bool show_toast = false);
-    void HandlePlaybackEvent(const PlaybackEvent& event);
     void HandleTtsUrl(bool success, std::string url);
     void RequestCloudSync();
 
@@ -89,6 +88,7 @@ private:
     bool SyncFromCloud();
     void FinishRinging(bool advance_schedule);
     void AdvanceOrRemove(const std::string& id, int64_t after);
+    void HandlePlaybackEvent(const PlaybackEvent& event);
     int FindIndex(const std::string& id) const;
 
     std::vector<AlarmSnapshot> alarms_;
@@ -108,6 +108,7 @@ private:
     uint32_t tone_session_id_ = 0;
     int64_t tts_request_deadline_ = 0;
     bool time_reconciled_ = false;
+    std::vector<uint32_t> playback_event_subscription_ids_;
     std::atomic_bool cloud_sync_in_progress_{false};
     mutable std::recursive_mutex mutex_;
 };

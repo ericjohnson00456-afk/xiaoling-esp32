@@ -425,10 +425,8 @@ void HomePresenter::OnTtsPlaying() {
     if (view_ == nullptr) {
         return;
     }
-    // This callback is already marshalled to the UI/application task from the
-    // first PCM output event. Update the visible state here instead of waiting
-    // for the subsequent DeviceStatus notification cycle. The device state is
-    // still transitioned by Application and remains the single source of truth.
+    // 第一段 PCM 输出后才显示说话状态，避免仅收到 URL 时过早切换界面。
+    // DeviceStatus 仍是业务状态的唯一数据源。
     SetStatus(Lang::Strings::SPEAKING);
     SetEmotion("说话");
     subtitle_audio_started_ = true;
@@ -450,6 +448,17 @@ void HomePresenter::OnTtsStopped() {
         return;
     }
     ResetSubtitles(true);
+
+    // 这里只按 DeviceStatus 恢复界面，不自行决定下一业务状态。通常后续的
+    // 状态变化事件也会刷新 UI；退出请求已经处于 idle 时则由这里补一次刷新。
+    const auto state = DeviceStatus::GetState();
+    if (state == kDeviceStateIdle) {
+        SetStatus(Lang::Strings::STANDBY);
+        SetEmotion("待机");
+    } else if (state == kDeviceStateListening) {
+        SetStatus(Lang::Strings::LISTENING);
+        SetEmotion("聆听");
+    }
 }
 
 void HomePresenter::ScheduleSubtitle() {

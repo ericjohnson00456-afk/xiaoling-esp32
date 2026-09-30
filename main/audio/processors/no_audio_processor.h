@@ -20,7 +20,7 @@ public:
     void OnOutput(std::function<void(std::vector<int16_t>&& data)> callback) override;
     void OnVadStateChange(std::function<void(bool speaking)> callback) override;
     size_t GetFeedSize() override;
-    void EnableDeviceAec(bool enable) override;
+    void SetAecEnabled(bool enable) override;
 
 private:
     AudioCodec* codec_ = nullptr;
@@ -30,4 +30,4 @@ private:
     bool is_running_ = false;
 };
 
-#endif 
+#endif

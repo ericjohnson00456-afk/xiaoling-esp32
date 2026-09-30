@@ -744,7 +744,7 @@ config USE_AUDIO_PROCESSOR
         Requires ESP32 S3 and PSRAM
 
 config USE_DEVICE_AEC
-    bool "Enable Device-Side AEC"
+    bool "Enable AEC"
     default y
         depends on USE_AUDIO_PROCESSOR && (BOARD_TYPE_ESP_BOX_3 || BOARD_TYPE_ESP_BOX || BOARD_TYPE_ESP_BOX_LITE \
         || BOARD_TYPE_LICHUANG_DEV_S3 || BOARD_TYPE_ESP_KORVO2_V3 || BOARD_TYPE_WAVESHARE_S3_TOUCH_AMOLED_1_75 || BOARD_TYPE_WAVESHARE_S3_TOUCH_LCD_1_83\
@@ -752,14 +752,7 @@ config USE_DEVICE_AEC
         || BOARD_TYPE_WAVESHARE_P4_WIFI6_TOUCH_LCD_XC || BOARD_TYPE_ESP_S3_LCD_EV_Board_2 || BOARD_TYPE_YUNLIAO_S3 \
         || BOARD_TYPE_ECHOEAR || BOARD_TYPE_WAVESHARE_S3_TOUCH_LCD_3_49)
     help
-        To work properly, device-side AEC requires a clean output reference path from the speaker signal and physical acoustic isolation between the microphone and speaker.
-
-config USE_SERVER_AEC
-    bool "Enable Server-Side AEC (Unstable)"
-    default n
-    depends on USE_AUDIO_PROCESSOR
-    help
-        To work perperly, server-side AEC requires server support
+        AEC requires a clean speaker reference channel and physical acoustic isolation between the microphone and speaker.
 
 config USE_AUDIO_DEBUGGER
     bool "Enable Audio Debugger"

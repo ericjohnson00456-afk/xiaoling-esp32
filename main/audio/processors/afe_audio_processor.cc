@@ -176,13 +176,13 @@ void AfeAudioProcessor::AudioProcessorTask() {
     }
 }
 
-void AfeAudioProcessor::EnableDeviceAec(bool enable) {
+void AfeAudioProcessor::SetAecEnabled(bool enable) {
     if (enable) {
 #if CONFIG_USE_DEVICE_AEC
         afe_iface_->disable_vad(afe_data_);
         afe_iface_->enable_aec(afe_data_);
 #else
-        ESP_LOGE(TAG, "Device AEC is not supported");
+        ESP_LOGE(TAG, "当前板型未启用 AEC");
 #endif
     } else {
         afe_iface_->disable_aec(afe_data_);

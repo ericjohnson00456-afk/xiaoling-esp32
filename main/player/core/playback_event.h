@@ -30,3 +30,11 @@ struct PlaybackEvent {
     PlaybackState state = PlaybackState::kStopped;
     PlaybackEndReason reason = PlaybackEndReason::kNone;
 };
+
+// PCM 已经进入物理扬声器输出链路后的事件。
+// 与 PlaybackEvent 分开，避免把“解码器开始运行”误认为“扬声器已经出声”。
+struct PlaybackOutputEvent {
+    uint32_t session_id = 0;
+    PlaybackChannel channel = PlaybackChannel::kPrompt;
+    uint32_t audio_clock_ms = 0;
+};

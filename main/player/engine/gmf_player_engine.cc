@@ -289,7 +289,10 @@ bool GmfPlayerEngine::DoPlay(const PlaybackRequest& request) {
     DisarmTtsPcmTimeout();
 
     // 新媒体开始前清掉旧下行 Opus 和残留 PCM，物理 I2S 仍由 AudioOutputTask 独占。
-    audio_service_->BeginPlayerPlayback(request.channel == PlaybackChannel::kTts);
+    audio_service_->BeginPlayerPlayback(PlaybackOutputEvent{
+        .session_id = request.session_id,
+        .channel = request.channel,
+    });
     playback_started_ms_ = esp_log_timestamp();
     ESP_LOGI(TAG, "开始流式播放: session=%lu, channel=%d, host=%s, url_bytes=%u",
              static_cast<unsigned long>(request.session_id), static_cast<int>(request.channel),
@@ -788,11 +791,12 @@ int GmfPlayerEngine::HandleOutput(uint8_t* data, int data_size) {
     if (data_size <= 0 || audio_service_ == nullptr) {
         return ESP_FAIL;
     }
-    uint32_t session_id = 0;
+    PlaybackOutputEvent output;
     uint32_t chunk_index = 0;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        session_id = current_request_.session_id;
+        output.session_id = current_request_.session_id;
+        output.channel = current_request_.channel;
         chunk_index = ++output_chunks_;
         if (playing_ && current_request_.channel == PlaybackChannel::kTts &&
             current_request_.session_id == tts_timeout_session_id_ &&
@@ -804,7 +808,7 @@ int GmfPlayerEngine::HandleOutput(uint8_t* data, int data_size) {
 
     if (chunk_index == 1) {
         ESP_LOGI(TAG, "首个 PCM 输出: session=%lu, elapsed=%lums, bytes=%d",
-                 static_cast<unsigned long>(session_id),
+                 static_cast<unsigned long>(output.session_id),
                  static_cast<unsigned long>(esp_log_timestamp() - playback_started_ms_),
                  data_size);
     }
@@ -812,7 +816,7 @@ int GmfPlayerEngine::HandleOutput(uint8_t* data, int data_size) {
        由 AudioService 在入播放队列前重采样到 codec 实际输出采样率 */
     return audio_service_->PushPcmToPlaybackQueue(
                data, static_cast<size_t>(data_size),
-               CONFIG_AUDIO_SIMPLE_PLAYER_RESAMPLE_DEST_RATE, true)
+               CONFIG_AUDIO_SIMPLE_PLAYER_RESAMPLE_DEST_RATE, output, true)
                ? ESP_OK
                : ESP_FAIL;
 }
@@ -914,7 +918,10 @@ int GmfPlayerEngine::HandleEvent(esp_asp_event_pkt_t* event) {
              static_cast<unsigned long>(esp_log_timestamp() - playback_started_ms_),
              static_cast<unsigned long>(output_chunks_));
     if (state == ESP_ASP_STATE_FINISHED) {
-        audio_service_->MarkPlayerPlaybackFinished();
+        audio_service_->MarkPlayerPlaybackFinished(PlaybackOutputEvent{
+            .session_id = playback_event.session_id,
+            .channel = playback_event.channel,
+        });
         // GMF 完成表示解码已结束；还要等待 AudioOutputTask 写完最后一批 PCM。
         audio_service_->WaitForPlaybackComplete();
         std::lock_guard<std::mutex> lock(mutex_);

@@ -76,10 +76,12 @@ void Application::ProcessButtonClick(uint8_t click_count) {
             ToggleChatState();
             break;
         case 2:
-            // 双击：仅在启用设备端 AEC 的构建中，允许空闲状态切换 AEC。
+            // 双击：仅在板型支持 AEC 时，允许空闲状态切换 AEC。
 #if CONFIG_USE_DEVICE_AEC
             if (GetDeviceState() == kDeviceStateIdle) {
-                SetAecMode(GetAecMode() == kAecOff ? kAecOnDeviceSide : kAecOff);
+                SetDuplexMode(GetDuplexMode() == DuplexMode::kFullDuplex
+                                  ? DuplexMode::kHalfDuplex
+                                  : DuplexMode::kFullDuplex);
             }
 #endif
             break;

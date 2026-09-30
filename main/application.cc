@@ -13,6 +13,7 @@
 #include "ui/ui.h"
 #include "xiaoling/xiaoling_events.h"
 #include "shell/cmd/kv/kv_user.h"
+#include "event/app_event.h"
 
 #ifdef CONFIG_LSPLATFORM
 #include "image_fetcher.h"
@@ -40,8 +41,6 @@ static const int kBadNetworkSampleCount = 3;
 
 static constexpr EventBits_t kAllMainEvents =
     MAIN_EVENT_SCHEDULE |
-    MAIN_EVENT_WAKE_WORD_DETECTED |
-    MAIN_EVENT_VAD_CHANGE |
     MAIN_EVENT_CLOCK_TICK |
     MAIN_EVENT_ERROR |
     MAIN_EVENT_OTA_COMPLETED |
@@ -54,30 +53,6 @@ static constexpr EventBits_t kAllMainEvents =
 
 Application::Application() {
     event_group_ = xEventGroupCreate();
-
-#if CONFIG_USE_DEVICE_AEC && CONFIG_USE_SERVER_AEC
-#error "CONFIG_USE_DEVICE_AEC and CONFIG_USE_SERVER_AEC cannot be enabled at the same time"
-#elif CONFIG_USE_DEVICE_AEC
-    aec_mode_ = kAecOnDeviceSide;
-#elif CONFIG_USE_SERVER_AEC
-    aec_mode_ = kAecOnServerSide;
-#else
-    aec_mode_ = kAecOff;
-#endif
-    const int32_t saved_int_mode = KvUser::GetIntMode();
-    const DuplexMode initial_mode = saved_int_mode == 0
-                                        ? DuplexMode::kFullDuplex
-                                        : saved_int_mode == 1
-                                            ? DuplexMode::kHalfDuplex
-                                            : saved_int_mode == 2
-                                                ? DuplexMode::kSimplex
-                                                : (aec_mode_ == kAecOnDeviceSide
-                                                       ? DuplexMode::kFullDuplex
-                                                       : DuplexMode::kHalfDuplex);
-    session_controller_.SetMode(initial_mode);
-    listening_mode_ = initial_mode == DuplexMode::kFullDuplex
-                          ? kListeningModeRealtime
-                          : kListeningModeAutoStop;
 
     esp_timer_create_args_t clock_timer_args = {
         .callback = [](void* arg) {
@@ -94,6 +69,12 @@ Application::Application() {
 }
 
 Application::~Application() {
+    for (const auto subscription_id : audio_event_subscription_ids_) {
+        AppEvent::Unsubscribe(subscription_id);
+    }
+    for (const auto subscription_id : playback_event_subscription_ids_) {
+        AppEvent::Unsubscribe(subscription_id);
+    }
     if (iat_subscription_id_ != 0) {
         XiaolingEventBus::GetInstance().Unsubscribe(iat_subscription_id_);
     }
@@ -110,10 +91,158 @@ Application::~Application() {
     vEventGroupDelete(event_group_);
 }
 
+void Application::HandlePlaybackEvent(const PlaybackEvent& event) {
+    if (event.channel != PlaybackChannel::kTts) {
+        return;
+    }
+    if (event.state == PlaybackState::kStreamReady) {
+        pending_tts_session_id_ = event.session_id;
+        XiaolingEventBus::GetInstance().Publish(XIAOLING_TTS_STREAM_READY);
+        return;
+    }
+    if (event.state == PlaybackState::kPlaying) {
+        pending_tts_session_id_ = 0;
+        active_tts_session_id_ = event.session_id;
+        XiaolingEventBus::GetInstance().Publish(XIAOLING_TTS_PLAYING);
+        session_controller_.StartTts(event.session_id);
+        // 与收到 URL 的事件不同，kPlaying 表示 HTTP 响应中已经产生
+        // 可以解码的 TTS 音频数据。
+        if (!exit_requested_.load() &&
+            tts_output_started_.exchange(false) &&
+            (GetDeviceState() == kDeviceStateIdle ||
+             GetDeviceState() == kDeviceStateListening)) {
+            tts_waiting_for_playback_.store(false);
+            SetDeviceState(kDeviceStateSpeaking);
+        }
+        return;
+    }
+    if (event.state != PlaybackState::kCompleted &&
+        event.state != PlaybackState::kStopped &&
+        event.state != PlaybackState::kFailed) {
+        return;
+    }
+    tts_waiting_for_playback_.store(false);
+    tts_output_started_.store(false);
+    const bool active_session = active_tts_session_id_ == event.session_id;
+    const bool pending_session = pending_tts_session_id_ == event.session_id;
+    if (!active_session && !pending_session) {
+        return;
+    }
+    const char* reason_text = "interrupted";
+    if (event.reason == PlaybackEndReason::kNaturalEnd) {
+        reason_text = "natural";
+    } else if (event.reason == PlaybackEndReason::kFirstPcmTimeout) {
+        reason_text = "first_pcm_timeout";
+        ESP_LOGW(TAG, "TTS 首帧 PCM 超时: session=%lu",
+                 static_cast<unsigned long>(event.session_id));
+    } else if (event.reason == PlaybackEndReason::kPcmStallTimeout) {
+        reason_text = "pcm_stall_timeout";
+        ESP_LOGW(TAG, "TTS 播放中 PCM 断流超时: session=%lu",
+                 static_cast<unsigned long>(event.session_id));
+    }
+    XiaolingEventBus::GetInstance().Publish(XIAOLING_TTS_STOPPED, reason_text);
+    pending_tts_session_id_ = 0;
+    active_tts_session_id_ = 0;
+    if (active_session) {
+        session_controller_.EndTts(event.session_id);
+    }
+    if (exit_requested_.load()) {
+        // Exit 会结束本轮对话生命周期，但允许当前 TTS 流播放完毕，
+        // 随后才恢复唤醒检测。
+        ESP_LOGI(TAG, "退出请求：TTS 播放结束，恢复唤醒检测但保持待命");
+        if (GetDeviceState() != kDeviceStateIdle) {
+            SetDeviceState(kDeviceStateIdle);
+        }
+        audio_service_.EnableWakeWordDetection(false);
+        audio_service_.EnableWakeWordDetection(true);
+        exit_requested_.store(false);
+        return;
+    }
+    if (intent_manager_.Contains(PlaybackIntentId::kMusic)) {
+        // 音乐仍在栈中时，TTS 结束就是退出本轮录音并恢复音乐的屏障。
+        ESP_LOGI(TAG, "TTS 播放结束，退出语音会话并恢复音乐");
+        iat_utterance_active_ = false;
+        audio_service_.EnableAudioUpload(false);
+        session_controller_.EndSession();
+        if (xiaoling_conn_) {
+            xiaoling_conn_->EndSession();
+        }
+        if (GetDeviceState() != kDeviceStateIdle) {
+            SetDeviceState(kDeviceStateIdle);
+        }
+        intent_manager_.Pop(PlaybackIntentId::kVoiceSession);
+        return;
+    }
+    if (GetDeviceState() == kDeviceStateSpeaking) {
+        if (!exit_requested_.load() && session_controller_.KeepListeningDuringTts()) {
+            SetDeviceState(kDeviceStateListening);
+        } else if (!exit_requested_.load() &&
+                   event.state == PlaybackState::kCompleted &&
+                   session_controller_.policy().mode == DuplexMode::kHalfDuplex) {
+            ESP_LOGI(TAG, "半双工 TTS 播放完成，重新开始上行");
+            SetDeviceState(kDeviceStateListening);
+        } else {
+            SetDeviceState(kDeviceStateIdle);
+        }
+    }
+}
+
+void Application::HandleVadChangedEvent() {
+    // 先释放 pending；若此时又发生变化，AudioService 回调会补发下一次通知。
+    vad_event_pending_.store(false);
+    if (GetDeviceState() == kDeviceStateListening) {
+        Board::GetInstance().GetLed()->OnStateChanged();
+    }
+}
+
+void Application::HandlePlayerOutputStartedEvent(
+        const PlaybackOutputEvent& event) {
+    // tone、music 和 alarm 也会经过同一个物理输出任务，不能当成 TTS。
+    if (event.channel != PlaybackChannel::kTts ||
+        !tts_waiting_for_playback_.load()) {
+        return;
+    }
+    tts_output_started_.store(true);
+    XiaolingEventBus::GetInstance().Publish(XIAOLING_TTS_OUTPUT_STARTED);
+    if (!exit_requested_.load() && active_tts_session_id_ != 0 &&
+        tts_output_started_.exchange(false) &&
+        (GetDeviceState() == kDeviceStateIdle ||
+         GetDeviceState() == kDeviceStateListening)) {
+        tts_waiting_for_playback_.store(false);
+        SetDeviceState(kDeviceStateSpeaking);
+    }
+}
+
+void Application::HandlePlayerOutputProgressEvent(
+        const PlaybackOutputEvent& event) {
+    if (event.session_id == 0) {
+        player_progress_event_pending_.store(false);
+        return;
+    }
+    // 进度只保留最新值，避免每个 PCM 块都占用应用事件队列。
+    player_progress_event_pending_.store(false);
+    PlaybackOutputEvent output;
+    {
+        std::lock_guard<std::mutex> lock(player_progress_mutex_);
+        output = latest_player_progress_;
+    }
+    if (output.channel != PlaybackChannel::kTts) {
+        return;
+    }
+    XiaolingEventBus::GetInstance().Publish(
+        XIAOLING_TTS_OUTPUT_PROGRESS,
+        std::to_string(output.audio_clock_ms));
+}
+
 void Application::Initialize() {
     // 先挂载 ROMFS 格式资源。
     if (!Resource::Initialize()) {
         ESP_LOGE(TAG, "One or more required ROMFS resources are unavailable");
+    }
+
+    // 业务事件在独立任务中串行分发；必须先于音频、网络等事件生产者启动。
+    if (!AppEvent::Initialize()) {
+        ESP_LOGE(TAG, "应用事件循环初始化失败");
     }
 
     auto& board = Board::GetInstance();
@@ -128,186 +257,8 @@ void Application::Initialize() {
     // 显示开发板名称和版本信息。
     Ui::SetChatMessage("system", SystemInfo::GetUserAgent());
 
-    // 初始化音频服务。
-    auto codec = board.GetAudioCodec();
-    audio_service_.Initialize(codec);
-    Ui::SetWakeWord(audio_service_.GetWakeWordName());
-    audio_service_.EnableDeviceAec(aec_mode_ == kAecOnDeviceSide);
-    audio_service_.Start();
-
-    if (!audio_player_.Initialize(&audio_service_)) {
-        ESP_LOGE(TAG, "TTS 播放器初始化失败");
-    }
-    intent_manager_.Initialize(*this);
-    audio_player_.SetEventCallback([this](const PlaybackEvent& event) {
-        Schedule([this, event]() {
-            audio_player_.DispatchPlaybackEvent(event);
-            if (event.channel != PlaybackChannel::kTts) {
-                return;
-            }
-            if (event.state == PlaybackState::kStreamReady) {
-                pending_tts_session_id_ = event.session_id;
-                XiaolingEventBus::GetInstance().Publish(XIAOLING_TTS_STREAM_READY);
-                return;
-            }
-            if (event.state == PlaybackState::kPlaying) {
-                pending_tts_session_id_ = 0;
-                active_tts_session_id_ = event.session_id;
-                XiaolingEventBus::GetInstance().Publish(XIAOLING_TTS_PLAYING);
-                session_controller_.StartTts(event.session_id);
-                // 与收到 URL 的事件不同，kPlaying 表示 HTTP 响应中已经产生
-                // 可以解码的 TTS 音频数据。
-                Ui::SetStatus(Ui::Status::Speaking);
-                Ui::SetEmotion("说话");
-                if (!exit_requested_.load() &&
-                    tts_output_started_.exchange(false) &&
-                    (GetDeviceState() == kDeviceStateIdle ||
-                     GetDeviceState() == kDeviceStateListening)) {
-                    tts_waiting_for_playback_.store(false);
-                    SetDeviceState(kDeviceStateSpeaking);
-                }
-                return;
-            }
-            if (event.state != PlaybackState::kCompleted &&
-                event.state != PlaybackState::kStopped &&
-                event.state != PlaybackState::kFailed) {
-                return;
-            }
-            tts_waiting_for_playback_.store(false);
-            tts_output_started_.store(false);
-            const bool active_session = active_tts_session_id_ == event.session_id;
-            const bool pending_session = pending_tts_session_id_ == event.session_id;
-            if (!active_session && !pending_session) {
-                return;
-            }
-            const char* reason_text = "interrupted";
-            if (event.reason == PlaybackEndReason::kNaturalEnd) {
-                reason_text = "natural";
-            } else if (event.reason == PlaybackEndReason::kFirstPcmTimeout) {
-                reason_text = "first_pcm_timeout";
-                ESP_LOGW(TAG, "TTS 首帧 PCM 超时: session=%lu",
-                         static_cast<unsigned long>(event.session_id));
-            } else if (event.reason == PlaybackEndReason::kPcmStallTimeout) {
-                reason_text = "pcm_stall_timeout";
-                ESP_LOGW(TAG, "TTS 播放中 PCM 断流超时: session=%lu",
-                         static_cast<unsigned long>(event.session_id));
-            }
-            XiaolingEventBus::GetInstance().Publish(
-                XIAOLING_TTS_STOPPED, reason_text);
-            pending_tts_session_id_ = 0;
-            active_tts_session_id_ = 0;
-            if (active_session) {
-                session_controller_.EndTts(event.session_id);
-            }
-            if (exit_requested_.load()) {
-                // Exit 会结束本轮对话生命周期，但允许当前 TTS 流播放完毕，
-                // 随后才恢复唤醒检测。
-                ESP_LOGI(TAG, "退出请求：TTS 播放结束，恢复唤醒检测但保持待命");
-                if (GetDeviceState() != kDeviceStateIdle) {
-                    SetDeviceState(kDeviceStateIdle);
-                } else {
-                    // 延迟的 TTS 流开始前，退出处理已经把设备切换为空闲状态。
-                    // kPlaying 只直接更新了 UI，没有修改 DeviceStatus，因此再次
-                    // 切换为空闲状态不会触发任何操作，讲话表情会继续显示；这里
-                    // 需要显式恢复空闲界面。
-                    Ui::SetStatus(Ui::Status::Standby);
-                    Ui::SetEmotion("待机");
-                }
-                audio_service_.EnableWakeWordDetection(false);
-                xEventGroupClearBits(event_group_, MAIN_EVENT_WAKE_WORD_DETECTED);
-                audio_service_.EnableWakeWordDetection(true);
-                exit_requested_.store(false);
-                return;
-            }
-            if (intent_manager_.Contains(PlaybackIntentId::kMusic)) {
-                // 音乐仍在栈中时，TTS 结束就是退出本轮录音并恢复音乐的屏障。
-                ESP_LOGI(TAG, "TTS 播放结束，退出语音会话并恢复音乐");
-                iat_utterance_active_ = false;
-                audio_service_.EnableVoiceProcessing(false);
-                session_controller_.EndSession();
-                if (xiaoling_conn_) {
-                    xiaoling_conn_->EndSession();
-                }
-                if (GetDeviceState() != kDeviceStateIdle) {
-                    SetDeviceState(kDeviceStateIdle);
-                }
-                intent_manager_.Pop(PlaybackIntentId::kVoiceSession);
-                return;
-            }
-            if (GetDeviceState() == kDeviceStateSpeaking) {
-                if (!exit_requested_.load() && session_controller_.KeepListeningDuringTts()) {
-                    SetDeviceState(kDeviceStateListening);
-                } else if (!exit_requested_.load() &&
-                           event.channel == PlaybackChannel::kTts &&
-                           event.state == PlaybackState::kCompleted &&
-                           session_controller_.policy().mode == DuplexMode::kHalfDuplex) {
-                    ESP_LOGI(TAG, "半双工 TTS 播放完成，重新开始上行");
-                    SetDeviceState(kDeviceStateListening);
-                } else {
-                    SetDeviceState(kDeviceStateIdle);
-                }
-            }
-        });
-    });
-
-    AudioServiceCallbacks callbacks;
-    callbacks.on_send_queue_available = [this]() {
-        // 此回调在 Opus 编码完成后执行，不持有 AudioService 队列锁。
-        // XiaolingConn::SendAudio 只会把数据包移入有界队列并唤醒网络任务，
-        // 不会直接写入套接字。该交接不能放到低优先级的应用/UI 任务中：
-        // TTS 期间 UI 和字幕工作可能让该任务延迟数秒，过去曾因此填满
-        // AudioService 的 2.4 秒发送队列。
-        auto* connection = xiaoling_conn_.get();
-        if (connection == nullptr) {
-            return;
-        }
-        if (!connection->IsSessionActive() &&
-            audio_service_.GetUplinkDiagnostics().upload_enabled) {
-            // A failed WebSocket resets the cloud session immediately. Stop
-            // producing packets until the protocol reconnect callback creates
-            // a new session; otherwise the codec task keeps feeding a dead
-            // connection and floods the network worker with rejected packets.
-            ESP_LOGW(TAG, "云端语音会话已失效，暂停本地音频上行");
-            audio_service_.EnableAudioUpload(false);
-            return;
-        }
-        constexpr size_t kMaxDirectHandoffPackets = 8;
-        for (size_t i = 0; i < kMaxDirectHandoffPackets; ++i) {
-            auto packet = audio_service_.PopPacketFromSendQueue();
-            if (packet == nullptr) {
-                break;
-            }
-            connection->SendAudio(std::move(packet));
-        }
-    };
-    callbacks.on_wake_word_detected = [this](const std::string& wake_word) {
-        xEventGroupSetBits(event_group_, MAIN_EVENT_WAKE_WORD_DETECTED);
-    };
-    callbacks.on_vad_change = [this](bool speaking) {
-        xEventGroupSetBits(event_group_, MAIN_EVENT_VAD_CHANGE);
-    };
-    callbacks.on_player_output_started = [this]() {
-        if (!tts_waiting_for_playback_.load()) {
-            return;
-        }
-        tts_output_started_.store(true);
-        XiaolingEventBus::GetInstance().Publish(XIAOLING_TTS_OUTPUT_STARTED);
-        Schedule([this]() {
-            if (!exit_requested_.load() && active_tts_session_id_ != 0 &&
-                tts_output_started_.exchange(false) &&
-                (GetDeviceState() == kDeviceStateIdle ||
-                 GetDeviceState() == kDeviceStateListening)) {
-                tts_waiting_for_playback_.store(false);
-                SetDeviceState(kDeviceStateSpeaking);
-            }
-        });
-    };
-    callbacks.on_player_output_progress = [](uint32_t audio_clock_ms) {
-        XiaolingEventBus::GetInstance().Publish(
-            XIAOLING_TTS_OUTPUT_PROGRESS, std::to_string(audio_clock_ms));
-    };
-    audio_service_.SetCallbacks(callbacks);
-    audio_service_.EnableWakeWordDetection(true);
+    // 音频模块内部按固定顺序完成订阅、回调绑定和任务启动。
+    InitializeAudio();
 
     // 注册设备状态变化监听器。
     DeviceStatus::AddStateChangeListener([this](DeviceState old_state, DeviceState new_state) {
@@ -498,17 +449,6 @@ void Application::ProcessMainEvents(EventBits_t bits) {
         }
     }
 
-    if (bits & MAIN_EVENT_WAKE_WORD_DETECTED) {
-        HandleWakeWordDetectedEvent();
-    }
-
-    if (bits & MAIN_EVENT_VAD_CHANGE) {
-        if (GetDeviceState() == kDeviceStateListening) {
-            auto led = Board::GetInstance().GetLed();
-            led->OnStateChanged();
-        }
-    }
-
     if (bits & MAIN_EVENT_CLOCK_TICK) {
         clock_ticks_++;
         if (alarm_flow_.on_clock_tick) {
@@ -558,7 +498,7 @@ void Application::LogUplinkDiagnostics(const char* phase) {
     ESP_LOGI(TAG,
              "上行链路[%s]: state=%s, tts=%lu, processor=%d, local_upload=%d, "
              "cloud_upload=%d, session=%d, connected=%d, gen=%lu, "
-             "q=encode:%u/send:%u/ws:%u, count=mic:%lu/afe:%lu/deq:%lu/enc:%lu/"
+             "q=encode:%u/opus:%u/ws:%u, count=mic:%lu/afe:%lu/deq:%lu/enc:%lu/"
              "notify:%lu/pop:%lu/ws_in:%lu/ws_out:%lu, reject=%lu, "
              "drop=enc:%lu/ws:%lu, "
              "age=mic:%lu/afe:%lu/enc:%lu/notify:%lu/pop:%lums, ws_batch=%lu/%lu, "
@@ -570,7 +510,7 @@ void Application::LogUplinkDiagnostics(const char* phase) {
              network.upload_enabled ? 1 : 0, network.session_active ? 1 : 0,
              network.connected ? 1 : 0, static_cast<unsigned long>(audio.generation),
              static_cast<unsigned>(audio.encode_queue),
-             static_cast<unsigned>(audio.send_queue),
+             static_cast<unsigned>(audio.opus_queue),
              static_cast<unsigned>(network.queue),
              static_cast<unsigned long>(audio.mic_reads),
              static_cast<unsigned long>(audio.afe_frames),
@@ -685,6 +625,29 @@ void Application::InitializeXiaolingConn() {
     auto& board = Board::GetInstance();
     auto codec = board.GetAudioCodec();
 
+    // 单工/半双工/全双工是小聆会话策略，不属于音频模块初始化。
+    // 未保存模式时，具备 AEC 能力的板型默认全双工，否则默认半双工。
+    const int32_t saved_mode = KvUser::GetIntMode();
+    DuplexMode mode = audio_service_.SupportsAec()
+                          ? DuplexMode::kFullDuplex
+                          : DuplexMode::kHalfDuplex;
+    if (saved_mode == 0) {
+        mode = DuplexMode::kFullDuplex;
+    } else if (saved_mode == 1) {
+        mode = DuplexMode::kHalfDuplex;
+    } else if (saved_mode == 2) {
+        mode = DuplexMode::kSimplex;
+    }
+    if (mode == DuplexMode::kFullDuplex && !audio_service_.SupportsAec()) {
+        ESP_LOGW(TAG, "当前板型不支持 AEC，全双工配置回退为半双工");
+        mode = DuplexMode::kHalfDuplex;
+    }
+    session_controller_.SetMode(mode);
+    listening_mode_ = mode == DuplexMode::kFullDuplex
+                          ? kListeningModeRealtime
+                          : kListeningModeAutoStop;
+    audio_service_.SetAecEnabled(session_controller_.policy().enable_aec);
+
     Ui::SetStatus(Ui::Status::LoadingProtocol);
 
     // 小聆只使用 HTTP 鉴权和 WebSocket 会话。
@@ -726,7 +689,7 @@ void Application::InitializeXiaolingConn() {
             ESP_LOGI(TAG, "WebSocket 重连完成，恢复全双工语音会话");
             xiaoling_conn_->SendStartListening(listening_mode_);
             if (xiaoling_conn_->CanUploadAudio()) {
-                audio_service_.EnableVoiceProcessing(true);
+                audio_service_.EnableAudioUpload(true);
 #ifdef CONFIG_LSPLATFORM
                 uplink_watchdog_.Start();
 #endif  // CONFIG_LSPLATFORM
@@ -831,7 +794,7 @@ void Application::InitializeXiaolingConn() {
                         return;
                     }
                     iat_utterance_active_ = false;
-                    audio_service_.EnableVoiceProcessing(false);
+                    audio_service_.EnableAudioUpload(false);
                     session_controller_.EndSession();
                     if (GetDeviceState() != kDeviceStateIdle) {
                         SetDeviceState(kDeviceStateIdle);
@@ -936,7 +899,7 @@ void Application::HandleToggleChatEvent() {
         // 本地反馈，再取消云端会话，防止其返回最终 IAT/TTS。
         ESP_LOGI(TAG, "按键取消聆听：立即停止本地录音并取消云端会话");
         iat_utterance_active_ = false;
-        audio_service_.EnableVoiceProcessing(false);
+        audio_service_.EnableAudioUpload(false);
         session_controller_.EndSession();
         SetDeviceState(kDeviceStateIdle);
         if (!xiaoling_conn_->CancelSession()) {
@@ -1067,7 +1030,7 @@ void Application::AbortSpeaking(AbortReason reason) {
         // exit MCP 工具只结束当前上行对话。TTS 可能已经开始下载或播放，
         // 因此这里不操作播放器。
         iat_utterance_active_ = false;
-        audio_service_.EnableVoiceProcessing(false);
+        audio_service_.EnableAudioUpload(false);
         session_controller_.EndSession();
         if (xiaoling_conn_) xiaoling_conn_->SendStopListening();
         const bool tts_active = tts_waiting_for_playback_.load() ||
@@ -1090,7 +1053,7 @@ void Application::AbortSpeaking(AbortReason reason) {
     // 停止播放，不会关闭云端会话，因此这里需要显式发送会话结束消息。
     if (GetDeviceState() == kDeviceStateListening) {
         iat_utterance_active_ = false;
-        audio_service_.EnableVoiceProcessing(false);
+        audio_service_.EnableAudioUpload(false);
         session_controller_.EndSession();
         if (xiaoling_conn_ && !xiaoling_conn_->EndSession()) {
             ESP_LOGW(TAG, "Failed to end the listening session while aborting");
@@ -1124,7 +1087,7 @@ void Application::BeginWakeup(ListeningMode mode) {
         return;
     }
     iat_utterance_active_ = false;
-    audio_service_.EnableVoiceProcessing(false);
+    audio_service_.EnableAudioUpload(false);
     if (!intent_manager_.Push(PlaybackIntentId::kPromptTone)) {
         ESP_LOGE(TAG, "唤醒提示音事件入栈失败");
         SetDeviceState(kDeviceStateIdle);
@@ -1153,46 +1116,6 @@ void Application::BeginWakeup(ListeningMode mode) {
     // 会话并并行启动麦克风链路时，保护唤醒提示音不被 TTS 抢占。
     ESP_LOGI(TAG, "Wakeup tone started; start audio upload in parallel");
     SetListeningMode(mode);
-    audio_player_.SetTtsUrlCallback([this]() {
-        const uint32_t generation = tts_url_generation_.fetch_add(1) + 1;
-        tts_waiting_for_playback_.store(true);
-        tts_output_started_.store(false);
-        ESP_LOGI(TAG, "TTS URL 已接纳: generation=%lu",
-                 static_cast<unsigned long>(generation));
-        if (exit_requested_.load()) {
-            // MCP exit 可能与 URL 通知发生竞态；即使 URL 在退出请求之后到达，
-            // 也要保持唤醒检测关闭。
-            audio_service_.EnableWakeWordDetection(false);
-        }
-        Schedule([this]() {
-            const bool has_music =
-                intent_manager_.Contains(PlaybackIntentId::kMusic);
-            // 对流式 TTS 而言，URL 到达通常会比首段解码 PCM 早数秒。真正开始
-            // 播放前先显示等待表情，kPlaying 事件再恢复讲话表情。
-            if (GetDeviceState() == kDeviceStateListening ||
-                GetDeviceState() == kDeviceStateSpeaking) {
-                Ui::SetStatusText("思考中...");
-                Ui::SetEmotion("等待");
-            }
-            if (session_controller_.policy().mode == DuplexMode::kHalfDuplex &&
-                GetDeviceState() == kDeviceStateListening) {
-                ESP_LOGI(TAG, "半双工收到 TTS URL，结束当前上行会话");
-                audio_service_.EnableVoiceProcessing(false);
-                if (xiaoling_conn_) xiaoling_conn_->SendStopListening();
-            }
-            if (has_music) {
-                ESP_LOGI(TAG,
-                         "音乐事件存在，收到 TTS URL 后仅停止本地录音，保持云端合成");
-                audio_service_.EnableVoiceProcessing(false);
-#ifdef CONFIG_LSPLATFORM
-                uplink_watchdog_.Stop();
-#endif  // CONFIG_LSPLATFORM
-                // 全双工下 action:cancel 会终止整个云端会话，其中也包括刚刚
-                // 发布 URL 的流式 TTS。这里只停止麦克风生产者；TTS 播放完成
-                // 后的统一收尾会调用 EndSession()。
-            }
-        });
-    });
     if (iat_subscription_id_ == 0) {
         auto on_iat_text = [this](const XiaolingEvent& event) {
             /* This callback runs on the connection task before dispatch to the
@@ -1279,7 +1202,7 @@ void Application::BeginWakeup(ListeningMode mode) {
 bool Application::EndListeningSessionForWakeup() {
     ESP_LOGI(TAG, "Wake word detected while recording; end the current session");
     iat_utterance_active_ = false;
-    audio_service_.EnableVoiceProcessing(false);
+    audio_service_.EnableAudioUpload(false);
     session_controller_.EndSession();
     if (!xiaoling_conn_ || !xiaoling_conn_->EndSession()) {
         ESP_LOGE(TAG, "Failed to report the current session end before wakeup");
@@ -1343,9 +1266,6 @@ void Application::CountWatchdogBites() {
 
 void Application::HandleStateChangedEvent() {
     DeviceState new_state = DeviceStatus::GetState();
-    if (new_state != kDeviceStateIdle) {
-        keep_voice_processing_on_idle_ = false;
-    }
     // 监听现在与唤醒提示音并行启动。在“连接中 -> 监听中”的状态切换期间保留
     // 该提示音，其他无关状态变化仍会将其取消。
     if (new_state != kDeviceStateConnecting &&
@@ -1378,12 +1298,7 @@ void Application::HandleStateChangedEvent() {
 #ifdef CONFIG_LSPLATFORM
             Ui::DismissOverlays();
 #endif  // 小聆平台
-            if (keep_voice_processing_on_idle_) {
-                keep_voice_processing_on_idle_ = false;
-                audio_service_.EnableAudioUpload(false);
-            } else {
-                audio_service_.EnableVoiceProcessing(false);
-            }
+            audio_service_.EnableAudioUpload(false);
             if (exit_requested_.load() &&
                 (tts_waiting_for_playback_.load() || audio_player_.IsPlaying())) {
                 audio_service_.EnableWakeWordDetection(false);
@@ -1419,10 +1334,8 @@ void Application::HandleStateChangedEvent() {
                 xiaoling_conn_->SendStartListening(listening_mode_);
             }
 
-            // EnableVoiceProcessing() always opens the upload gate and only
-            // starts the processor when needed. This also recovers a processor
-            // left running after a transient transport reset disabled upload.
-            audio_service_.EnableVoiceProcessing(true);
+            // 采集、AFE/AEC 和 Opus 编码始终运行；进入聆听态只打开网络消费端。
+            audio_service_.EnableAudioUpload(true);
 #ifdef CONFIG_LSPLATFORM
             uplink_watchdog_.Start();
 #endif  // 小聆平台
@@ -1436,7 +1349,7 @@ void Application::HandleStateChangedEvent() {
             // 保持 AEC 后的上行链路运行。
             if (intent_manager_.Contains(PlaybackIntentId::kMusic) ||
                 !session_controller_.KeepListeningDuringTts()) {
-                audio_service_.EnableVoiceProcessing(false);
+                audio_service_.EnableAudioUpload(false);
 #ifdef CONFIG_LSPLATFORM
                 uplink_watchdog_.Stop();
 #endif  // 小聆平台
@@ -1452,7 +1365,7 @@ void Application::HandleStateChangedEvent() {
             audio_service_.EnableWakeWordDetection(true);
             break;
         case kDeviceStateWifiConfiguring:
-            audio_service_.EnableVoiceProcessing(false);
+            audio_service_.EnableAudioUpload(false);
             break;
         default:
             // 无需处理。
@@ -1546,39 +1459,6 @@ void Application::SendMcpMessage(const std::string& payload) {
     });
 }
 
-void Application::SetAecMode(AecMode mode) {
-    aec_mode_ = mode;
-    Schedule([this]() {
-        switch (aec_mode_) {
-        case kAecOff:
-            audio_service_.EnableDeviceAec(false);
-            Ui::ShowNotification(Lang::Strings::RTC_MODE_OFF);
-            break;
-        case kAecOnServerSide:
-            audio_service_.EnableDeviceAec(false);
-            Ui::ShowNotification(Lang::Strings::RTC_MODE_ON);
-            break;
-        case kAecOnDeviceSide:
-            audio_service_.EnableDeviceAec(true);
-            session_controller_.SetMode(DuplexMode::kFullDuplex);
-            Ui::ShowNotification(Lang::Strings::RTC_MODE_ON);
-            break;
-        }
-        if (aec_mode_ != kAecOnDeviceSide) {
-            session_controller_.SetMode(DuplexMode::kHalfDuplex);
-        }
-        listening_mode_ = session_controller_.policy().mode == DuplexMode::kFullDuplex
-                              ? kListeningModeRealtime
-                              : kListeningModeAutoStop;
-        Ui::SetDuplexMode(session_controller_.policy().mode);
-
-        // AEC 模式变化时关闭音频通道。
-        if (xiaoling_conn_ && xiaoling_conn_->IsConnected()) {
-            xiaoling_conn_->Disconnect();
-        }
-    });
-}
-
 void Application::SetDuplexMode(DuplexMode mode) {
     Schedule([this, mode]() {
         if (mode == DuplexMode::kFullDuplex && !audio_service_.SupportsAec()) {
@@ -1591,8 +1471,6 @@ void Application::SetDuplexMode(DuplexMode mode) {
         }
 
         const auto state = GetDeviceState();
-        const bool voice_processing_running = audio_service_.IsAudioProcessorRunning();
-
         // 结束当前云端会话并只停止上行链路。保持处理器运行，可以在恢复唤醒词
         // 检测时避免拆除并重建 AFE。
         iat_utterance_active_ = false;
@@ -1603,20 +1481,19 @@ void Application::SetDuplexMode(DuplexMode mode) {
         }
 
         session_controller_.SetMode(mode);
+        const bool enable_aec = session_controller_.policy().enable_aec;
         Ui::SetDuplexMode(mode);
         listening_mode_ = mode == DuplexMode::kFullDuplex
                               ? kListeningModeRealtime
                               : kListeningModeAutoStop;
-        audio_service_.EnableDeviceAec(
-            mode == DuplexMode::kFullDuplex && aec_mode_ == kAecOnDeviceSide);
+        audio_service_.SetAecEnabled(enable_aec);
+        Ui::ShowNotification(enable_aec ? Lang::Strings::RTC_MODE_ON
+                                        : Lang::Strings::RTC_MODE_OFF);
 
         if (state == kDeviceStateConnecting ||
             state == kDeviceStateListening ||
             state == kDeviceStateSpeaking) {
-            keep_voice_processing_on_idle_ = voice_processing_running;
-            if (!SetDeviceState(kDeviceStateIdle)) {
-                keep_voice_processing_on_idle_ = false;
-            }
+            SetDeviceState(kDeviceStateIdle);
         }
         const char* name = mode == DuplexMode::kSimplex ? "simplex" :
                            mode == DuplexMode::kHalfDuplex ? "half-duplex" : "full-duplex";

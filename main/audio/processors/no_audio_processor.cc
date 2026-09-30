@@ -52,8 +52,8 @@ size_t NoAudioProcessor::GetFeedSize() {
     return frame_samples_;
 }
 
-void NoAudioProcessor::EnableDeviceAec(bool enable) {
+void NoAudioProcessor::SetAecEnabled(bool enable) {
     if (enable) {
-        ESP_LOGE(TAG, "Device AEC is not supported");
+        ESP_LOGE(TAG, "当前板型未启用 AEC");
     }
 }

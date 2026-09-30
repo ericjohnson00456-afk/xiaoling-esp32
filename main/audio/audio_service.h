@@ -10,7 +10,6 @@
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
-#include <freertos/event_groups.h>
 #include <esp_timer.h>
 #include <model_path.h>
 
@@ -21,27 +20,25 @@
 #include "audio_processor.h"
 #include "opus_encoder/opus_wb_encoder.h"
 #include "processors/audio_debugger.h"
+#include "player/core/playback_event.h"
 #include "wake_word.h"
 #include "wake_words/micro_wake_word/config.h"
 #include "xiaoling/xiaoling_types.h"
 
 
 /*
- * There are two types of audio data flow:
- * 1. (MIC) -> [Processors] -> {Encode Queue} -> [Opus Encoder] -> {Send Queue} -> (Server)
- * 2. (Server) -> {Decode Queue} -> [Opus Decoder] -> {Playback Queue} -> (Speaker)
+ * AudioService 只维护两条固定数据链：
+ * 1. ADC -> 16 kHz PCM -> AFE/AEC -> Opus 最新窗口
+ * 2. 播放 PCM/下行 Opus -> PCM -> DAC
  *
- * We use one task for MIC / Speaker / Processors, and one task for Opus Encoder / Opus Decoder.
- * 
- * Decode Queue and Send Queue are the main queues, because Opus packets are quite smaller than PCM packets.
- * 
+ * Start() 后采集、算法和 Opus 编码任务常驻。业务层只通过
+ * EnableAudioUpload() 决定是否消费新 Opus，不参与底层任务生命周期。
  */
 
 // lschat 的 opus-wb 使用 20 ms 分包，每包包含 320 个 16 kHz 样本。
 #define OPUS_FRAME_DURATION_MS 20
-/* AEC output arrives every 20 ms. TTS decode/render and Wi-Fi callbacks can
- * briefly delay the shared Opus task, so retain up to 160 ms of fresh PCM.
- * The overflow path still drops the oldest frame to keep barge-in real-time. */
+/* AEC 每 20 ms 输出一帧。编码任务短暂繁忙时最多保留 160 ms，队列满后
+ * 丢弃最旧帧，不能反向阻塞采集和 AEC。 */
 #define MAX_ENCODE_TASKS_IN_QUEUE 8
 /* Keep the normal server-downlink queue small so interactive Opus playback
  * remains responsive. Network TTS uses a separate, deeper limit below. */
@@ -57,35 +54,31 @@
 /* After a mid-stream underrun, resume as soon as any PCM block arrives. */
 #define PLAYER_RECOVERY_PREBUFFER_BYTES 1
 #define MAX_DECODE_PACKETS_IN_QUEUE (2400 / OPUS_FRAME_DURATION_MS)
-#define MAX_SEND_PACKETS_IN_QUEUE (2400 / OPUS_FRAME_DURATION_MS)
+/* AudioService 始终生产 Opus，只保留最近 2.4 秒，业务未上报时覆盖旧包。 */
+#define MAX_OPUS_PACKETS_IN_QUEUE (2400 / OPUS_FRAME_DURATION_MS)
 // Wake inference must never build a stale backlog while AEC/TTS are active.
 // Keep only the newest couple of frames; overflow drops the oldest one.
 #define MAX_PROCESSED_WAKE_FRAMES_IN_QUEUE 2
 #define AUDIO_TESTING_MAX_DURATION_MS 10000
-#define MAX_TIMESTAMPS_IN_QUEUE 3
 
 #define AUDIO_POWER_TIMEOUT_MS 15000
 #define AUDIO_POWER_CHECK_INTERVAL_MS 1000
 
 
-#define AS_EVENT_AUDIO_TESTING_RUNNING      (1 << 0)
-#define AS_EVENT_WAKE_WORD_RUNNING          (1 << 1)
-#define AS_EVENT_AUDIO_PROCESSOR_RUNNING    (1 << 2)
-#define AS_EVENT_PLAYBACK_NOT_EMPTY         (1 << 3)
-
 struct AudioServiceCallbacks {
-    std::function<void(void)> on_send_queue_available;
+    /* 只在业务打开音频上报后通知；Opus 的生产本身不受此开关影响。 */
+    std::function<void(void)> on_opus_packet_available;
     std::function<void(const std::string&)> on_wake_word_detected;
     std::function<void(bool)> on_vad_change;
     std::function<void(void)> on_audio_testing_queue_full;
     // Called after the first streamed-player PCM block is handed to the codec.
-    std::function<void(void)> on_player_output_started;
-    std::function<void(uint32_t)> on_player_output_progress;
+    std::function<void(const PlaybackOutputEvent&)> on_player_output_started;
+    std::function<void(const PlaybackOutputEvent&)> on_player_output_progress;
 };
 
 
 enum AudioTaskType {
-    kAudioTaskTypeEncodeToSendQueue,
+    kAudioTaskTypeEncodeToOpusQueue,
     kAudioTaskTypeEncodeToTestingQueue,
     kAudioTaskTypeDecodeToPlaybackQueue,
     kAudioTaskTypePlayerToPlaybackQueue,
@@ -99,8 +92,8 @@ struct AudioTask {
        its existing allocator and access pattern. */
     int16_t* player_pcm = nullptr;
     size_t player_pcm_samples = 0;
-    uint32_t timestamp = 0;
-    uint32_t uplink_generation = 0;
+    uint32_t upload_generation = 0;
+    PlaybackOutputEvent player_output;
 
     AudioTask() = default;
     ~AudioTask();
@@ -128,7 +121,7 @@ struct AudioUplinkDiagnostics {
     bool processor_running = false;
     uint32_t generation = 0;
     size_t encode_queue = 0;
-    size_t send_queue = 0;
+    size_t opus_queue = 0;
     uint32_t mic_reads = 0;
     uint32_t afe_frames = 0;
     uint32_t encode_dequeued = 0;
@@ -145,8 +138,8 @@ struct AudioUplinkDiagnostics {
 
 class AudioService {
 public:
-    AudioService();
-    ~AudioService();
+    AudioService() = default;
+    ~AudioService() = default;
 
     void Initialize(AudioCodec* codec);
     void Start();
@@ -155,33 +148,33 @@ public:
     std::unique_ptr<AudioStreamPacket> PopWakeWordPacket();
     const std::string& GetLastWakeWord() const;
     std::string GetWakeWordName() const;
-    bool IsVoiceDetected() const { return voice_detected_; }
+    bool IsVoiceDetected() const { return voice_detected_.load(); }
     bool IsIdle();
-    bool IsWakeWordRunning() const { return xEventGroupGetBits(event_group_) & AS_EVENT_WAKE_WORD_RUNNING; }
-    bool IsAudioProcessorRunning() const { return xEventGroupGetBits(event_group_) & AS_EVENT_AUDIO_PROCESSOR_RUNNING; }
+    bool IsWakeWordRunning() const { return wake_word_running_.load(); }
     bool IsAfeWakeWord();
 
     void EnableWakeWordDetection(bool enable);
     void PauseWakeWordDetection();
+    /* 只控制业务是否消费新 Opus，不启停采集、AFE/AEC 或编码任务。 */
     void EnableAudioUpload(bool enable);
-    void EnableVoiceProcessing(bool enable);
     void EnableAudioTesting(bool enable);
-    void EnableDeviceAec(bool enable);
-    bool SupportsDeviceAec() const;
+    void SetAecEnabled(bool enable);
     bool SupportsAec() const;
 
     void SetCallbacks(AudioServiceCallbacks& callbacks);
 
     bool PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> packet, bool wait = false);
-    bool PushPcmToPlaybackQueue(const uint8_t* data, size_t size, int sample_rate, bool wait = true);
-    void BeginPlayerPlayback(bool tts_stream = false);
-    void MarkPlayerPlaybackFinished();
+    bool PushPcmToPlaybackQueue(const uint8_t* data, size_t size, int sample_rate,
+                                const PlaybackOutputEvent& output,
+                                bool wait = true);
+    void BeginPlayerPlayback(const PlaybackOutputEvent& output);
+    void MarkPlayerPlaybackFinished(const PlaybackOutputEvent& output);
     void ClearPlaybackQueue();
     void WaitForPlaybackComplete();
     uint32_t GetPlayerOutputLastActivityMs() const {
         return player_output_last_activity_ms_.load();
     }
-    std::unique_ptr<AudioStreamPacket> PopPacketFromSendQueue();
+    std::unique_ptr<AudioStreamPacket> PopOpusPacket();
     AudioUplinkDiagnostics GetUplinkDiagnostics();
     void PlaySound(const std::string_view& sound);
     bool ReadAudioData(std::vector<int16_t>& data, int sample_rate, int samples);
@@ -222,8 +215,6 @@ private:
     DebugStatistics debug_statistics_;
     srmodel_list_t* models_list_ = nullptr;
 
-    EventGroupHandle_t event_group_;
-
     // Audio encode / decode
     TaskHandle_t audio_input_task_handle_ = nullptr;
     TaskHandle_t audio_output_task_handle_ = nullptr;
@@ -239,7 +230,8 @@ private:
     std::mutex audio_queue_mutex_;
     std::condition_variable audio_queue_cv_;
     std::deque<std::unique_ptr<AudioStreamPacket>> audio_decode_queue_;
-    std::deque<std::unique_ptr<AudioStreamPacket>> audio_send_queue_;
+    /* 固定长度的最新 Opus 窗口；生产者永不等待业务消费者。 */
+    std::deque<std::unique_ptr<AudioStreamPacket>> opus_packet_queue_;
     std::deque<std::unique_ptr<AudioStreamPacket>> audio_testing_queue_;
     std::deque<std::unique_ptr<AudioTask>> audio_encode_queue_;
     std::deque<std::unique_ptr<AudioTask>> audio_playback_queue_;
@@ -258,17 +250,15 @@ private:
     std::atomic<uint32_t> player_output_underruns_{0};
     std::atomic<uint32_t> player_audio_clock_ms_{0};
     std::atomic_bool player_stream_active_{false};
-    // For server AEC
-    std::deque<uint32_t> timestamp_queue_;
-
     bool wake_word_initialized_ = false;
     bool audio_processor_initialized_ = false;
-    bool voice_detected_ = false;
-    bool service_stopped_ = true;
-    bool audio_input_need_warmup_ = false;
-    uint32_t uplink_generation_ = 0;
-    bool uplink_enabled_ = false;
-    bool device_aec_requested_ = false;
+    std::atomic_bool voice_detected_{false};
+    std::atomic_bool wake_word_running_{false};
+    std::atomic_bool audio_testing_running_{false};
+    std::atomic_bool service_stopped_{true};
+    uint32_t upload_generation_ = 0;
+    bool audio_upload_enabled_ = false;
+    bool aec_enabled_ = false;
 
     // Monotonic stage counters make it possible to locate an uplink stall
     // without logging every 20 ms audio frame.

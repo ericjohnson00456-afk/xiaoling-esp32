@@ -73,7 +73,7 @@ bool MusicIntent::Ready() const {
 
 void MusicIntent::ReturnToStandby() {
   app_->iat_utterance_active_ = false;
-  app_->audio_service_.EnableVoiceProcessing(false);
+  app_->audio_service_.EnableAudioUpload(false);
   app_->session_controller_.EndSession();
   if (app_->GetDeviceState() != kDeviceStateIdle) {
     app_->SetDeviceState(kDeviceStateIdle);

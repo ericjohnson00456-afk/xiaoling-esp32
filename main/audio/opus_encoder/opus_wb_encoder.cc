@@ -32,13 +32,6 @@ OpusWbEncoder::~OpusWbEncoder() {
     }
 }
 
-void OpusWbEncoder::SetComplexity(int complexity) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (encoder_ != nullptr) {
-        opus_encoder_ctl(encoder_, OPUS_SET_COMPLEXITY(complexity));
-    }
-}
-
 bool OpusWbEncoder::Encode(std::vector<int16_t>&& pcm, std::vector<uint8_t>& opus) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (encoder_ == nullptr || pcm.size() != static_cast<size_t>(frame_size_)) {

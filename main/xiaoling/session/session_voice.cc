@@ -944,7 +944,6 @@ void XiaolingSessionVoice::HandleBinary(std::vector<uint8_t> payload) {
         on_incoming_audio_(std::make_unique<AudioStreamPacket>(AudioStreamPacket{
             .sample_rate = kServerSampleRate,
             .frame_duration = kServerFrameDurationMs,
-            .timestamp = 0,
             .payload = std::move(payload),
         }));
     }

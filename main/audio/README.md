@@ -1,88 +1,53 @@
-# Audio Service Architecture
+# 音频服务
 
-The audio service is a core component responsible for managing all audio-related functionalities, including capturing audio from the microphone, processing it, encoding/decoding, and playing back audio through the speaker. It is designed to be modular and efficient, running its main operations in dedicated FreeRTOS tasks to ensure real-time performance.
+`AudioService` 是整机唯一的音频数据入口和出口。它不负责对话、音乐等业务状态，只负责稳定地产生和播放音频数据。
 
-## Key Components
+## 初始化和生命周期
 
--   **`AudioService`**: The central orchestrator. It initializes and manages all other audio components, tasks, and data queues.
--   **`AudioCodec`**: A hardware abstraction layer (HAL) for the physical audio codec chip. It handles the raw I2S communication for audio input and output.
--   **`AudioProcessor`**: Performs real-time audio processing on the microphone input stream. This typically includes Acoustic Echo Cancellation (AEC), noise suppression, and Voice Activity Detection (VAD). `AfeAudioProcessor` is the default implementation, utilizing the ESP-ADF Audio Front-End.
--   **`WakeWord`**: Detects keywords (e.g., "你好，小智", "Hi, ESP") from the audio stream. It runs independently from the main audio processor until a wake word is detected.
--   **`OpusEncoderWrapper` / `OpusDecoderWrapper`**: Manages the encoding of PCM audio to the Opus format and decoding Opus packets back to PCM. Opus is used for its high compression and low latency, making it ideal for voice streaming.
--   **`OpusResampler`**: A utility to convert audio streams between different sample rates (e.g., resampling from the codec's native sample rate to the required 16kHz for processing).
+`Application::InitializeAudio()` 按以下顺序执行一次：
 
-## Threading Model
+1. `AudioService::Initialize(codec)` 创建 AFE/AEC、唤醒算法和 Opus 编解码器。
+2. 注册音频事件回调。
+3. `AudioService::Start()` 启动采集、输出和 Opus 编解码任务。
+4. 打开唤醒词检测。
 
-The service operates on three primary tasks to handle the different stages of the audio pipeline concurrently:
+`Start()` 之后，ADC 采集、AFE/AEC 和 Opus 编码始终运行。普通业务状态切换不得启停这些任务；固件 OTA 是允许调用 `Stop()/Start()` 的系统级例外。
 
-1.  **`AudioInputTask`**: Solely responsible for reading raw PCM data from the `AudioCodec`. It then feeds this data to either the `WakeWord` engine or the `AudioProcessor` based on the current state.
-2.  **`AudioOutputTask`**: Responsible for playing audio. It retrieves decoded PCM data from the `audio_playback_queue_` and sends it to the `AudioCodec` to be played on the speaker.
-3.  **`OpusCodecTask`**: A worker task that handles both encoding and decoding. It fetches raw audio from `audio_encode_queue_`, encodes it into Opus packets, and places them in the `audio_send_queue_`. Concurrently, it fetches Opus packets from `audio_decode_queue_`, decodes them into PCM, and places the result in the `audio_playback_queue_`.
+AEC 能力由 `AudioService` 根据板型配置和 codec 参考声道判断；硬件支持时默认开启。单工、半双工和全双工属于小聆会话策略，不在音频初始化中决定。
 
-## Data Flow
+## 采集链
 
-There are two primary data flows: audio input (uplink) and audio output (downlink).
-
-### 1. Audio Input (Uplink) Flow
-
-This flow captures audio from the microphone, processes it, encodes it, and prepares it for sending to a server.
-
-```mermaid
-graph TD
-    subgraph Device
-        Mic[("Microphone")] -->|I2S| Codec(AudioCodec)
-        
-        subgraph AudioInputTask
-            Codec -->|Raw PCM| Read(ReadAudioData)
-            Read -->|16kHz PCM| Processor(AudioProcessor)
-        end
-
-        subgraph OpusCodecTask
-            Processor -->|Clean PCM| EncodeQueue(audio_encode_queue_)
-            EncodeQueue --> Encoder(OpusEncoder)
-            Encoder -->|Opus Packet| SendQueue(audio_send_queue_)
-        end
-
-        SendQueue --> |"PopPacketFromSendQueue()"| App(Application Layer)
-    end
-    
-    App -->|Network| Server((Cloud Server))
+```text
+AudioCodec ADC
+    -> AudioInputTask（读取并转换为 16 kHz PCM）
+    -> AudioProcessor（AFE/AEC/VAD；不支持 AFE 时直通单声道 PCM）
+    -> audio_encode_queue_（最多 8 帧，满时丢最旧帧）
+    -> OpusCodecTask
+    -> opus_packet_queue_（只保存最近 2.4 秒，满时覆盖最旧包）
 ```
 
--   The `AudioInputTask` continuously reads raw PCM data from the `AudioCodec`.
--   This data is fed into an `AudioProcessor` for cleaning (AEC, VAD).
--   The processed PCM data is pushed into the `audio_encode_queue_`.
--   The `OpusCodecTask` picks up the PCM data, encodes it into Opus format, and pushes the resulting packet to the `audio_send_queue_`.
--   The application can then retrieve these Opus packets and send them over the network.
+业务层只使用两个接口：
 
-### 2. Audio Output (Downlink) Flow
+- `EnableAudioUpload(true/false)`：控制网络是否消费新 Opus，不影响采集和编码。
+- `PopOpusPacket()`：取出待上报的 Opus 包；关闭上报时返回空。
 
-This flow receives encoded audio data, decodes it, and plays it on the speaker.
+开始一次新的上报会话时会清掉历史窗口，从当前声音开始发送，避免把唤醒前缓存误发到云端。网络不消费时，固定队列自行覆盖旧包，不会反向阻塞实时采集。
 
-```mermaid
-graph TD
-    Server((Cloud Server)) -->|Network| App(Application Layer)
+唤醒词检测是采集链的旁路消费者。开启 AEC 时可以读取 AFE 输出，否则读取标准化后的麦克风 PCM；检测结果发布到应用事件循环。
 
-    subgraph Device
-        App -->|"PushPacketToDecodeQueue()"| DecodeQueue(audio_decode_queue_)
+## 播放链
 
-        subgraph OpusCodecTask
-            DecodeQueue -->|Opus Packet| Decoder(OpusDecoder)
-            Decoder -->|PCM| PlaybackQueue(audio_playback_queue_)
-        end
-
-        subgraph AudioOutputTask
-            PlaybackQueue -->|PCM| Codec(AudioCodec)
-        end
-
-        Codec -->|I2S| Speaker[("Speaker")]
-    end
+```text
+GMF/本地播放器产生 PCM -----------+
+                                  +-> audio_playback_queue_
+服务端 Opus -> OpusCodecTask -> PCM+          -> AudioOutputTask -> AudioCodec DAC
 ```
 
--   The application receives Opus packets from the network and pushes them into the `audio_decode_queue_`.
--   The `OpusCodecTask` retrieves these packets, decodes them back into PCM data, and pushes the data to the `audio_playback_queue_`.
--   The `AudioOutputTask` takes the PCM data from the queue and sends it to the `AudioCodec` for playback.
+播放器负责 TTS、tone、music、alarm 的播放意图和切歌逻辑；`AudioService` 只维护一个物理 DAC 写入任务。这样不会出现多个模块同时写扬声器的问题。
 
-## Power Management
+## 队列原则
 
-To conserve energy, the audio codec's input (ADC) and output (DAC) channels are automatically disabled after a period of inactivity (`AUDIO_POWER_TIMEOUT_MS`). A timer (`audio_power_timer_`) periodically checks for activity and manages the power state. The channels are automatically re-enabled when new audio needs to be captured or played. 
+- 实时采集永不等待业务消费者，积压时丢旧数据。
+- 播放队列允许按调用参数等待，保证完整音频可以顺序输出。
+- PCM 队列保持短小；较长缓存使用压缩后的 Opus 包。
+- 业务代码不直接操作内部任务和队列。

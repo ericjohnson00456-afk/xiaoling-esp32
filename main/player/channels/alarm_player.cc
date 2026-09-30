@@ -90,14 +90,6 @@ void AlarmPlayer::OnEvent(const PlaybackEvent& event) {
         return;
     }
     if (IsTerminal(event)) {
-        // 回调可能立即提交下一阶段，必须先清理旧 session。
         session_id_ = 0;
     }
-    if (event_callback_) {
-        event_callback_(event);
-    }
-}
-
-void AlarmPlayer::SetEventCallback(EventCallback callback) {
-    event_callback_ = std::move(callback);
 }

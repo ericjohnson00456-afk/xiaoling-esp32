@@ -13,6 +13,7 @@
 #include "power_manager.h"
 #include "power_save_timer.h"
 #include "mcp_server.h"
+#include "shell/cmd/kv/kv_user.h"
 
 #define TAG "YunliaoS3"
 
@@ -153,7 +154,7 @@ class YunliaoS3 : public DualNetworkBoard {
                 Property("enable", kPropertyTypeBoolean)
             }), [this](const PropertyList& properties) {
                 bool enable = properties["enable"].value<bool>();
-                SetAecMode(enable);
+                SetFullDuplexEnabled(enable);
                 return true;
             });
 
@@ -164,14 +165,15 @@ class YunliaoS3 : public DualNetworkBoard {
                 return true;
             });
     }
-    void SetAecMode(bool enable) {
-        AecMode newMode = enable ? kAecOnDeviceSide : kAecOff;
+    void SetFullDuplexEnabled(bool enable) {
         auto& app = Application::GetInstance();
         app.StopListening();
         app.SetDeviceState(kDeviceStateIdle);
-        app.SetAecMode(newMode);
+        app.SetDuplexMode(enable ? DuplexMode::kFullDuplex
+                                 : DuplexMode::kHalfDuplex);
+        KvUser::SetIntMode(enable ? 0 : 1);
         Settings settings("aec", true);
-        settings.SetInt("mode", newMode);
+        settings.SetInt("mode", enable ? 1 : 0);
     }
     void SwitchTFT() {
         Settings settings("display", true);
@@ -214,8 +216,10 @@ class YunliaoS3 : public DualNetworkBoard {
         }
         InitializeButtons();
         Settings settings("aec", false);
-        auto& app = Application::GetInstance();
-        app.SetAecMode(settings.GetInt("mode",kAecOnDeviceSide) == kAecOnDeviceSide ? kAecOnDeviceSide : kAecOff);
+        const bool full_duplex = settings.GetInt("mode", 1) != 0;
+        KvUser::SetIntMode(full_duplex ? 0 : 1);
+        Application::GetInstance().SetDuplexMode(
+            full_duplex ? DuplexMode::kFullDuplex : DuplexMode::kHalfDuplex);
         InitializeTools();
     }
 

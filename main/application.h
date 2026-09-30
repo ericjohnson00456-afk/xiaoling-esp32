@@ -25,8 +25,6 @@
 
 // 主事件位
 #define MAIN_EVENT_SCHEDULE             (1 << 0)
-#define MAIN_EVENT_WAKE_WORD_DETECTED   (1 << 2)
-#define MAIN_EVENT_VAD_CHANGE           (1 << 3)
 #define MAIN_EVENT_ERROR                (1 << 4)
 #define MAIN_EVENT_OTA_COMPLETED        (1 << 5)
 #define MAIN_EVENT_CLOCK_TICK           (1 << 6)
@@ -36,11 +34,6 @@
 #define MAIN_EVENT_START_LISTENING      (1 << 10)
 #define MAIN_EVENT_STOP_LISTENING       (1 << 11)
 #define MAIN_EVENT_STATE_CHANGED        (1 << 12)
-enum AecMode {
-    kAecOff,
-    kAecOnDeviceSide,
-    kAecOnServerSide,
-};
 
 class Application {
 public:
@@ -126,8 +119,6 @@ public:
     void WakeWordInvoke(const std::string& wake_word);
     bool CanEnterSleepMode();
     void SendMcpMessage(const std::string& payload);
-    void SetAecMode(AecMode mode);
-    AecMode GetAecMode() const { return aec_mode_; }
     void PlayRespakAudio(const char* name);
     void PlayTone(uint16_t tone_id);
     /*  ========== 闹钟业务 ======== */
@@ -167,7 +158,6 @@ private:
     EventGroupHandle_t event_group_ = nullptr;
     esp_timer_handle_t clock_timer_handle_ = nullptr;
     ListeningMode listening_mode_ = kListeningModeAutoStop;
-    AecMode aec_mode_ = kAecOff;
     std::string last_error_message_;
     AudioService audio_service_;
     AudioPlayer audio_player_;
@@ -187,6 +177,12 @@ private:
     uint32_t iat_subscription_id_ = 0;
     uint32_t iat_update_subscription_id_ = 0;
     uint32_t iat_end_subscription_id_ = 0;
+    std::vector<uint32_t> playback_event_subscription_ids_;
+    std::vector<uint32_t> audio_event_subscription_ids_;
+    std::atomic_bool vad_event_pending_{false};
+    std::atomic_bool player_progress_event_pending_{false};
+    std::mutex player_progress_mutex_;
+    PlaybackOutputEvent latest_player_progress_;
     bool iat_utterance_active_ = false;
 
     /*  ========== OTA业务 ======== */
@@ -242,11 +238,14 @@ private:
     int clock_ticks_ = 0;
     // 由 NetworkEvent::Connected/Disconnected 驱动；唤醒时区分“网络未连”和“WS 未连”。
     std::atomic_bool network_connected_{false};
-    bool keep_voice_processing_on_idle_ = false;
     int64_t listening_started_at_us_ = 0;
 
 
     // 主事件处理函数。
+    // 音频初始化按“订阅 -> 绑定发布回调 -> 启动任务”的顺序执行。
+    void InitializeAudio();
+    void RegisterAudioEventSubscribers();
+    void BindAudioEventPublishers();
     void HandleStateChangedEvent();
     void HandleToggleChatEvent();
     void HandleStartListeningEvent();
@@ -254,6 +253,10 @@ private:
     void HandleNetworkConnectedEvent();
     void HandleNetworkDisconnectedEvent();
     void HandleWakeWordDetectedEvent();
+    void HandleVadChangedEvent();
+    void HandlePlayerOutputStartedEvent(const PlaybackOutputEvent& event);
+    void HandlePlayerOutputProgressEvent(const PlaybackOutputEvent& event);
+    void HandlePlaybackEvent(const PlaybackEvent& event);
     void ProcessMainEvents(EventBits_t bits);
     void InitializeXiaolingConn();
     // 唤醒入口的连接检查：WS 就绪返回 true；否则按网络状态播报 085/064 提示音。

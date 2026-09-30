@@ -82,7 +82,9 @@ private:
         boot_button_.OnDoubleClick([this]() {
             auto& app = Application::GetInstance();
             if (app.GetDeviceState() == kDeviceStateIdle) {
-                app.SetAecMode(app.GetAecMode() == kAecOff ? kAecOnDeviceSide : kAecOff);
+                app.SetDuplexMode(app.GetDuplexMode() == DuplexMode::kFullDuplex
+                                      ? DuplexMode::kHalfDuplex
+                                      : DuplexMode::kFullDuplex);
             }
         });
 #endif

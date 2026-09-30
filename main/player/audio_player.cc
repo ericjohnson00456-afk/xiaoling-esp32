@@ -6,6 +6,7 @@
 #include "channels/music_player.h"
 #include "engine/gmf_player_engine.h"
 #include "audio_service.h"
+#include "event/app_event.h"
 
 #include <esp_log.h>
 
@@ -13,19 +14,63 @@
 
 #define TAG "AudioPlayer"
 
+namespace {
+
+AppEvent::Id ToAppEventId(PlaybackState state) {
+    switch (state) {
+        case PlaybackState::kStreamReady:
+            return AppEvent::Id::PlaybackStreamReady;
+        case PlaybackState::kPlaying:
+            return AppEvent::Id::PlaybackStarted;
+        case PlaybackState::kPaused:
+            return AppEvent::Id::PlaybackPaused;
+        case PlaybackState::kStopped:
+            return AppEvent::Id::PlaybackStopped;
+        case PlaybackState::kCompleted:
+            return AppEvent::Id::PlaybackCompleted;
+        case PlaybackState::kFailed:
+            return AppEvent::Id::PlaybackFailed;
+    }
+    return AppEvent::Id::None;
+}
+
+}  // namespace
+
 AudioPlayer::AudioPlayer() = default;
-AudioPlayer::~AudioPlayer() = default;
+AudioPlayer::~AudioPlayer() {
+    AppEvent::Unsubscribe(engine_event_subscription_id_);
+}
 
 bool AudioPlayer::Initialize(AudioService* audio_service) {
     if (engine_ != nullptr) {
         return true;
     }
 
+    if (engine_event_subscription_id_ == 0) {
+        engine_event_subscription_id_ = AppEvent::Subscribe(
+            AppEvent::Id::PlayerEngine,
+            [](const AppEvent::Event& queued, void* context) {
+                const auto* event = queued.Get<PlaybackEvent>();
+                if (event == nullptr) {
+                    ESP_LOGE(TAG, "播放器内部事件数据无效");
+                    return;
+                }
+                static_cast<AudioPlayer*>(context)->HandleEngineEvent(*event);
+            },
+            this);
+        if (engine_event_subscription_id_ == 0) {
+            ESP_LOGE(TAG, "订阅播放器内部事件失败");
+            return false;
+        }
+    }
+
     auto engine = std::make_unique<GmfPlayerEngine>();
     if (!engine->Initialize(audio_service, [this](const PlaybackEvent& event) {
-            HandleEngineEvent(event);
+            PublishEngineEvent(event);
         })) {
         ESP_LOGE(TAG, "播放器引擎初始化失败");
+        AppEvent::Unsubscribe(engine_event_subscription_id_);
+        engine_event_subscription_id_ = 0;
         return false;
     }
     audio_service_ = audio_service;
@@ -321,7 +366,7 @@ uint32_t AudioPlayer::PlayMusicUrlInternal(const std::string& url) {
     if (music_engine_ == nullptr) {
         auto engine = std::make_unique<GmfPlayerEngine>();
         if (!engine->Initialize(audio_service_, [this](const PlaybackEvent& event) {
-                HandleEngineEvent(event);
+                PublishEngineEvent(event);
             })) {
             return 0;
         }
@@ -449,6 +494,7 @@ bool AudioPlayer::ResumeMusic() {
         return false;
     }
     std::size_t index = 0;
+    uint32_t session_id = 0;
     bool resume_paused_session = false;
     {
         std::lock_guard<std::mutex> lock(music_list_mutex_);
@@ -456,6 +502,7 @@ bool AudioPlayer::ResumeMusic() {
             return false;
         }
         index = current_music_index_;
+        session_id = current_music_session_id_;
         resume_paused_session = active_music_index_ == current_music_index_ &&
                                 current_music_session_id_ != 0;
     }
@@ -464,7 +511,10 @@ bool AudioPlayer::ResumeMusic() {
     if (resume_paused_session && music_channel_ != nullptr) {
         if (music_channel_->IsPaused()) {
             // TTS 已经结束并关闭了共享 PCM 流，恢复音乐前重新初始化输出状态。
-            audio_service_->BeginPlayerPlayback();
+            audio_service_->BeginPlayerPlayback(PlaybackOutputEvent{
+                .session_id = session_id,
+                .channel = PlaybackChannel::kMusic,
+            });
             if (music_channel_->Resume()) {
                 return true;
             }
@@ -512,7 +562,29 @@ void AudioPlayer::DispatchPlaybackEvent(const PlaybackEvent& event) {
                 RequestMusicAtIndex(retry_index, true);
             }
         }
+        if (event.state == PlaybackState::kCompleted &&
+            event.reason == PlaybackEndReason::kNaturalEnd) {
+            PlayNextMusicAfterNaturalEnd(event.session_id);
+        }
     }
+}
+
+bool AudioPlayer::PlayNextMusicAfterNaturalEnd(uint32_t session_id) {
+    std::size_t next_index = 0;
+    {
+        std::lock_guard<std::mutex> lock(music_list_mutex_);
+        // 单 URL 不循环；播放列表至少有两项时才自动切换。
+        if (session_id != current_music_session_id_ || music_list_.size() < 2) {
+            return false;
+        }
+        current_music_index_ = (current_music_index_ + 1) % music_list_.size();
+        active_music_index_ = static_cast<std::size_t>(-1);
+        next_index = current_music_index_;
+        current_music_retry_used_ = false;
+    }
+    ESP_LOGI(TAG, "音乐自然结束，自动播放下一首: index=%u",
+             static_cast<unsigned>(next_index));
+    return RequestMusicAtIndex(next_index, true);
 }
 
 bool AudioPlayer::PauseMusic() {
@@ -528,25 +600,22 @@ bool AudioPlayer::PauseMusic() {
     return true;
 }
 
-void AudioPlayer::SetEventCallback(EventCallback callback) {
-    std::lock_guard<std::mutex> lock(callback_mutex_);
-    event_callback_ = std::move(callback);
-}
-
-void AudioPlayer::SetAlarmEventCallback(EventCallback callback) {
-    if (alarm_channel_ != nullptr) {
-        alarm_channel_->SetEventCallback(std::move(callback));
-    }
-}
-
 void AudioPlayer::SetTtsUrlCallback(TtsUrlCallback callback) {
     std::lock_guard<std::mutex> lock(callback_mutex_);
     tts_url_callback_ = std::move(callback);
 }
 
+void AudioPlayer::PublishEngineEvent(const PlaybackEvent& event) {
+    if (!AppEvent::Publish(AppEvent::Id::PlayerEngine, event)) {
+        ESP_LOGE(TAG, "发布播放器内部事件失败: session=%lu, state=%u",
+                 static_cast<unsigned long>(event.session_id),
+                 static_cast<unsigned>(event.state));
+    }
+}
+
 void AudioPlayer::HandleEngineEvent(const PlaybackEvent& event) {
-    // GMF 的终态在播放器已经完成 DMA 排空后到达。这里立即释放准入保护，
-    // 避免低优先级 Application/UI 队列延迟处理提示音回调时误拒绝 TTS URL。
+    // 从这里开始已进入 app_event 任务。先维护播放器内部状态，再对外发布
+    // 语义明确的生命周期事件，订阅者不需要了解 GMF 回调线程。
     if (tone_channel_ != nullptr && tone_channel_->IsWakeupTerminalEvent(event)) {
         wakeup_in_progress_ = false;
         if (tts_channel_ != nullptr) {
@@ -559,12 +628,12 @@ void AudioPlayer::HandleEngineEvent(const PlaybackEvent& event) {
         }
     }
 
-    EventCallback callback;
-    {
-        std::lock_guard<std::mutex> lock(callback_mutex_);
-        callback = event_callback_;
-    }
-    if (callback) {
-        callback(event);
+    DispatchPlaybackEvent(event);
+
+    const AppEvent::Id id = ToAppEventId(event.state);
+    if (id != AppEvent::Id::None && !AppEvent::Publish(id, event)) {
+        ESP_LOGE(TAG, "发布播放生命周期事件失败: session=%lu, state=%u",
+                 static_cast<unsigned long>(event.session_id),
+                 static_cast<unsigned>(event.state));
     }
 }

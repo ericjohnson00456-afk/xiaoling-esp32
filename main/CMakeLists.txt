@@ -48,6 +48,7 @@ set(SOURCES "audio/audio_codec.cc"
             "system/system_info.cc"
             "system/system_reset.cc"
             "application.cc"
+            "application_audio.cc"
             "application_alarm.cc"
             "application_button.cc"
             "application_ota.cc"
@@ -55,6 +56,7 @@ set(SOURCES "audio/audio_codec.cc"
             "ota/ota_firmware.cc"
             "ota/ota_resource.cc"
             "system/time_sync.cc"
+            "event/app_event.cc"
             "alarm/alarm_service.cc"
             "player/channels/alarm_player.cc"
             "shell/settings.cc"
@@ -92,7 +94,7 @@ set(INCLUDE_DIRS "."
                  "player" "player/core" "player/engine" "player/channels" "xiaoling" "xiaoling/session" "xiaoling/conn" "mcp"
                  "player/intents" "ui" "ui/compat" "ui/widgets" "ui/screens" "ui/screens/home" "ui/screens/alarm" "ui/screens/qrcode" "ui/screens/upgrade"
                  "alarm"
-                  "system" "resource" "shell" "ota")
+                  "system" "resource" "shell" "ota" "event")
 
 # Add board common files
 file(GLOB BOARD_COMMON_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/boards/common/*.cc)

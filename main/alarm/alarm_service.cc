@@ -1,6 +1,7 @@
 #include "alarm_service.h"
 
 #include "application.h"
+#include "event/app_event.h"
 #include "system/time_sync.h"
 #include "ui/ui.h"
 
@@ -187,6 +188,33 @@ AlarmService& AlarmService::GetInstance() {
 bool AlarmService::Initialize() {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (initialized_) return true;
+
+    const auto playback_handler = [](const AppEvent::Event& queued, void* context) {
+        const auto* event = queued.Get<PlaybackEvent>();
+        if (event == nullptr || event->channel != PlaybackChannel::kAlarm) {
+            return;
+        }
+        static_cast<AlarmService*>(context)->HandlePlaybackEvent(*event);
+    };
+    constexpr AppEvent::Id kTerminalEvents[] = {
+        AppEvent::Id::PlaybackStopped,
+        AppEvent::Id::PlaybackCompleted,
+        AppEvent::Id::PlaybackFailed,
+    };
+    for (const auto id : kTerminalEvents) {
+        const auto subscription_id = AppEvent::Subscribe(id, playback_handler, this);
+        if (subscription_id == 0) {
+            ESP_LOGE(kTag, "订阅闹钟播放事件失败: event=%u",
+                     static_cast<unsigned>(id));
+            for (const auto registered_id : playback_event_subscription_ids_) {
+                AppEvent::Unsubscribe(registered_id);
+            }
+            playback_event_subscription_ids_.clear();
+            return false;
+        }
+        playback_event_subscription_ids_.push_back(subscription_id);
+    }
+
     initialized_ = true;
     const bool loaded = Load();
     time_reconciled_ = TimeSync::IsSystemTimeValid();

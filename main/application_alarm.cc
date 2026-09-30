@@ -25,10 +25,6 @@ void Application::InitializeAlarm() {
     }
     alarm_flow_.initialized = true;
 
-    // AlarmPlayer 独占 kAlarm 通道，播放事件直接交给闹钟业务推进下一阶段。
-    audio_player_.SetAlarmEventCallback([](const PlaybackEvent& event) {
-        AlarmService::GetInstance().HandlePlaybackEvent(event);
-    });
     // 复用 Application 的每秒时钟事件，不额外创建闹钟定时器。
     alarm_flow_.on_clock_tick = []() {
         AlarmService::GetInstance().Tick();

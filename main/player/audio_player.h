@@ -20,7 +20,6 @@ class AlarmPlayer;
 
 class AudioPlayer {
 public:
-    using EventCallback = std::function<void(const PlaybackEvent&)>;
     using TtsUrlCallback = std::function<void()>;
     using MusicUrlResolveCallback = std::function<void(bool, std::string)>;
     using MusicUrlResolver = std::function<bool(const std::string&, MusicUrlResolveCallback)>;
@@ -56,9 +55,6 @@ public:
     bool IsMusicPlaying() const;
     bool PauseMusic();
     bool ResumeMusic();
-    void DispatchPlaybackEvent(const PlaybackEvent& event);
-    void SetEventCallback(EventCallback callback);
-    void SetAlarmEventCallback(EventCallback callback);
     void SetTtsUrlCallback(TtsUrlCallback callback);
 
 private:
@@ -69,7 +65,11 @@ private:
         bool play_when_resolved = false;
     };
 
+    // GMF 所在线程只复制事件；通道状态和业务事件都在 app_event 任务处理。
+    void PublishEngineEvent(const PlaybackEvent& event);
     void HandleEngineEvent(const PlaybackEvent& event);
+    void DispatchPlaybackEvent(const PlaybackEvent& event);
+    bool PlayNextMusicAfterNaturalEnd(uint32_t session_id);
     uint32_t PlayMusicUrlInternal(const std::string& url);
     bool RequestMusicAtIndex(std::size_t index, bool play_when_ready);
     void HandleMusicUrlResolved(uint32_t generation, std::size_t index,
@@ -94,7 +94,7 @@ private:
     MusicUrlResolver music_url_resolver_;
     std::atomic_bool wakeup_in_progress_{false};
     std::atomic<uint32_t> next_session_id_{1};
+    uint32_t engine_event_subscription_id_ = 0;
     mutable std::mutex callback_mutex_;
-    EventCallback event_callback_;
     TtsUrlCallback tts_url_callback_;
 };
