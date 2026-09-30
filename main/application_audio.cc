@@ -112,8 +112,7 @@ void Application::BindAudioEventPublishers() {
         if (connection == nullptr) {
             return;
         }
-        if (!connection->IsSessionActive() &&
-            audio_service_.GetUplinkDiagnostics().upload_enabled) {
+        if (!connection->IsSessionActive()) {
             // 云端会话失效后关闭网络消费端；本地采集、AFE 和 Opus 编码仍常驻。
             ESP_LOGW(TAG, "云端语音会话已失效，暂停本地音频上行");
             audio_service_.EnableAudioUpload(false);

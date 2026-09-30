@@ -232,7 +232,7 @@ bool Application::CheckAssetsVersion() {
             ESP_LOGW(kTag, "Failed to reload emoji resources after OTA");
         }
         if (wake_word_downloaded) {
-            if (!audio_service_.LoadWakeWordResources(true)) {
+            if (!audio_service_.LoadWakeWordResources()) {
                 ESP_LOGW(kTag, "Failed to reload wake-word resources after OTA");
             } else {
                 Ui::SetWakeWord(audio_service_.GetWakeWordName());

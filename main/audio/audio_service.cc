@@ -29,6 +29,20 @@
 
 #define TAG "AudioService"
 
+/*
+ * 阅读顺序：Initialize/Start -> AudioInputTask -> AudioProcessor::OnOutput
+ * -> PushTaskToEncodeQueue -> OpusCodecTask -> PopOpusPacket。
+ *
+ * 上行：ADC -> ReadAudioData(16 kHz，保留参考声道) -> AFE/AEC 或直通
+ *       -> 20 ms PCM 编码队列 -> Opus 最新窗口 -> 业务按需取包。
+ * 唤醒：从麦克风 PCM 或 AEC 输出旁路取帧 -> WakeWord -> 回调；
+ *       Application 的回调负责将检测结果发布为 AppEvent。
+ * 下行：服务端 Opus -> 同一个 OpusCodecTask 解码，或播放器直接送 PCM
+ *       -> 播放队列 -> 唯一的 AudioOutputTask -> DAC。
+ *
+ * Application 持有 AudioService 一份实例。正常运行时任务常驻；唤醒检测、
+ * 网络上报和 AEC 模式可切换。OTA 会调用 Stop()/Start() 暂停并重建服务任务。
+ */
 namespace {
 constexpr UBaseType_t kAudioCodecPriority = 11;
 constexpr UBaseType_t kAudioAlgorithmPriority = 8;
@@ -99,12 +113,15 @@ bool AudioTask::AllocatePlayerPcm(size_t samples) {
 }
 
 
+// 启动 codec 后先加载唤醒资源，再装配 Opus 编解码器和音频处理器。
 void AudioService::Initialize(AudioCodec* codec) {
     codec_ = codec;
-    if (!LoadWakeWordResources(false)) {
-        ESP_LOGE(TAG, "Failed to configure wake-word model from resource table");
-    }
     codec_->Start();
+
+    // ESP-SR 会把模型列表交给 AFE；MicroWakeWord 则只创建独立的唤醒对象。
+    if (!LoadWakeWordResources()) {
+        ESP_LOGW(TAG, "Failed to configure wake-word model from resource table");
+    }
 
     /* Setup the audio codec */
     opus_decoder_ = std::make_unique<OpusDecoderWrapper>(codec->output_sample_rate(), 1, OPUS_FRAME_DURATION_MS);
@@ -121,9 +138,8 @@ void AudioService::Initialize(AudioCodec* codec) {
     audio_processor_ = std::make_unique<NoAudioProcessor>();
 #endif
 
+    // 处理器（AFE/AEC 或直通）每输出一帧，可选地复制给唤醒旁路，原帧交给编码。
     audio_processor_->OnOutput([this](std::vector<int16_t>&& data) {
-        uplink_afe_frames_.fetch_add(1);
-        uplink_last_afe_ms_.store(esp_log_timestamp());
 #if CONFIG_USE_MICRO_WAKE_WORD
         if (wake_uses_processor_output_.load() && IsWakeWordRunning()) {
             std::lock_guard<std::mutex> lock(processed_wake_mutex_);
@@ -172,8 +188,10 @@ void AudioService::Initialize(AudioCodec* codec) {
         .skip_unhandled_events = true,
     };
     esp_timer_create(&audio_power_timer_args, &audio_power_timer_);
+
 }
 
+// 启动服务循环；AFE 内部任务已在 Initialize() 创建，Start() 使其开始取帧。
 void AudioService::Start() {
     if (!service_stopped_.exchange(false)) {
         ESP_LOGW(TAG, "音频服务已经启动，忽略重复 Start()");
@@ -282,6 +300,7 @@ void AudioService::Start() {
              static_cast<unsigned>(kAudioAlgorithmPriority));
 }
 
+// 系统级暂停（目前由 OTA 使用）：通知任务退出并清空队列；普通业务切换不调用。
 void AudioService::Stop() {
     if (service_stopped_.exchange(true)) {
         return;
@@ -310,6 +329,8 @@ void AudioService::Stop() {
 #endif
 }
 
+// 从 ADC 读指定时长的 PCM；必要时逐声道重采样，保留双声道中的参考声道。
+// 增益只作用于第一个（麦克风）声道，返回的数据供唤醒与处理链共用。
 bool AudioService::ReadAudioData(std::vector<int16_t>& data, int sample_rate, int samples) {
     if (!codec_->input_enabled()) {
         esp_timer_stop(audio_power_timer_);
@@ -361,13 +382,11 @@ bool AudioService::ReadAudioData(std::vector<int16_t>& data, int sample_rate, in
 
     /* Update the last input time */
     last_input_time_ = std::chrono::steady_clock::now();
-    debug_statistics_.input_count++;
-    uplink_mic_reads_.fetch_add(1);
-    uplink_last_mic_ms_.store(esp_log_timestamp());
-
     return true;
 }
 
+// 常驻采集入口：取各消费者所需的最小帧长读 ADC，再分别拼成测试、AFE、唤醒帧。
+// 处理器总是接收输入；wake_running 只决定是否向唤醒算法喂帧。
 void AudioService::AudioInputTask() {
     std::vector<int16_t> wake_pending;
     std::vector<int16_t> processor_pending;
@@ -403,6 +422,7 @@ void AudioService::AudioInputTask() {
         if (!wake_running) wake_pending.clear();
         if (use_processed_wake) wake_pending.clear();
 
+        // 开启 AEC 的 MicroWakeWord 从处理后输出取帧，不再从此处喂麦克风帧。
         const size_t wake_samples = wake_running && !use_processed_wake
             ? wake_word_->GetFeedSize() : 0;
         const size_t processor_samples = audio_processor_->GetFeedSize();
@@ -468,13 +488,6 @@ void AudioService::AudioInputTask() {
                                            wake_pending.begin() + wake_frame_size);
                 wake_pending.erase(wake_pending.begin(),
                                    wake_pending.begin() + wake_frame_size);
-#if CONFIG_USE_AUDIO_DEBUGGER
-                std::lock_guard<std::mutex> debug_lock(audio_debugger_mutex_);
-                if (!audio_debugger_) {
-                    audio_debugger_ = std::make_unique<AudioDebugger>();
-                }
-                audio_debugger_->Feed(frame);
-#endif
                 wake_word_->Feed(frame);
             }
         }
@@ -484,6 +497,7 @@ void AudioService::AudioInputTask() {
 }
 
 #if CONFIG_USE_MICRO_WAKE_WORD
+// 只处理 AFE 后的最新唤醒帧；队列在 OnOutput 中限长，推理慢时丢旧帧。
 void AudioService::ProcessedWakeTask() {
     while (true) {
         std::unique_lock<std::mutex> lock(processed_wake_mutex_);
@@ -499,13 +513,6 @@ void AudioService::ProcessedWakeTask() {
         lock.unlock();
 
         if (wake_uses_processor_output_.load() && IsWakeWordRunning()) {
-#if CONFIG_USE_AUDIO_DEBUGGER
-            std::lock_guard<std::mutex> debug_lock(audio_debugger_mutex_);
-            if (!audio_debugger_) {
-                audio_debugger_ = std::make_unique<AudioDebugger>();
-            }
-            audio_debugger_->Feed(data);
-#endif
             wake_word_->Feed(data);
         }
         // The streaming model can remain continuously runnable while AEC is
@@ -521,6 +528,7 @@ void AudioService::ClearProcessedWakeQueue() {
     processed_wake_queue_.clear();
 }
 
+// 切换唤醒输入源时清掉旧源的缓存，并复位模型的连续输入状态。
 void AudioService::SetWakeInputFromProcessor(bool enable) {
     const bool previous = wake_uses_processor_output_.exchange(enable);
     if (previous == enable) {
@@ -538,6 +546,7 @@ void AudioService::SetWakeInputFromProcessor(bool enable) {
 }
 #endif
 
+// DAC 的唯一写入者。服务端解码 PCM 与本地播放器 PCM 在此串行输出。
 void AudioService::AudioOutputTask() {
     while (true) {
         std::unique_lock<std::mutex> lock(audio_queue_mutex_);
@@ -609,7 +618,6 @@ void AudioService::AudioOutputTask() {
 
         auto task = std::move(audio_playback_queue_.front());
         audio_playback_queue_.pop_front();
-        const size_t queue_size_after_pop = audio_playback_queue_.size();
         if (task->type == kAudioTaskTypePlayerToPlaybackQueue &&
             audio_playback_queue_.empty() && !player_playback_finished_) {
             player_prebuffering_ = true;
@@ -625,21 +633,10 @@ void AudioService::AudioOutputTask() {
         bool player_output_started = false;
         if (task->type == kAudioTaskTypePlayerToPlaybackQueue) {
             const uint32_t now_ms = esp_log_timestamp();
-            const uint32_t previous_end_ms = player_output_last_end_ms_.load();
             /* Mark activity before the potentially blocking codec write. A
              * timeout callback can otherwise race with the first block after
              * a long prebuffer and mistake active output for silence. */
             player_output_last_activity_ms_.store(now_ms);
-            if (previous_end_ms != 0) {
-                const uint32_t gap_ms = now_ms - previous_end_ms;
-                if (gap_ms >= 80) {
-                    const uint32_t underruns = player_output_underruns_.fetch_add(1) + 1;
-                    ESP_LOGW(TAG, "播放器输出出现间隙: gap=%lums, underruns=%lu, queue_before=%u",
-                             static_cast<unsigned long>(gap_ms),
-                             static_cast<unsigned long>(underruns),
-                             static_cast<unsigned>(queue_size_after_pop));
-                }
-            }
             player_output_started = player_output_chunks_.fetch_add(1) == 0;
         }
 
@@ -677,20 +674,18 @@ void AudioService::AudioOutputTask() {
         lock.unlock();
 
         if (task->type == kAudioTaskTypePlayerToPlaybackQueue) {
-            const uint32_t output_end_ms = esp_log_timestamp();
-            player_output_last_end_ms_.store(output_end_ms);
-            player_output_last_activity_ms_.store(output_end_ms);
+            player_output_last_activity_ms_.store(esp_log_timestamp());
         }
 
         /* Update the last output time */
         last_output_time_ = std::chrono::steady_clock::now();
-        debug_statistics_.playback_count++;
-
     }
 
     ESP_LOGW(TAG, "Audio output task stopped");
 }
 
+// 同一工作任务兼顾下行 Opus 解码和上行 PCM 编码；两侧共享队列锁。
+// 上行即使未开启网络上报仍编码，产物以有限长度的最新窗口保存。
 void AudioService::OpusCodecTask() {
     while (true) {
         std::unique_lock<std::mutex> lock(audio_queue_mutex_);
@@ -730,16 +725,12 @@ void AudioService::OpusCodecTask() {
                 ESP_LOGE(TAG, "Failed to decode audio");
                 lock.lock();
             }
-            debug_statistics_.decode_count++;
         }
         
         /* 编码不会等待业务消费者；Opus 队列满时在下方覆盖最旧包。 */
         if (!audio_encode_queue_.empty()) {
             auto task = std::move(audio_encode_queue_.front());
             audio_encode_queue_.pop_front();
-            if (task->type == kAudioTaskTypeEncodeToOpusQueue) {
-                uplink_encode_dequeued_.fetch_add(1);
-            }
             audio_queue_cv_.notify_all();
             lock.unlock();
 
@@ -786,21 +777,16 @@ void AudioService::OpusCodecTask() {
                             opus_packet_queue_.pop_front();
                         }
                         opus_packet_queue_.push_back(std::move(packet));
-                        uplink_encoded_packets_.fetch_add(1);
-                        uplink_last_encoded_ms_.store(esp_log_timestamp());
                         notify_consumer = audio_upload_enabled_;
                     }
                 }
                 if (notify_consumer && callbacks_.on_opus_packet_available) {
-                    uplink_send_notifications_.fetch_add(1);
-                    uplink_last_notification_ms_.store(esp_log_timestamp());
                     callbacks_.on_opus_packet_available();
                 }
             } else if (task->type == kAudioTaskTypeEncodeToTestingQueue) {
                 std::lock_guard<std::mutex> lock(audio_queue_mutex_);
                 audio_testing_queue_.push_back(std::move(packet));
             }
-            debug_statistics_.encode_count++;
             lock.lock();
         }
     }
@@ -809,6 +795,7 @@ void AudioService::OpusCodecTask() {
 }
 
 #ifdef CONFIG_LSPLATFORM
+// 平台会话可选窄带上行；只改编码参数，不改 ADC/AFE 的 16 kHz 输入。
 void AudioService::SetNarrowbandMode(bool enabled) {
     if (enabled) {
         SetEncodeSampleRate(8000, OPUS_FRAME_DURATION_MS);
@@ -832,6 +819,7 @@ void AudioService::SetEncodeSampleRate(int sample_rate, int frame_duration) {
 }
 #endif // CONFIG_LSPLATFORM
 
+// 下行包参数变化时重建解码器，并准备到 DAC 采样率的重采样。
 void AudioService::SetDecodeSampleRate(int sample_rate, int frame_duration) {
     if (opus_decoder_->sample_rate() == sample_rate && opus_decoder_->duration_ms() == frame_duration) {
         return;
@@ -847,6 +835,7 @@ void AudioService::SetDecodeSampleRate(int sample_rate, int frame_duration) {
     }
 }
 
+// AFE 的实时帧满队列时丢旧帧，不阻塞采集；音频测试帧则允许等待空位。
 void AudioService::PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t>&& pcm) {
     auto task = std::make_unique<AudioTask>();
     task->type = type;
@@ -869,19 +858,6 @@ void AudioService::PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t
         if (dropped_queued_frame) {
             audio_encode_queue_.erase(oldest_opus);
         }
-        const uint32_t dropped_uplink_frames =
-            uplink_dropped_encode_frames_.fetch_add(1) + 1;
-        if ((dropped_uplink_frames % 25) == 1) {
-            ESP_LOGW(TAG,
-                     "上行编码队列满，丢弃旧帧: count=%lu, encode_q=%u, send_q=%u, "
-                     "afe=%lu, encoded=%lu, popped=%lu",
-                     static_cast<unsigned long>(dropped_uplink_frames),
-                     static_cast<unsigned>(audio_encode_queue_.size()),
-                     static_cast<unsigned>(opus_packet_queue_.size()),
-                     static_cast<unsigned long>(uplink_afe_frames_.load()),
-                     static_cast<unsigned long>(uplink_encoded_packets_.load()),
-                     static_cast<unsigned long>(uplink_popped_packets_.load()));
-        }
         if (!dropped_queued_frame) {
             return;
         }
@@ -900,6 +876,7 @@ void AudioService::PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t
     audio_queue_cv_.notify_all();
 }
 
+// 本地播放器入口：PCM 转为 codec 采样率后放入统一播放队列，wait 控制背压。
 bool AudioService::PushPcmToPlaybackQueue(const uint8_t* data, size_t size,
                                           int sample_rate,
                                           const PlaybackOutputEvent& output,
@@ -974,6 +951,7 @@ bool AudioService::PushPcmToPlaybackQueue(const uint8_t* data, size_t size,
     return true;
 }
 
+// 新播放器会话重置下行解码/缓冲状态；stream_active 防止等待首帧时关闭 DAC。
 void AudioService::BeginPlayerPlayback(const PlaybackOutputEvent& output) {
     ResetDecoder();
     {
@@ -983,6 +961,7 @@ void AudioService::BeginPlayerPlayback(const PlaybackOutputEvent& output) {
     player_stream_active_.store(true);
 }
 
+// 标记 PCM 已全部入队，使短尾帧越过预缓冲门槛，并补齐最后一个 DMA 缓冲。
 void AudioService::MarkPlayerPlaybackFinished(
         const PlaybackOutputEvent& output) {
     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
@@ -1013,6 +992,7 @@ void AudioService::MarkPlayerPlaybackFinished(
     audio_queue_cv_.notify_all();
 }
 
+// 立即撤销待播放 PCM；正在执行的 codec 写入由输出任务自行结束。
 void AudioService::ClearPlaybackQueue() {
     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
     player_stream_active_.store(false);
@@ -1020,6 +1000,7 @@ void AudioService::ClearPlaybackQueue() {
     audio_queue_cv_.notify_all();
 }
 
+// 等到播放队列和当前 codec 写入结束，再等待 I2S DMA 环里的尾音实际送出。
 void AudioService::WaitForPlaybackComplete() {
     std::unique_lock<std::mutex> lock(audio_queue_mutex_);
     audio_queue_cv_.wait(lock, [this]() {
@@ -1045,6 +1026,7 @@ void AudioService::WaitForPlaybackComplete() {
     player_stream_active_.store(false);
 }
 
+// 服务端 Opus 的下行入口；编码任务会解码并转送统一播放队列。
 bool AudioService::PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> packet, bool wait) {
     std::unique_lock<std::mutex> lock(audio_queue_mutex_);
     if (audio_decode_queue_.size() >= MAX_DECODE_PACKETS_IN_QUEUE) {
@@ -1059,6 +1041,7 @@ bool AudioService::PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> pa
     return true;
 }
 
+// 网络消费入口：关闭上报时不取包，后台编码仍继续更新最新窗口。
 std::unique_ptr<AudioStreamPacket> AudioService::PopOpusPacket() {
     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
     if (!audio_upload_enabled_ || opus_packet_queue_.empty()) {
@@ -1066,38 +1049,11 @@ std::unique_ptr<AudioStreamPacket> AudioService::PopOpusPacket() {
     }
     auto packet = std::move(opus_packet_queue_.front());
     opus_packet_queue_.pop_front();
-    uplink_popped_packets_.fetch_add(1);
-    uplink_last_popped_ms_.store(esp_log_timestamp());
     audio_queue_cv_.notify_all();
     return packet;
 }
 
-AudioUplinkDiagnostics AudioService::GetUplinkDiagnostics() {
-    AudioUplinkDiagnostics diagnostics;
-    {
-        std::lock_guard<std::mutex> lock(audio_queue_mutex_);
-        diagnostics.upload_enabled = audio_upload_enabled_;
-        diagnostics.generation = upload_generation_;
-        diagnostics.encode_queue = audio_encode_queue_.size();
-        diagnostics.opus_queue = opus_packet_queue_.size();
-    }
-    diagnostics.processor_running =
-        audio_processor_initialized_ && audio_processor_->IsRunning();
-    diagnostics.mic_reads = uplink_mic_reads_.load();
-    diagnostics.afe_frames = uplink_afe_frames_.load();
-    diagnostics.encode_dequeued = uplink_encode_dequeued_.load();
-    diagnostics.encoded_packets = uplink_encoded_packets_.load();
-    diagnostics.send_notifications = uplink_send_notifications_.load();
-    diagnostics.popped_packets = uplink_popped_packets_.load();
-    diagnostics.dropped_encode_frames = uplink_dropped_encode_frames_.load();
-    diagnostics.last_mic_ms = uplink_last_mic_ms_.load();
-    diagnostics.last_afe_ms = uplink_last_afe_ms_.load();
-    diagnostics.last_encoded_ms = uplink_last_encoded_ms_.load();
-    diagnostics.last_notification_ms = uplink_last_notification_ms_.load();
-    diagnostics.last_popped_ms = uplink_last_popped_ms_.load();
-    return diagnostics;
-}
-
+// 将唤醒模型保留的唤醒词录音编码，供后续 PopWakeWordPacket() 读取。
 void AudioService::EncodeWakeWord() {
     if (wake_word_) {
         wake_word_->EncodeWakeWordData();
@@ -1123,6 +1079,7 @@ std::string AudioService::GetWakeWordName() const {
 #endif
 }
 
+// 读取唤醒词预录音，与常规上行 opus_packet_queue_ 相互独立。
 std::unique_ptr<AudioStreamPacket> AudioService::PopWakeWordPacket() {
     if (!wake_word_) {
         return nullptr;
@@ -1136,6 +1093,7 @@ std::unique_ptr<AudioStreamPacket> AudioService::PopWakeWordPacket() {
     return nullptr;
 }
 
+// 只控制唤醒模型的运行与喂帧，不停止 ADC、AFE 或编码任务。
 void AudioService::EnableWakeWordDetection(bool enable) {
     if (!wake_word_) {
         return;
@@ -1168,6 +1126,7 @@ void AudioService::EnableWakeWordDetection(bool enable) {
     }
 }
 
+// MicroWakeWord 使用轻量 Pause；其他实现退回普通 Stop。
 void AudioService::PauseWakeWordDetection() {
 #if CONFIG_USE_MICRO_WAKE_WORD
     if (!wake_word_) {
@@ -1181,6 +1140,8 @@ void AudioService::PauseWakeWordDetection() {
 #endif
 }
 
+// 上报会话边界：开启时清掉此前缓存，并用 generation 排除正在编码的旧帧。
+// 关闭时只停止通知/取包；采集、AFE 和 Opus 编码继续运行。
 void AudioService::EnableAudioUpload(bool enable) {
     bool previous = false;
     size_t encode_before = 0;
@@ -1214,6 +1175,7 @@ void AudioService::EnableAudioUpload(bool enable) {
              service_stopped_.load() ? 0 : 1);
 }
 
+// AEC 同时要求编译支持、codec 全双工以及 ADC 参考声道。
 bool AudioService::SupportsAec() const {
 #if CONFIG_USE_DEVICE_AEC && CONFIG_USE_AUDIO_PROCESSOR
     return codec_ && codec_->duplex() && codec_->input_reference();
@@ -1222,6 +1184,7 @@ bool AudioService::SupportsAec() const {
 #endif
 }
 
+// 录音测试从增益处理后的麦克风取帧，停止时把测试 Opus 送去回放。
 void AudioService::EnableAudioTesting(bool enable) {
     ESP_LOGI(TAG, "%s audio testing", enable ? "Enabling" : "Disabling");
     if (enable) {
@@ -1235,6 +1198,7 @@ void AudioService::EnableAudioTesting(bool enable) {
     }
 }
 
+// 根据硬件能力切换 AEC；MicroWakeWord 随之改用处理后或原始麦克风输入。
 void AudioService::SetAecEnabled(bool enable) {
     aec_enabled_ = enable && SupportsAec();
     if (enable && !aec_enabled_) {
@@ -1254,6 +1218,7 @@ void AudioService::SetCallbacks(AudioServiceCallbacks& callbacks) {
     callbacks_ = callbacks;
 }
 
+// 本地 Ogg/Opus 提示音入口：拆出 Opus 包后仍交给统一的下行解码/播放链。
 void AudioService::PlaySound(const std::string_view& ogg) {
     if (!codec_->output_enabled()) {
         esp_timer_stop(audio_power_timer_);
@@ -1358,15 +1323,14 @@ bool AudioService::IsIdle() {
     return audio_encode_queue_.empty() && audio_decode_queue_.empty() && audio_playback_queue_.empty() && audio_testing_queue_.empty();
 }
 
+// 清理一次下行播放会话的解码器、重采样器、播放队列和首帧统计。
 void AudioService::ResetDecoder() {
     std::scoped_lock lock(player_resampler_mutex_, audio_queue_mutex_);
     opus_decoder_->ResetState();
     /* 新播放会话以干净的重采样状态开始，避免上一段音频的残留相位 */
     player_resampler_input_rate_ = 0;
     player_output_chunks_.store(0);
-    player_output_last_end_ms_.store(0);
     player_output_last_activity_ms_.store(0);
-    player_output_underruns_.store(0);
     player_audio_clock_ms_.store(0);
     player_pcm_bytes_ = 0;
     audio_decode_queue_.clear();
@@ -1381,6 +1345,7 @@ void AudioService::ResetDecoder() {
     audio_queue_cv_.notify_all();
 }
 
+// 定时关闭长时间无读写的 codec 输入/输出；有新数据时对应路径会重新启用。
 void AudioService::CheckAndUpdateAudioPowerState() {
     auto now = std::chrono::steady_clock::now();
     auto input_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_input_time_).count();
@@ -1397,12 +1362,12 @@ void AudioService::CheckAndUpdateAudioPowerState() {
     }
 }
 
-bool AudioService::LoadWakeWordResources(bool force_reload) {
+// 从资源分区寻找唤醒模型；MicroWakeWord 用 JSON/TFLite，ESP-SR 用模型包。
+bool AudioService::LoadWakeWordResources() {
 #if CONFIG_USE_MICRO_WAKE_WORD
-    (void)force_reload;
     std::vector<std::string> paths;
     if (!Resource::List(ResourcePackage::WakeWord, "/", paths)) {
-        ESP_LOGE(TAG, "The wake_word resource partition is unavailable");
+        ESP_LOGW(TAG, "The wake_word resource partition is unavailable");
         return false;
     }
     std::sort(paths.begin(), paths.end());
@@ -1457,22 +1422,18 @@ bool AudioService::LoadWakeWordResources(bool force_reload) {
         }
         cJSON_Delete(descriptor);
     }
-    ESP_LOGE(TAG, "The wake_word descriptor or TFLite model is missing");
+    ESP_LOGW(TAG, "The wake_word descriptor or TFLite model is missing");
     return false;
 #else
-    if (models_list_ != nullptr && !force_reload) {
-        return true;
-    }
-    if (force_reload) {
-        EnableWakeWordDetection(false);
-        const bool model_owned_by_detector = wake_word_ != nullptr;
-        srmodel_list_t* old_models = models_list_;
-        wake_word_.reset();
-        wake_word_initialized_ = false;
-        models_list_ = nullptr;
-        if (!model_owned_by_detector && old_models != nullptr) {
-            esp_srmodel_deinit(old_models);
-        }
+    // 每次调用都先释放旧实现，便于 OTA 后直接重新读取资源。
+    EnableWakeWordDetection(false);
+    const bool model_owned_by_detector = wake_word_ != nullptr;
+    srmodel_list_t* old_models = models_list_;
+    wake_word_.reset();
+    wake_word_initialized_ = false;
+    models_list_ = nullptr;
+    if (!model_owned_by_detector && old_models != nullptr) {
+        esp_srmodel_deinit(old_models);
     }
 
     constexpr const char* kCandidates[] = {"/srmodels.bin", "/cae_esr.bin"};
@@ -1488,12 +1449,13 @@ bool AudioService::LoadWakeWordResources(bool force_reload) {
             return true;
         }
     }
-    ESP_LOGE(TAG, "The wake_word ESP-SR model is missing");
+    ESP_LOGW(TAG, "The wake_word ESP-SR model is missing");
     return false;
 #endif
 }
 
 #if CONFIG_USE_MICRO_WAKE_WORD
+// 替换模型时先关闭检测；真正 Initialize/Start 会在再次启用检测时执行。
 void AudioService::SetMicroWakeWordModel(const void* model_data, size_t model_size,
                                          const std::string& wake_word,
                                          const MicroWakeWordConfig& config) {
@@ -1517,6 +1479,7 @@ void AudioService::SetMicroWakeWordModel(const void* model_data, size_t model_si
     });
 }
 #else // !CONFIG_USE_MICRO_WAKE_WORD
+// ESP-SR 分支按模型包内容选择对应唤醒实现。
 void AudioService::SetModelsList(srmodel_list_t* models_list) {
     EnableWakeWordDetection(false);
     wake_word_.reset();

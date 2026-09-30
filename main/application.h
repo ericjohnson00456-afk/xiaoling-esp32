@@ -267,7 +267,6 @@ private:
     void BeginWakeup(ListeningMode mode);
     void CancelWakeup();
     void PublishWifiIcon();
-    void LogUplinkDiagnostics(const char* phase);
 
     /*  ========== 按键业务 ======== */
     // 按键业务实现。application_button.cc 负责短击、长按、重新配网和恢复出厂。

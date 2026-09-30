@@ -6,7 +6,7 @@
 
 `Application::InitializeAudio()` 按以下顺序执行一次：
 
-1. `AudioService::Initialize(codec)` 创建 AFE/AEC、唤醒算法和 Opus 编解码器。
+1. `AudioService::Initialize(codec)` 启动 codec，加载唤醒资源，再创建 Opus 编解码器和 AFE/AEC。
 2. 注册音频事件回调。
 3. `AudioService::Start()` 启动采集、输出和 Opus 编解码任务。
 4. 打开唤醒词检测。

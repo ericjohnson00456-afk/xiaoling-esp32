@@ -457,11 +457,6 @@ void Application::ProcessMainEvents(EventBits_t bits) {
         PublishWifiIcon();
         Ui::UpdateStatusBar();
 
-        if (GetDeviceState() == kDeviceStateListening ||
-            GetDeviceState() == kDeviceStateSpeaking) {
-            LogUplinkDiagnostics("clock");
-        }
-
         if (GetDeviceState() == kDeviceStateListening && listening_started_at_us_ > 0) {
             const int32_t timeout_ms = KvUser::GetIdleExitTimeoutMs();
             const int64_t elapsed_ms =
@@ -483,57 +478,6 @@ void Application::ProcessMainEvents(EventBits_t bits) {
             SystemInfo::PrintHeapStats();
         }
     }
-}
-
-void Application::LogUplinkDiagnostics(const char* phase) {
-    const auto audio = audio_service_.GetUplinkDiagnostics();
-    XiaolingUplinkDiagnostics network;
-    if (xiaoling_conn_) {
-        network = xiaoling_conn_->GetUplinkDiagnostics();
-    }
-    const uint32_t now_ms = esp_log_timestamp();
-    const auto age_ms = [now_ms](uint32_t timestamp_ms) -> uint32_t {
-        return timestamp_ms == 0 ? UINT32_MAX : now_ms - timestamp_ms;
-    };
-    ESP_LOGI(TAG,
-             "上行链路[%s]: state=%s, tts=%lu, processor=%d, local_upload=%d, "
-             "cloud_upload=%d, session=%d, connected=%d, gen=%lu, "
-             "q=encode:%u/opus:%u/ws:%u, count=mic:%lu/afe:%lu/deq:%lu/enc:%lu/"
-             "notify:%lu/pop:%lu/ws_in:%lu/ws_out:%lu, reject=%lu, "
-             "drop=enc:%lu/ws:%lu, "
-             "age=mic:%lu/afe:%lu/enc:%lu/notify:%lu/pop:%lums, ws_batch=%lu/%lu, "
-             "ws_active=%d(seq=%lu,%ldms), ws_last=%ldms",
-             phase != nullptr ? phase : "unknown",
-             DeviceStatus::GetStateName(GetDeviceState()),
-             static_cast<unsigned long>(active_tts_session_id_),
-             audio.processor_running ? 1 : 0, audio.upload_enabled ? 1 : 0,
-             network.upload_enabled ? 1 : 0, network.session_active ? 1 : 0,
-             network.connected ? 1 : 0, static_cast<unsigned long>(audio.generation),
-             static_cast<unsigned>(audio.encode_queue),
-             static_cast<unsigned>(audio.opus_queue),
-             static_cast<unsigned>(network.queue),
-             static_cast<unsigned long>(audio.mic_reads),
-             static_cast<unsigned long>(audio.afe_frames),
-             static_cast<unsigned long>(audio.encode_dequeued),
-             static_cast<unsigned long>(audio.encoded_packets),
-             static_cast<unsigned long>(audio.send_notifications),
-             static_cast<unsigned long>(audio.popped_packets),
-             static_cast<unsigned long>(network.enqueued_packets),
-             static_cast<unsigned long>(network.sent_frames),
-             static_cast<unsigned long>(network.rejected_packets),
-             static_cast<unsigned long>(audio.dropped_encode_frames),
-             static_cast<unsigned long>(network.dropped_packets),
-             static_cast<unsigned long>(age_ms(audio.last_mic_ms)),
-             static_cast<unsigned long>(age_ms(audio.last_afe_ms)),
-             static_cast<unsigned long>(age_ms(audio.last_encoded_ms)),
-             static_cast<unsigned long>(age_ms(audio.last_notification_ms)),
-             static_cast<unsigned long>(age_ms(audio.last_popped_ms)),
-             static_cast<unsigned long>(network.batches_started),
-             static_cast<unsigned long>(network.batches_completed),
-             network.send_in_progress ? 1 : 0,
-             static_cast<unsigned long>(network.active_sequence),
-             static_cast<long>(network.active_send_ms),
-             static_cast<long>(network.last_send_completed_ms));
 }
 
 void Application::HandleNetworkConnectedEvent() {
