@@ -74,6 +74,14 @@ bool AudioPlayer::Initialize(AudioService* audio_service) {
         return false;
     }
     audio_service_ = audio_service;
+    AudioServiceOutputCallbacks output_callbacks;
+    output_callbacks.on_output_started = [this](const PlaybackOutputEvent& event) {
+        PublishPlayerOutputStarted(event);
+    };
+    output_callbacks.on_output_progress = [this](const PlaybackOutputEvent& event) {
+        PublishPlayerOutputProgress(event);
+    };
+    audio_service_->SetOutputCallbacks(output_callbacks);
     engine_ = std::move(engine);
     tone_channel_ = std::make_unique<TonePlayer>(*engine_, [this]() {
         return next_session_id_.fetch_add(1);
@@ -603,6 +611,31 @@ bool AudioPlayer::PauseMusic() {
 void AudioPlayer::SetTtsUrlCallback(TtsUrlCallback callback) {
     std::lock_guard<std::mutex> lock(callback_mutex_);
     tts_url_callback_ = std::move(callback);
+}
+
+void AudioPlayer::PublishPlayerOutputStarted(const PlaybackOutputEvent& event) {
+    if (!AppEvent::Publish(AppEvent::Id::PlayerOutputStarted, event)) {
+        ESP_LOGE(TAG, "发布播放器首帧输出事件失败");
+    }
+}
+
+void AudioPlayer::PublishPlayerOutputProgress(const PlaybackOutputEvent& event) {
+    {
+        std::lock_guard<std::mutex> lock(output_progress_mutex_);
+        latest_output_progress_ = event;
+    }
+    // 播放进度属于高频事件，只保留一个待处理通知，Application 取最新值。
+    if (!output_progress_event_pending_.exchange(true) &&
+        !AppEvent::Publish(AppEvent::Id::PlayerOutputProgress)) {
+        output_progress_event_pending_.store(false);
+    }
+}
+
+PlaybackOutputEvent AudioPlayer::TakeLatestOutputProgress() {
+    std::lock_guard<std::mutex> lock(output_progress_mutex_);
+    const auto latest = latest_output_progress_;
+    output_progress_event_pending_.store(false);
+    return latest;
 }
 
 void AudioPlayer::PublishEngineEvent(const PlaybackEvent& event) {

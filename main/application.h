@@ -165,9 +165,9 @@ private:
     PlaybackIntentManager intent_manager_;
     uint32_t active_tts_session_id_ = 0;
     uint32_t pending_tts_session_id_ = 0;
-    // 半双工模式会在流式 TTS 产生首个 PCM 数据块前结束监听；
-    // 在这段空档期保持界面处于“思考中”状态。
+    // TTS URL 到达后保持该标志，直到 DAC 首帧输出或当前 TTS 会话结束。
     std::atomic_bool tts_waiting_for_playback_{false};
+    // DAC 首个 PCM 输出和播放器 kPlaying 事件可能乱序到达，暂存首帧状态。
     std::atomic_bool tts_output_started_{false};
     /* Incremented synchronously when each TTS URL is admitted. Delayed IAT
        work may only interrupt the TTS generation present when it arrived. */
@@ -178,11 +178,9 @@ private:
     uint32_t iat_update_subscription_id_ = 0;
     uint32_t iat_end_subscription_id_ = 0;
     std::vector<uint32_t> playback_event_subscription_ids_;
+    std::vector<uint32_t> playback_output_event_subscription_ids_;
     std::vector<uint32_t> audio_event_subscription_ids_;
     std::atomic_bool vad_event_pending_{false};
-    std::atomic_bool player_progress_event_pending_{false};
-    std::mutex player_progress_mutex_;
-    PlaybackOutputEvent latest_player_progress_;
     bool iat_utterance_active_ = false;
 
     /*  ========== OTA业务 ======== */

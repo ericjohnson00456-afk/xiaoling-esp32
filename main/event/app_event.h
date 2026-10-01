@@ -20,7 +20,7 @@ enum class Id : uint16_t {
     PlaybackCompleted,
     PlaybackFailed,
 
-    // AudioService 控制事件；播放器输出事件携带 PlaybackOutputEvent。
+    // 音频输入事件由 AudioService 发布；播放器输出事件由 AudioPlayer 发布。
     WakeWordDetected,
     VadChanged,
     PlayerOutputStarted,

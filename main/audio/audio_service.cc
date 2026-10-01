@@ -113,6 +113,9 @@ bool AudioTask::AllocatePlayerPcm(size_t samples) {
 }
 
 
+// ============================================================================
+// 1. 服务生命周期与初始化
+// ============================================================================
 // 启动 codec 后先加载唤醒资源，再装配 Opus 编解码器和音频处理器。
 void AudioService::Initialize(AudioCodec* codec) {
     codec_ = codec;
@@ -329,6 +332,9 @@ void AudioService::Stop() {
 #endif
 }
 
+// ============================================================================
+// 2. 硬件采集与 AEC/前处理
+// ============================================================================
 // 从 ADC 读指定时长的 PCM；必要时逐声道重采样，保留双声道中的参考声道。
 // 增益只作用于第一个（麦克风）声道，返回的数据供唤醒与处理链共用。
 bool AudioService::ReadAudioData(std::vector<int16_t>& data, int sample_rate, int samples) {
@@ -496,6 +502,9 @@ void AudioService::AudioInputTask() {
     ESP_LOGW(TAG, "Audio input task stopped");
 }
 
+// ============================================================================
+// 3. 唤醒词输入链
+// ============================================================================
 #if CONFIG_USE_MICRO_WAKE_WORD
 // 只处理 AFE 后的最新唤醒帧；队列在 OnOutput 中限长，推理慢时丢旧帧。
 void AudioService::ProcessedWakeTask() {
@@ -546,6 +555,9 @@ void AudioService::SetWakeInputFromProcessor(bool enable) {
 }
 #endif
 
+// ============================================================================
+// 4. 下行播放任务
+// ============================================================================
 // DAC 的唯一写入者。服务端解码 PCM 与本地播放器 PCM 在此串行输出。
 void AudioService::AudioOutputTask() {
     while (true) {
@@ -646,12 +658,12 @@ void AudioService::AudioOutputTask() {
             codec_->EnableOutput(true);
         }
         codec_->OutputData(task->PlaybackData(), task->PlaybackSamples());
-        if (player_output_started && callbacks_.on_player_output_started) {
-            ESP_LOGI(TAG, "播放器首个 PCM 已交给 codec: samples=%u",
-                     static_cast<unsigned>(task->PlaybackSamples()));
-            callbacks_.on_player_output_started(task->player_output);
-        }
         if (task->type == kAudioTaskTypePlayerToPlaybackQueue) {
+            if (player_output_started && output_callbacks_.on_output_started) {
+                ESP_LOGI(TAG, "播放器首个 PCM 已交给 codec: samples=%u",
+                         static_cast<unsigned>(task->PlaybackSamples()));
+                output_callbacks_.on_output_started(task->player_output);
+            }
             const int sample_rate = codec_->output_sample_rate();
             const uint32_t duration_ms = sample_rate > 0
                 ? static_cast<uint32_t>((static_cast<uint64_t>(task->PlaybackSamples()) * 1000) /
@@ -660,10 +672,10 @@ void AudioService::AudioOutputTask() {
             if (duration_ms > 0) {
                 const uint32_t audio_clock_ms =
                     player_audio_clock_ms_.fetch_add(duration_ms) + duration_ms;
-                if (callbacks_.on_player_output_progress) {
+                if (output_callbacks_.on_output_progress) {
                     auto output = task->player_output;
                     output.audio_clock_ms = audio_clock_ms;
-                    callbacks_.on_player_output_progress(output);
+                    output_callbacks_.on_output_progress(output);
                 }
             }
         }
@@ -684,6 +696,9 @@ void AudioService::AudioOutputTask() {
     ESP_LOGW(TAG, "Audio output task stopped");
 }
 
+// ============================================================================
+// 5. Opus 编解码任务与采样率配置
+// ============================================================================
 // 同一工作任务兼顾下行 Opus 解码和上行 PCM 编码；两侧共享队列锁。
 // 上行即使未开启网络上报仍编码，产物以有限长度的最新窗口保存。
 void AudioService::OpusCodecTask() {
@@ -780,8 +795,8 @@ void AudioService::OpusCodecTask() {
                         notify_consumer = audio_upload_enabled_;
                     }
                 }
-                if (notify_consumer && callbacks_.on_opus_packet_available) {
-                    callbacks_.on_opus_packet_available();
+                if (notify_consumer && upload_callbacks_.on_opus_packet_available) {
+                    upload_callbacks_.on_opus_packet_available();
                 }
             } else if (task->type == kAudioTaskTypeEncodeToTestingQueue) {
                 std::lock_guard<std::mutex> lock(audio_queue_mutex_);
@@ -835,6 +850,9 @@ void AudioService::SetDecodeSampleRate(int sample_rate, int frame_duration) {
     }
 }
 
+// ============================================================================
+// 6. 上行编码队列与下行播放队列入口
+// ============================================================================
 // AFE 的实时帧满队列时丢旧帧，不阻塞采集；音频测试帧则允许等待空位。
 void AudioService::PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t>&& pcm) {
     auto task = std::make_unique<AudioTask>();
@@ -1041,6 +1059,9 @@ bool AudioService::PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> pa
     return true;
 }
 
+// ============================================================================
+// 7. 上行与唤醒结果接口
+// ============================================================================
 // 网络消费入口：关闭上报时不取包，后台编码仍继续更新最新窗口。
 std::unique_ptr<AudioStreamPacket> AudioService::PopOpusPacket() {
     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
@@ -1175,6 +1196,9 @@ void AudioService::EnableAudioUpload(bool enable) {
              service_stopped_.load() ? 0 : 1);
 }
 
+// ============================================================================
+// 8. 运行时开关、回调与本地播放
+// ============================================================================
 // AEC 同时要求编译支持、codec 全双工以及 ADC 参考声道。
 bool AudioService::SupportsAec() const {
 #if CONFIG_USE_DEVICE_AEC && CONFIG_USE_AUDIO_PROCESSOR
@@ -1216,6 +1240,14 @@ void AudioService::SetAecEnabled(bool enable) {
 
 void AudioService::SetCallbacks(AudioServiceCallbacks& callbacks) {
     callbacks_ = callbacks;
+}
+
+void AudioService::SetUploadCallbacks(AudioServiceUploadCallbacks& callbacks) {
+    upload_callbacks_ = callbacks;
+}
+
+void AudioService::SetOutputCallbacks(AudioServiceOutputCallbacks& callbacks) {
+    output_callbacks_ = callbacks;
 }
 
 // 本地 Ogg/Opus 提示音入口：拆出 Opus 包后仍交给统一的下行解码/播放链。
@@ -1318,6 +1350,9 @@ void AudioService::PlaySound(const std::string_view& ogg) {
     }
 }
 
+// ============================================================================
+// 9. 播放状态、功耗和唤醒资源
+// ============================================================================
 bool AudioService::IsIdle() {
     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
     return audio_encode_queue_.empty() && audio_decode_queue_.empty() && audio_playback_queue_.empty() && audio_testing_queue_.empty();

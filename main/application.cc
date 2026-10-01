@@ -75,6 +75,9 @@ Application::~Application() {
     for (const auto subscription_id : playback_event_subscription_ids_) {
         AppEvent::Unsubscribe(subscription_id);
     }
+    for (const auto subscription_id : playback_output_event_subscription_ids_) {
+        AppEvent::Unsubscribe(subscription_id);
+    }
     if (iat_subscription_id_ != 0) {
         XiaolingEventBus::GetInstance().Unsubscribe(iat_subscription_id_);
     }
@@ -105,13 +108,13 @@ void Application::HandlePlaybackEvent(const PlaybackEvent& event) {
         active_tts_session_id_ = event.session_id;
         XiaolingEventBus::GetInstance().Publish(XIAOLING_TTS_PLAYING);
         session_controller_.StartTts(event.session_id);
-        // 与收到 URL 的事件不同，kPlaying 表示 HTTP 响应中已经产生
-        // 可以解码的 TTS 音频数据。
+        // kPlaying 只表示播放器已进入播放态，仍需等待 DAC 首个 PCM 输出。
         if (!exit_requested_.load() &&
+            tts_waiting_for_playback_.load() &&
             tts_output_started_.exchange(false) &&
+            tts_waiting_for_playback_.exchange(false) &&
             (GetDeviceState() == kDeviceStateIdle ||
              GetDeviceState() == kDeviceStateListening)) {
-            tts_waiting_for_playback_.store(false);
             SetDeviceState(kDeviceStateSpeaking);
         }
         return;
@@ -202,13 +205,14 @@ void Application::HandlePlayerOutputStartedEvent(
         !tts_waiting_for_playback_.load()) {
         return;
     }
+
     tts_output_started_.store(true);
-    XiaolingEventBus::GetInstance().Publish(XIAOLING_TTS_OUTPUT_STARTED);
+    XiaolingEventBus::GetInstance().Publish(XIAOLING_TTS_STARTED);
     if (!exit_requested_.load() && active_tts_session_id_ != 0 &&
         tts_output_started_.exchange(false) &&
+        tts_waiting_for_playback_.exchange(false) &&
         (GetDeviceState() == kDeviceStateIdle ||
          GetDeviceState() == kDeviceStateListening)) {
-        tts_waiting_for_playback_.store(false);
         SetDeviceState(kDeviceStateSpeaking);
     }
 }
@@ -216,22 +220,14 @@ void Application::HandlePlayerOutputStartedEvent(
 void Application::HandlePlayerOutputProgressEvent(
         const PlaybackOutputEvent& event) {
     if (event.session_id == 0) {
-        player_progress_event_pending_.store(false);
         return;
     }
-    // 进度只保留最新值，避免每个 PCM 块都占用应用事件队列。
-    player_progress_event_pending_.store(false);
-    PlaybackOutputEvent output;
-    {
-        std::lock_guard<std::mutex> lock(player_progress_mutex_);
-        output = latest_player_progress_;
-    }
-    if (output.channel != PlaybackChannel::kTts) {
+    if (event.channel != PlaybackChannel::kTts) {
         return;
     }
     XiaolingEventBus::GetInstance().Publish(
         XIAOLING_TTS_OUTPUT_PROGRESS,
-        std::to_string(output.audio_clock_ms));
+        std::to_string(event.audio_clock_ms));
 }
 
 void Application::Initialize() {
@@ -984,7 +980,6 @@ void Application::AbortSpeaking(AbortReason reason) {
             audio_service_.EnableWakeWordDetection(false);
             ESP_LOGI(TAG, "退出请求：TTS 仍在播放，暂时屏蔽唤醒检测");
         } else {
-            tts_output_started_.store(false);
             exit_requested_.store(false);
         }
         SetDeviceState(kDeviceStateIdle);

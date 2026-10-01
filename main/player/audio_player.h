@@ -57,6 +57,9 @@ public:
     bool ResumeMusic();
     void SetTtsUrlCallback(TtsUrlCallback callback);
 
+    // 返回并清除最近一次合并后的实际扬声器输出进度。
+    PlaybackOutputEvent TakeLatestOutputProgress();
+
 private:
     struct MusicListItem {
         std::string item_id;
@@ -67,6 +70,8 @@ private:
 
     // GMF 所在线程只复制事件；通道状态和业务事件都在 app_event 任务处理。
     void PublishEngineEvent(const PlaybackEvent& event);
+    void PublishPlayerOutputStarted(const PlaybackOutputEvent& event);
+    void PublishPlayerOutputProgress(const PlaybackOutputEvent& event);
     void HandleEngineEvent(const PlaybackEvent& event);
     void DispatchPlaybackEvent(const PlaybackEvent& event);
     bool PlayNextMusicAfterNaturalEnd(uint32_t session_id);
@@ -97,4 +102,7 @@ private:
     uint32_t engine_event_subscription_id_ = 0;
     mutable std::mutex callback_mutex_;
     TtsUrlCallback tts_url_callback_;
+    mutable std::mutex output_progress_mutex_;
+    PlaybackOutputEvent latest_output_progress_;
+    std::atomic_bool output_progress_event_pending_{false};
 };

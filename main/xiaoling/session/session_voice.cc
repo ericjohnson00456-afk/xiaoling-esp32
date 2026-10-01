@@ -460,9 +460,9 @@ XiaolingSessionVoice::XiaolingSessionVoice()
         XIAOLING_TTS_PLAYING, [this](const XiaolingEvent&) {
             OnTtsPipelinePlaying();
         });
-    tts_output_started_subscription_id_ = events.Subscribe(
-        XIAOLING_TTS_OUTPUT_STARTED, [this](const XiaolingEvent&) {
-            OnTtsOutputStarted();
+    tts_started_subscription_id_ = events.Subscribe(
+        XIAOLING_TTS_STARTED, [this](const XiaolingEvent&) {
+            OnTtsStarted();
         });
     tts_progress_subscription_id_ = events.Subscribe(
         XIAOLING_TTS_OUTPUT_PROGRESS, [this](const XiaolingEvent& event) {
@@ -489,8 +489,8 @@ XiaolingSessionVoice::~XiaolingSessionVoice() {
     if (tts_pipeline_subscription_id_ != 0) {
         events.Unsubscribe(tts_pipeline_subscription_id_);
     }
-    if (tts_output_started_subscription_id_ != 0) {
-        events.Unsubscribe(tts_output_started_subscription_id_);
+    if (tts_started_subscription_id_ != 0) {
+        events.Unsubscribe(tts_started_subscription_id_);
     }
     if (tts_progress_subscription_id_ != 0) {
         events.Unsubscribe(tts_progress_subscription_id_);
@@ -1179,7 +1179,7 @@ void XiaolingSessionVoice::OnTtsPipelinePlaying() {
     ESP_LOGI(TAG, "TTS 音频 HTTPS 已就绪，字幕继续等待首帧 PCM");
 }
 
-void XiaolingSessionVoice::OnTtsOutputStarted() {
+void XiaolingSessionVoice::OnTtsStarted() {
     {
         std::lock_guard<std::mutex> lock(subtitle_state_mutex_);
         tts_audio_pending_ = false;
@@ -1188,7 +1188,7 @@ void XiaolingSessionVoice::OnTtsOutputStarted() {
         tts_audio_clock_ms_ = 0;
     }
     ESP_LOGI(TAG, "TTS 首个 PCM 已实际输出，timeline 播放时钟启动");
-    // 兼容未收到 PLAYING 事件或 URL 更晚到达的情况。
+    // 等 DAC 首帧输出后再启动字幕流，保证字幕和扬声器播放时序一致。
     StartPendingSubtitleStream();
 }
 

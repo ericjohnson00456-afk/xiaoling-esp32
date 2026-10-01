@@ -197,7 +197,7 @@ void HomePresenter::SubscribeVoiceEvents() {
                 [this]() { OnTtsTextInterrupt(); });
         }));
     voice_event_subscriptions_.push_back(events.Subscribe(
-        XIAOLING_TTS_OUTPUT_STARTED, [this](const XiaolingEvent&) {
+        XIAOLING_TTS_STARTED, [this](const XiaolingEvent&) {
             const uint32_t generation = tts_progress_generation_.fetch_add(1) + 1;
             latest_tts_audio_clock_ms_.store(0);
             tts_progress_dispatch_pending_.store(false);

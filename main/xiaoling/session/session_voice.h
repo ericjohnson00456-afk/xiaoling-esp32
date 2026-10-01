@@ -130,7 +130,7 @@ private:
     FrozenInterruption frozen_interruption_;
     uint32_t tts_stream_ready_subscription_id_ = 0;
     uint32_t tts_pipeline_subscription_id_ = 0;
-    uint32_t tts_output_started_subscription_id_ = 0;
+    uint32_t tts_started_subscription_id_ = 0;
     uint32_t tts_progress_subscription_id_ = 0;
     uint32_t tts_stopped_subscription_id_ = 0;
 
@@ -147,7 +147,7 @@ private:
     void StartTtsAudio(std::string url, const std::string& reply_sid);
     void StartPendingSubtitleStream();
     void OnTtsPipelinePlaying();
-    void OnTtsOutputStarted();
+    void OnTtsStarted();
     void OnTtsAudioProgress(uint32_t audio_clock_ms);
     void OnTtsPlaybackStopped(bool natural_end);
     void StartSubtitleStream(const std::string& url);
