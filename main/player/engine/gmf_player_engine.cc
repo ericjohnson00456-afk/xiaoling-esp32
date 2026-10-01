@@ -47,9 +47,10 @@ constexpr size_t kStreamingHttpBufferSize = 32 * 1024;
 // live TTS chunk has arrived. Header/connect operations retain the GMF default.
 constexpr int kStreamingHttpBodyReadTimeoutMs = 50;
 constexpr size_t kPlayerCommandStackSize = 4096;
-constexpr UBaseType_t kPlayerCommandPriority = 7;
-constexpr UBaseType_t kNetworkStreamPriority = 12;
-constexpr UBaseType_t kPlayerDecodePriority = 11;
+// AudioPlayer 的控制、网络拉流和解码任务统一使用优先级 8。
+constexpr UBaseType_t kPlayerCommandPriority = 8;
+constexpr UBaseType_t kNetworkStreamPriority = 8;
+constexpr UBaseType_t kPlayerDecodePriority = 8;
 // Apply the same deadline to initial synthesis and a mid-stream synthesis
 // stall. The initial deadline starts when the HTTP stream is submitted.
 constexpr uint64_t kTtsFirstPcmTimeoutUs = 5ULL * 1000ULL * 1000ULL;

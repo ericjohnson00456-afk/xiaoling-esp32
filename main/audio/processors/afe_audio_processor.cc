@@ -56,7 +56,7 @@ void AfeAudioProcessor::Initialize(AudioCodec* codec, int frame_duration_ms, srm
     afe_config->agc_init = false;
     afe_config->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
     afe_config->afe_perferred_core = 1;
-    afe_config->afe_perferred_priority = 8;
+    afe_config->afe_perferred_priority = kTaskPriority;
 
 #ifdef CONFIG_USE_DEVICE_AEC
     afe_config->aec_init = true;
@@ -71,11 +71,12 @@ void AfeAudioProcessor::Initialize(AudioCodec* codec, int frame_duration_ms, srm
     afe_iface_ = esp_afe_handle_from_config(afe_config);
     afe_data_ = afe_iface_->create_from_config(afe_config);
     
-    xTaskCreate([](void* arg) {
+    // AFE 取帧任务和 AudioService 其他任务统一使用同一优先级。
+    xTaskCreatePinnedToCore([](void* arg) {
         auto this_ = (AfeAudioProcessor*)arg;
         this_->AudioProcessorTask();
         vTaskDelete(NULL);
-    }, "audio_communication", 4096, this, 8, NULL);
+    }, "audio_communication", 4096, this, kTaskPriority, NULL, kTaskCore);
 }
 
 AfeAudioProcessor::~AfeAudioProcessor() {

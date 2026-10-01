@@ -15,6 +15,10 @@
 
 class AfeAudioProcessor : public AudioProcessor {
 public:
+    // AudioService 内部任务统一使用优先级 8；播放器解码任务属于 AudioPlayer。
+    static constexpr UBaseType_t kTaskPriority = 8;
+    static constexpr BaseType_t kTaskCore = 1;
+
     AfeAudioProcessor();
     ~AfeAudioProcessor();
 

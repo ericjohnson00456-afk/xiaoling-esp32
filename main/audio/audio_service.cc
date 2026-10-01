@@ -44,8 +44,13 @@
  * 网络上报和 AEC 模式可切换。OTA 会调用 Stop()/Start() 暂停并重建服务任务。
  */
 namespace {
-constexpr UBaseType_t kAudioCodecPriority = 11;
 constexpr UBaseType_t kAudioAlgorithmPriority = 8;
+constexpr UBaseType_t kAudioCodecPriority = kAudioAlgorithmPriority;
+#if CONFIG_USE_AUDIO_PROCESSOR
+constexpr UBaseType_t kAudioAfePriority = AfeAudioProcessor::kTaskPriority;
+#else
+constexpr UBaseType_t kAudioAfePriority = kAudioAlgorithmPriority;
+#endif
 constexpr uint32_t kAudioInputIdleYieldIntervalMs = 500;
 
 #if CONFIG_USE_MICRO_WAKE_WORD
@@ -300,7 +305,7 @@ void AudioService::Start() {
              static_cast<unsigned>(kAudioCodecPriority),
              static_cast<unsigned>(kAudioAlgorithmPriority),
              static_cast<unsigned>(kAudioAlgorithmPriority),
-             static_cast<unsigned>(kAudioAlgorithmPriority));
+             static_cast<unsigned>(kAudioAfePriority));
 }
 
 // 系统级暂停（目前由 OTA 使用）：通知任务退出并清空队列；普通业务切换不调用。
