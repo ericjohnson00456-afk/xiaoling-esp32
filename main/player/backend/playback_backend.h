@@ -6,11 +6,11 @@
 
 class AudioService;
 
-class PlayerEngine {
+class PlaybackBackend {
 public:
     using EventCallback = std::function<void(const PlaybackEvent&)>;
 
-    virtual ~PlayerEngine() = default;
+    virtual ~PlaybackBackend() = default;
 
     virtual bool Initialize(AudioService* audio_service, EventCallback callback) = 0;
     virtual bool Play(const PlaybackRequest& request) = 0;

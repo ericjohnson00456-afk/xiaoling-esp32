@@ -1,6 +1,6 @@
 #pragma once
 
-#include "player/core/playback_event.h"
+#include "player/types/playback_event.h"
 
 #include <cstdint>
 #include <atomic>

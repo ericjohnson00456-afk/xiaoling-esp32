@@ -4,7 +4,7 @@
 #include "channels/tone_player.h"
 #include "channels/tts_player.h"
 #include "channels/music_player.h"
-#include "engine/gmf_player_engine.h"
+#include "backend/esp_simple_player_backend.h"
 #include "audio_service.h"
 #include "event/app_event.h"
 
@@ -36,41 +36,44 @@ AppEvent::Id ToAppEventId(PlaybackState state) {
 
 }  // namespace
 
-AudioPlayer::AudioPlayer() = default;
+AudioPlayer::AudioPlayer()
+    : music_playlist_(std::make_unique<MusicPlaylist>([this](const std::string& url) {
+          return PlayMusicUrlInternal(url);
+      })) {}
 AudioPlayer::~AudioPlayer() {
-    AppEvent::Unsubscribe(engine_event_subscription_id_);
+    AppEvent::Unsubscribe(backend_event_subscription_id_);
 }
 
 bool AudioPlayer::Initialize(AudioService* audio_service) {
-    if (engine_ != nullptr) {
+    if (backend_ != nullptr) {
         return true;
     }
 
-    if (engine_event_subscription_id_ == 0) {
-        engine_event_subscription_id_ = AppEvent::Subscribe(
-            AppEvent::Id::PlayerEngine,
+    if (backend_event_subscription_id_ == 0) {
+        backend_event_subscription_id_ = AppEvent::Subscribe(
+            AppEvent::Id::PlaybackBackend,
             [](const AppEvent::Event& queued, void* context) {
                 const auto* event = queued.Get<PlaybackEvent>();
                 if (event == nullptr) {
                     ESP_LOGE(TAG, "播放器内部事件数据无效");
                     return;
                 }
-                static_cast<AudioPlayer*>(context)->HandleEngineEvent(*event);
+                static_cast<AudioPlayer*>(context)->HandleBackendEvent(*event);
             },
             this);
-        if (engine_event_subscription_id_ == 0) {
+        if (backend_event_subscription_id_ == 0) {
             ESP_LOGE(TAG, "订阅播放器内部事件失败");
             return false;
         }
     }
 
-    auto engine = std::make_unique<GmfPlayerEngine>();
-    if (!engine->Initialize(audio_service, [this](const PlaybackEvent& event) {
-            PublishEngineEvent(event);
+    auto backend = std::make_unique<EspSimplePlayerBackend>();
+    if (!backend->Initialize(audio_service, [this](const PlaybackEvent& event) {
+            PublishBackendEvent(event);
         })) {
-        ESP_LOGE(TAG, "播放器引擎初始化失败");
-        AppEvent::Unsubscribe(engine_event_subscription_id_);
-        engine_event_subscription_id_ = 0;
+        ESP_LOGE(TAG, "播放器后端初始化失败");
+        AppEvent::Unsubscribe(backend_event_subscription_id_);
+        backend_event_subscription_id_ = 0;
         return false;
     }
     audio_service_ = audio_service;
@@ -82,14 +85,14 @@ bool AudioPlayer::Initialize(AudioService* audio_service) {
         PublishPlayerOutputProgress(event);
     };
     audio_service_->SetOutputCallbacks(output_callbacks);
-    engine_ = std::move(engine);
-    tone_channel_ = std::make_unique<TonePlayer>(*engine_, [this]() {
+    backend_ = std::move(backend);
+    tone_channel_ = std::make_unique<TonePlayer>(*backend_, [this]() {
         return next_session_id_.fetch_add(1);
     });
-    tts_channel_ = std::make_unique<TtsPlayer>(*engine_, [this]() {
+    tts_channel_ = std::make_unique<TtsPlayer>(*backend_, [this]() {
         return next_session_id_.fetch_add(1);
     });
-    alarm_channel_ = std::make_unique<AlarmPlayer>(*engine_, [this]() {
+    alarm_channel_ = std::make_unique<AlarmPlayer>(*backend_, [this]() {
         return next_session_id_.fetch_add(1);
     });
     tts_channel_->SetUrlCallback([this]() {
@@ -109,7 +112,7 @@ bool AudioPlayer::Initialize(AudioService* audio_service) {
 }
 
 uint32_t AudioPlayer::PlayTtsUrl(const std::string& url) {
-    if (engine_ == nullptr || tts_channel_ == nullptr) {
+    if (backend_ == nullptr || tts_channel_ == nullptr) {
         ESP_LOGE(TAG, "播放器尚未初始化");
         return 0;
     }
@@ -117,269 +120,74 @@ uint32_t AudioPlayer::PlayTtsUrl(const std::string& url) {
 }
 
 uint32_t AudioPlayer::PlayMusicUrl(const std::string& url) {
-    if (!TtsPlayer::IsHttpUrl(url)) {
-        return 0;
-    }
-    {
-        std::lock_guard<std::mutex> lock(music_list_mutex_);
-        music_list_.clear();
-        music_list_.push_back(MusicListItem{.url = url});
-        current_music_index_ = 0;
-        active_music_index_ = static_cast<std::size_t>(-1);
-        ++music_list_generation_;
-        current_music_session_id_ = 0;
-        current_music_retry_used_ = false;
-        music_url_resolver_ = nullptr;
-    }
-    if (!StartResolvedMusic(0, url)) {
-        ClearMusicList();
-        return 0;
-    }
-    std::lock_guard<std::mutex> lock(music_list_mutex_);
-    return current_music_session_id_;
+    return music_playlist_->PlayUrl(url);
 }
 
 uint32_t AudioPlayer::PlayMusicList(const std::vector<std::string>& urls) {
-    std::vector<MusicListItem> valid_urls;
-    valid_urls.reserve(urls.size());
-    for (const auto& url : urls) {
-        if (TtsPlayer::IsHttpUrl(url)) {
-            valid_urls.push_back(MusicListItem{.url = url});
-        }
-    }
-    if (valid_urls.empty()) {
-        return 0;
-    }
-    std::string first_url;
-    {
-        std::lock_guard<std::mutex> lock(music_list_mutex_);
-        music_list_ = std::move(valid_urls);
-        current_music_index_ = 0;
-        active_music_index_ = static_cast<std::size_t>(-1);
-        first_url = music_list_.front().url;
-        ++music_list_generation_;
-        current_music_session_id_ = 0;
-        current_music_retry_used_ = false;
-        music_url_resolver_ = nullptr;
-    }
-    if (!StartResolvedMusic(0, first_url)) {
-        ClearMusicList();
-        return 0;
-    }
-    std::lock_guard<std::mutex> lock(music_list_mutex_);
-    return current_music_session_id_;
+    return music_playlist_->PlayUrlList(urls);
 }
 
 bool AudioPlayer::PlayMusicItemList(const std::vector<std::string>& item_ids,
                                     MusicUrlResolver resolver) {
-    if (!resolver) {
-        return false;
-    }
-    std::vector<MusicListItem> items;
-    items.reserve(item_ids.size());
-    for (const auto& item_id : item_ids) {
-        if (!item_id.empty()) {
-            items.push_back(MusicListItem{.item_id = item_id});
-        }
-    }
-    if (items.empty()) {
-        return false;
-    }
-    {
-        std::lock_guard<std::mutex> lock(music_list_mutex_);
-        music_list_ = std::move(items);
-        current_music_index_ = 0;
-        active_music_index_ = static_cast<std::size_t>(-1);
-        ++music_list_generation_;
-        current_music_session_id_ = 0;
-        current_music_retry_used_ = false;
-        music_url_resolver_ = std::move(resolver);
-    }
-    if (!RequestMusicAtIndex(0, true)) {
-        ClearMusicList();
-        return false;
-    }
-    return true;
+    return music_playlist_->PlayItemList(item_ids, std::move(resolver));
 }
 
 bool AudioPlayer::PlayPreviousMusic(bool play_when_ready) {
-    std::size_t index = 0;
-    {
-        std::lock_guard<std::mutex> lock(music_list_mutex_);
-        if (music_list_.empty()) {
-            return false;
-        }
-        current_music_index_ = current_music_index_ == 0
-                                   ? music_list_.size() - 1
-                                   : current_music_index_ - 1;
-        active_music_index_ = static_cast<std::size_t>(-1);
-        index = current_music_index_;
-        current_music_retry_used_ = false;
-    }
-    return RequestMusicAtIndex(index, play_when_ready);
+    return music_playlist_->PlayPrevious(play_when_ready);
 }
 
 bool AudioPlayer::PlayNextMusic(bool play_when_ready) {
-    std::size_t index = 0;
-    {
-        std::lock_guard<std::mutex> lock(music_list_mutex_);
-        if (music_list_.empty()) {
-            return false;
+    if (music_playlist_->HasList() && music_playlist_->IsAtLast()) {
+        // 顺序播放到最后一首后停止当前后端；Application 收到停止事件后弹出 MusicIntent。
+        const uint32_t session_id = music_playlist_->CurrentSessionId();
+        const bool has_backend = music_backend_ != nullptr;
+        const bool stopped = !has_backend ||
+                             music_backend_->Stop(PlaybackEndReason::kCancelled);
+        music_playlist_->Clear();
+        if (!has_backend) {
+            // 首个 URL 仍在解析时还没有后端，自然也不会产生停止事件；补发一个
+            // 统一的音乐终态，确保音乐 Intent 仍能正常出栈。
+            const PlaybackEvent event{
+                .session_id = session_id,
+                .channel = PlaybackChannel::kMusic,
+                .state = PlaybackState::kStopped,
+                .reason = PlaybackEndReason::kCancelled,
+            };
+            if (!AppEvent::Publish(AppEvent::Id::PlaybackStopped, event)) {
+                ESP_LOGE(TAG, "发布音乐列表结束事件失败");
+            }
         }
-        current_music_index_ = (current_music_index_ + 1) % music_list_.size();
-        active_music_index_ = static_cast<std::size_t>(-1);
-        index = current_music_index_;
-        current_music_retry_used_ = false;
+        return stopped;
     }
-    return RequestMusicAtIndex(index, play_when_ready);
+    return music_playlist_->PlayNext(play_when_ready);
 }
 
 bool AudioPlayer::ReplayMusic(bool play_when_ready) {
-    std::size_t index = 0;
-    {
-        std::lock_guard<std::mutex> lock(music_list_mutex_);
-        if (music_list_.empty()) {
-            return false;
-        }
-        index = current_music_index_;
-        active_music_index_ = static_cast<std::size_t>(-1);
-        current_music_retry_used_ = false;
-    }
-    return RequestMusicAtIndex(index, play_when_ready);
+    return music_playlist_->Replay(play_when_ready);
 }
 
 void AudioPlayer::ClearMusicList() {
-    std::lock_guard<std::mutex> lock(music_list_mutex_);
-    music_list_.clear();
-    current_music_index_ = 0;
-    active_music_index_ = static_cast<std::size_t>(-1);
-    ++music_list_generation_;
-    current_music_session_id_ = 0;
-    current_music_retry_used_ = false;
-    music_url_resolver_ = nullptr;
+    music_playlist_->Clear();
 }
 
 bool AudioPlayer::HasMusicList() const {
-    std::lock_guard<std::mutex> lock(music_list_mutex_);
-    return !music_list_.empty();
-}
-
-bool AudioPlayer::RequestMusicAtIndex(std::size_t index, bool play_when_ready) {
-    MusicUrlResolver resolver;
-    std::string item_id;
-    std::string cached_url;
-    uint32_t generation = 0;
-    {
-        std::lock_guard<std::mutex> lock(music_list_mutex_);
-        if (index >= music_list_.size()) {
-            return false;
-        }
-        auto& item = music_list_[index];
-        if (!item.url.empty()) {
-            cached_url = item.url;
-        } else {
-            if (!music_url_resolver_ || item.item_id.empty()) {
-                return false;
-            }
-            item.play_when_resolved = item.play_when_resolved || play_when_ready;
-            if (item.resolving) {
-                return true;
-            }
-            item.resolving = true;
-            resolver = music_url_resolver_;
-            item_id = item.item_id;
-            generation = music_list_generation_;
-        }
-    }
-
-    if (!cached_url.empty()) {
-        return !play_when_ready || StartResolvedMusic(index, cached_url);
-    }
-
-    const bool submitted = resolver(
-        item_id, [this, generation, index](bool success, std::string url) mutable {
-            HandleMusicUrlResolved(generation, index, success, std::move(url));
-        });
-    if (!submitted) {
-        std::lock_guard<std::mutex> lock(music_list_mutex_);
-        if (generation == music_list_generation_ && index < music_list_.size()) {
-            music_list_[index].resolving = false;
-            music_list_[index].play_when_resolved = false;
-        }
-    }
-    return submitted;
-}
-
-void AudioPlayer::HandleMusicUrlResolved(uint32_t generation, std::size_t index,
-                                         bool success, std::string url) {
-    const bool valid_url = success && TtsPlayer::IsHttpUrl(url);
-    bool should_play = false;
-    {
-        std::lock_guard<std::mutex> lock(music_list_mutex_);
-        if (generation != music_list_generation_ || index >= music_list_.size()) {
-            return;
-        }
-        auto& item = music_list_[index];
-        item.resolving = false;
-        if (valid_url) {
-            item.url = url;
-        }
-        should_play = valid_url && item.play_when_resolved &&
-                      current_music_index_ == index;
-        item.play_when_resolved = false;
-    }
-    if (should_play) {
-        if (!StartResolvedMusic(index, url)) {
-            ESP_LOGW(TAG, "解析后的音乐 URL 提交播放失败");
-        }
-    } else if (!valid_url) {
-        ESP_LOGW(TAG, "音乐条目 URL 解析失败: index=%u", static_cast<unsigned>(index));
-    }
-}
-
-bool AudioPlayer::StartResolvedMusic(std::size_t index, const std::string& url) {
-    const uint32_t session_id = PlayMusicUrlInternal(url);
-    if (session_id == 0) {
-        return false;
-    }
-    {
-        std::lock_guard<std::mutex> lock(music_list_mutex_);
-        if (index >= music_list_.size() || current_music_index_ != index) {
-            return false;
-        }
-        current_music_session_id_ = session_id;
-        active_music_index_ = index;
-    }
-    PrefetchNextMusic(index);
-    return true;
-}
-
-void AudioPlayer::PrefetchNextMusic(std::size_t current_index) {
-    std::size_t next_index = 0;
-    {
-        std::lock_guard<std::mutex> lock(music_list_mutex_);
-        if (music_list_.size() < 2 || current_index >= music_list_.size()) {
-            return;
-        }
-        next_index = (current_index + 1) % music_list_.size();
-    }
-    RequestMusicAtIndex(next_index, false);
+    return music_playlist_->HasList();
 }
 
 uint32_t AudioPlayer::PlayMusicUrlInternal(const std::string& url) {
-    if (engine_ == nullptr || audio_service_ == nullptr || wakeup_in_progress_ ||
+    if (backend_ == nullptr || audio_service_ == nullptr || wakeup_in_progress_ ||
         !TtsPlayer::IsHttpUrl(url)) {
         return 0;
     }
-    if (music_engine_ == nullptr) {
-        auto engine = std::make_unique<GmfPlayerEngine>();
-        if (!engine->Initialize(audio_service_, [this](const PlaybackEvent& event) {
-                PublishEngineEvent(event);
+    if (music_backend_ == nullptr) {
+        auto backend = std::make_unique<EspSimplePlayerBackend>();
+        if (!backend->Initialize(audio_service_, [this](const PlaybackEvent& event) {
+                PublishBackendEvent(event);
             })) {
             return 0;
         }
-        music_engine_ = std::move(engine);
-        music_channel_ = std::make_unique<MusicPlayer>(*music_engine_, [this]() {
+        music_backend_ = std::move(backend);
+        music_channel_ = std::make_unique<MusicPlayer>(*music_backend_, [this]() {
             return next_session_id_.fetch_add(1);
         });
     }
@@ -390,7 +198,7 @@ uint32_t AudioPlayer::PlayMusicUrlInternal(const std::string& url) {
 }
 
 uint32_t AudioPlayer::PlayTone(uint16_t tone_id) {
-    if (engine_ == nullptr || tone_channel_ == nullptr || wakeup_in_progress_) {
+    if (backend_ == nullptr || tone_channel_ == nullptr || wakeup_in_progress_) {
         ESP_LOGW(TAG, "播放器不可用或唤醒提示音正在播放");
         return 0;
     }
@@ -401,7 +209,7 @@ uint32_t AudioPlayer::PlayTone(uint16_t tone_id) {
 }
 
 uint32_t AudioPlayer::PlayAlarmTone(uint16_t tone_id) {
-    if (engine_ == nullptr || alarm_channel_ == nullptr || wakeup_in_progress_) {
+    if (backend_ == nullptr || alarm_channel_ == nullptr || wakeup_in_progress_) {
         ESP_LOGW(TAG, "播放器不可用或唤醒提示音正在播放");
         return 0;
     }
@@ -412,7 +220,7 @@ uint32_t AudioPlayer::PlayAlarmTone(uint16_t tone_id) {
 }
 
 uint32_t AudioPlayer::PlayAlarmTtsUrl(const std::string& url) {
-    if (engine_ == nullptr || alarm_channel_ == nullptr || wakeup_in_progress_) {
+    if (backend_ == nullptr || alarm_channel_ == nullptr || wakeup_in_progress_) {
         ESP_LOGW(TAG, "播放器不可用或唤醒提示音正在播放");
         return 0;
     }
@@ -462,8 +270,8 @@ bool AudioPlayer::IsWakeupPending() const {
 }
 
 bool AudioPlayer::Pause() {
-    if (engine_ != nullptr && engine_->IsPlaying()) {
-        return engine_->Pause();
+    if (backend_ != nullptr && backend_->IsPlaying()) {
+        return backend_->Pause();
     }
     return music_channel_ != nullptr && music_channel_->IsAudible() && PauseMusic();
 }
@@ -472,24 +280,27 @@ bool AudioPlayer::Resume() {
     if (wakeup_in_progress_) {
         return false;
     }
-    if (engine_ != nullptr && engine_->IsPlaying()) {
-        return engine_->Resume();
+    if (backend_ != nullptr && backend_->IsPlaying()) {
+        return backend_->Resume();
     }
     return music_channel_ != nullptr && music_channel_->Resume();
 }
 
 bool AudioPlayer::Stop(PlaybackEndReason reason) {
     const bool main_stopped = StopNonMusic(reason);
-    const bool music_stopped = music_engine_ == nullptr || music_engine_->Stop(reason);
+    const bool music_stopped = music_backend_ == nullptr || music_backend_->Stop(reason);
+    if (audio_service_ != nullptr) {
+        audio_service_->ClearPlaybackQueue();
+    }
     return main_stopped && music_stopped;
 }
 
 bool AudioPlayer::StopNonMusic(PlaybackEndReason reason) {
-    return engine_ == nullptr || engine_->Stop(reason);
+    return backend_ == nullptr || backend_->Stop(reason);
 }
 
 bool AudioPlayer::IsPlaying() const {
-    return (engine_ != nullptr && engine_->IsPlaying()) ||
+    return (backend_ != nullptr && backend_->IsPlaying()) ||
            (music_channel_ != nullptr && music_channel_->IsAudible());
 }
 
@@ -501,25 +312,14 @@ bool AudioPlayer::ResumeMusic() {
     if (wakeup_in_progress_) {
         return false;
     }
-    std::size_t index = 0;
-    uint32_t session_id = 0;
-    bool resume_paused_session = false;
-    {
-        std::lock_guard<std::mutex> lock(music_list_mutex_);
-        if (music_list_.empty()) {
-            return false;
-        }
-        index = current_music_index_;
-        session_id = current_music_session_id_;
-        resume_paused_session = active_music_index_ == current_music_index_ &&
-                                current_music_session_id_ != 0;
-    }
+    const uint32_t session_id = music_playlist_->CurrentSessionId();
+    const bool resume_paused_session = music_playlist_->HasCurrentSession();
     // Intent 抢占没有修改列表索引时，恢复仍存活的 GMF/HTTP 会话，继续从
     // 暂停点播放；上一首、下一首或重播修改过索引标记时才重新提交 URL。
     if (resume_paused_session && music_channel_ != nullptr) {
         if (music_channel_->IsPaused()) {
-            // TTS 已经结束并关闭了共享 PCM 流，恢复音乐前重新初始化输出状态。
-            audio_service_->BeginPlayerPlayback(PlaybackOutputEvent{
+            // TTS 已经结束，先恢复暂停点前已经解码的 PCM，再恢复 GMF。
+            audio_service_->ResumePlayerPlayback(PlaybackOutputEvent{
                 .session_id = session_id,
                 .channel = PlaybackChannel::kMusic,
             });
@@ -532,7 +332,7 @@ bool AudioPlayer::ResumeMusic() {
             return true;
         }
     }
-    return RequestMusicAtIndex(index, true);
+    return music_playlist_->PlayCurrent(true);
 }
 
 void AudioPlayer::DispatchPlaybackEvent(const PlaybackEvent& event) {
@@ -547,52 +347,8 @@ void AudioPlayer::DispatchPlaybackEvent(const PlaybackEvent& event) {
     }
     if (music_channel_ != nullptr && event.channel == music_channel_->Type()) {
         music_channel_->OnEvent(event);
-        if (event.state == PlaybackState::kFailed) {
-            std::size_t retry_index = 0;
-            bool should_retry = false;
-            {
-                std::lock_guard<std::mutex> lock(music_list_mutex_);
-                if (event.session_id == current_music_session_id_ &&
-                    current_music_index_ < music_list_.size() &&
-                    !music_list_[current_music_index_].item_id.empty() &&
-                    !current_music_retry_used_) {
-                    retry_index = current_music_index_;
-                    auto& item = music_list_[retry_index];
-                    item.url.clear();
-                    item.resolving = false;
-                    item.play_when_resolved = false;
-                    current_music_retry_used_ = true;
-                    should_retry = true;
-                }
-            }
-            if (should_retry) {
-                ESP_LOGW(TAG, "音乐流播放失败，重新解析当前条目 URL");
-                RequestMusicAtIndex(retry_index, true);
-            }
-        }
-        if (event.state == PlaybackState::kCompleted &&
-            event.reason == PlaybackEndReason::kNaturalEnd) {
-            PlayNextMusicAfterNaturalEnd(event.session_id);
-        }
+        music_playlist_->HandlePlaybackEvent(event);
     }
-}
-
-bool AudioPlayer::PlayNextMusicAfterNaturalEnd(uint32_t session_id) {
-    std::size_t next_index = 0;
-    {
-        std::lock_guard<std::mutex> lock(music_list_mutex_);
-        // 单 URL 不循环；播放列表至少有两项时才自动切换。
-        if (session_id != current_music_session_id_ || music_list_.size() < 2) {
-            return false;
-        }
-        current_music_index_ = (current_music_index_ + 1) % music_list_.size();
-        active_music_index_ = static_cast<std::size_t>(-1);
-        next_index = current_music_index_;
-        current_music_retry_used_ = false;
-    }
-    ESP_LOGI(TAG, "音乐自然结束，自动播放下一首: index=%u",
-             static_cast<unsigned>(next_index));
-    return RequestMusicAtIndex(next_index, true);
 }
 
 bool AudioPlayer::PauseMusic() {
@@ -604,7 +360,8 @@ bool AudioPlayer::PauseMusic() {
         ESP_LOGE(TAG, "停止音乐失败，无法避免覆盖提示音");
         return false;
     }
-    audio_service_->ClearPlaybackQueue();
+    // 暂停点前已经解码的 PCM 需要保留，TTS 结束后与 GMF 一起续播。
+    audio_service_->SuspendPlayerPlayback();
     return true;
 }
 
@@ -638,15 +395,15 @@ PlaybackOutputEvent AudioPlayer::TakeLatestOutputProgress() {
     return latest;
 }
 
-void AudioPlayer::PublishEngineEvent(const PlaybackEvent& event) {
-    if (!AppEvent::Publish(AppEvent::Id::PlayerEngine, event)) {
+void AudioPlayer::PublishBackendEvent(const PlaybackEvent& event) {
+    if (!AppEvent::Publish(AppEvent::Id::PlaybackBackend, event)) {
         ESP_LOGE(TAG, "发布播放器内部事件失败: session=%lu, state=%u",
                  static_cast<unsigned long>(event.session_id),
                  static_cast<unsigned>(event.state));
     }
 }
 
-void AudioPlayer::HandleEngineEvent(const PlaybackEvent& event) {
+void AudioPlayer::HandleBackendEvent(const PlaybackEvent& event) {
     // 从这里开始已进入 app_event 任务。先维护播放器内部状态，再对外发布
     // 语义明确的生命周期事件，订阅者不需要了解 GMF 回调线程。
     if (tone_channel_ != nullptr && tone_channel_->IsWakeupTerminalEvent(event)) {

@@ -10,7 +10,7 @@ enum class Id : uint16_t {
     None = 0,
 
     // 播放器内部事件；后续阶段由播放器独占订阅。
-    PlayerEngine,
+    PlaybackBackend,
 
     // 对外发布的播放器生命周期事件。
     PlaybackStreamReady,

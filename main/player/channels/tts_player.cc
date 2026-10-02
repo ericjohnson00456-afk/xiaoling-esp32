@@ -1,6 +1,6 @@
 #include "tts_player.h"
 
-#include "engine/player_engine.h"
+#include "backend/playback_backend.h"
 #include "xiaoling/xiaoling_events.h"
 
 #include <esp_log.h>
@@ -11,7 +11,7 @@
 
 #define TAG "TtsPlayer"
 
-TtsPlayer::TtsPlayer(PlayerEngine& engine, SessionAllocator allocate_session)
+TtsPlayer::TtsPlayer(PlaybackBackend& engine, SessionAllocator allocate_session)
     : engine_(&engine), allocate_session_(std::move(allocate_session)) {
     subscription_id_ = XiaolingEventBus::GetInstance().Subscribe(
         XIAOLING_TTS_URL, [this](const XiaolingEvent& event) {
@@ -39,7 +39,7 @@ bool TtsPlayer::IsHttpUrl(const std::string& url) {
     });
 }
 
-uint32_t TtsPlayer::Submit(const PlaybackRequest& request, PlayerEngine& engine) {
+uint32_t TtsPlayer::Submit(const PlaybackRequest& request, PlaybackBackend& engine) {
     return engine.Play(request) ? request.session_id : 0;
 }
 
@@ -128,7 +128,7 @@ void TtsPlayer::SetAdmissionCallback(AdmissionCallback callback) {
     admission_callback_ = std::move(callback);
 }
 
-void TtsPlayer::Cancel(PlayerEngine& engine) {
+void TtsPlayer::Cancel(PlaybackBackend& engine) {
     ClearDeferredUrl();
     engine.Stop(PlaybackEndReason::kCancelled);
 }

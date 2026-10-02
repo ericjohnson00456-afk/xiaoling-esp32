@@ -10,7 +10,8 @@ set(SOURCES "audio/audio_codec.cc"
             "player/channels/tone_player.cc"
             "player/channels/tts_player.cc"
             "player/channels/music_player.cc"
-            "player/engine/gmf_player_engine.cc"
+            "player/playlist/music_playlist.cc"
+            "player/backend/esp_simple_player_backend.cc"
             "audio/codecs/no_audio_codec.cc"
             "audio/codecs/box_audio_codec.cc"
             "audio/codecs/es8311_audio_codec.cc"
@@ -91,7 +92,7 @@ list(APPEND SOURCES ${SHELL_CMD_SOURCES})
 
 set(INCLUDE_DIRS "."
                  "ui/themes" "ui/utils/font" "ui/utils/image" "ui/utils/emoji" "audio"
-                 "player" "player/core" "player/engine" "player/channels" "xiaoling" "xiaoling/session" "xiaoling/conn" "mcp"
+                 "player" "player/types" "player/backend" "player/channels" "xiaoling" "xiaoling/session" "xiaoling/conn" "mcp"
                  "player/intents" "ui" "ui/compat" "ui/widgets" "ui/screens" "ui/screens/home" "ui/screens/alarm" "ui/screens/qrcode" "ui/screens/upgrade"
                  "alarm"
                   "system" "resource" "shell" "ota" "event")

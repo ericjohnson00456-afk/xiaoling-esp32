@@ -31,7 +31,7 @@
 
 ## 阶段二：播放器生命周期事件
 
-- [x] GMF 回调只发布内部 `PlayerEngineEvent`。
+- [x] GMF 回调只发布内部 `PlaybackBackendEvent`。
 - [x] `AudioPlayer` 在 `app_event` 任务中更新通道状态。
 - [x] 音乐自然结束时由 `AudioPlayer` 自动下一首。
 - [x] 保留音乐 URL 失败重试逻辑。

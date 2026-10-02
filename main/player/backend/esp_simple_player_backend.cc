@@ -1,4 +1,4 @@
-#include "gmf_player_engine.h"
+#include "esp_simple_player_backend.h"
 
 #include "audio_service.h"
 #include "resource/resource.h"
@@ -24,35 +24,33 @@
 #include <utility>
 #include <vector>
 
-#define TAG "GmfPlayerEngine"
+#define TAG "EspSimplePlayerBackend"
 
 namespace {
 
-// esp_http_client_read() keeps reading until the requested length is filled.
-// An 8 KiB request therefore turns a live MP3 stream into multi-second bursts.
-// Keep each network read small, while retaining enough asynchronous buffering
-// to absorb short cloud-generation stalls.
-// A live TTS response may only have part of the next MP3 frame available.
-// The service generates speech in segments and can expose less than one MP3
-// frame at a time. Keep reads small so those bytes reach the decoder instead
-// of waiting for a larger batch in esp_http_client_read().
-// One MP3 frame is 216 bytes for the current 48 kbps/16 kHz stream. Reading
-// 1 KiB at a time drains a server burst fast enough to keep the small lwIP
-// receive window moving, while the 50 ms body timeout below still releases a
-// partial read promptly when fewer bytes are available.
+// esp_http_client_read() 会一直读取，直到填满调用方要求的长度。
+// 如果一次请求 8 KiB，实时 MP3 流就会被积攒成持续数秒的音频突发。
+// 将单次网络读取控制在较小范围，同时保留足够的异步缓冲，吸收云端
+// 短暂的生成停顿。
+// 实时 TTS 响应可能只包含下一个 MP3 帧的一部分。云端按片段生成语音，
+// 每次返回的数据可能不足一个完整 MP3 帧，因此要尽快把已有字节交给解码器，
+// 不要让 esp_http_client_read() 等待更大的数据块。
+// 当前 48 kbps/16 kHz 流的一个 MP3 帧约为 216 字节。每次读取 1 KiB，
+// 可以及时消耗服务器突发数据并保持较小的 lwIP 接收窗口流动；下面的
+// 50 ms 正文超时也能在数据不足时及时返回部分内容。
 constexpr size_t kStreamingHttpReadSize = 1024;
 constexpr size_t kStreamingHttpBufferSize = 32 * 1024;
-// esp_http_client_read() otherwise waits for the whole requested length. A
-// short body-only timeout makes it return a partial body as soon as a sparse
-// live TTS chunk has arrived. Header/connect operations retain the GMF default.
+// esp_http_client_read() 默认会等待完整的请求长度。较短的正文读取超时可以让
+// 稀疏的实时 TTS 数据一到达就返回部分正文，同时保留 GMF 对请求头和连接阶段
+// 的默认超时设置。
 constexpr int kStreamingHttpBodyReadTimeoutMs = 50;
 constexpr size_t kPlayerCommandStackSize = 4096;
 // AudioPlayer 的控制、网络拉流和解码任务统一使用优先级 8。
 constexpr UBaseType_t kPlayerCommandPriority = 8;
 constexpr UBaseType_t kNetworkStreamPriority = 8;
 constexpr UBaseType_t kPlayerDecodePriority = 8;
-// Apply the same deadline to initial synthesis and a mid-stream synthesis
-// stall. The initial deadline starts when the HTTP stream is submitted.
+// 首个 PCM 和播放中途的云端生成停顿使用相同的超时时间。
+// 首个 PCM 的计时从提交 HTTP 音频流时开始。
 constexpr uint64_t kTtsFirstPcmTimeoutUs = 5ULL * 1000ULL * 1000ULL;
 constexpr uint64_t kTtsPcmStallTimeoutUs = 5ULL * 1000ULL * 1000ULL;
 #if CONFIG_FREERTOS_NUMBER_OF_CORES > 1
@@ -78,8 +76,10 @@ bool IsTtsPcmTimeout(PlaybackEndReason reason) {
 
 }  // namespace
 
-int GmfPlayerEngine::ConfigureInputIo(esp_asp_handle_t handle, void* ctx) {
-    auto* engine = static_cast<GmfPlayerEngine*>(ctx);
+// 配置 esp_audio_simple_player 创建出的输入 IO。
+// HTTP 输入需要调整拉流任务和缓冲区；ROMFS 输入则绑定提示音资源表。
+int EspSimplePlayerBackend::ConfigureInputIo(esp_asp_handle_t handle, void* ctx) {
+    auto* engine = static_cast<EspSimplePlayerBackend*>(ctx);
     if (engine == nullptr) {
         return ESP_GMF_ERR_INVALID_ARG;
     }
@@ -97,12 +97,11 @@ int GmfPlayerEngine::ConfigureInputIo(esp_asp_handle_t handle, void* ctx) {
     const bool is_http = input_tag != nullptr && strcasecmp(input_tag, "io_http") == 0;
 
     if (is_http) {
-        // Configure the cloned pipeline IO before esp_gmf_pipeline_run() opens
-        // it and creates its task/data bus. This overrides the generic HTTP
-        // defaults only for playback, without patching managed_components.
+        // 在 esp_gmf_pipeline_run() 打开 IO 并创建任务、数据总线之前配置克隆出的
+        // Pipeline IO。这里只覆盖播放实例的 HTTP 参数，不修改 managed_components。
         auto* io = static_cast<esp_gmf_io_t*>(input);
-        // Pull network data before decoder/output tasks consume their buffers.
-        // Keep TTS network work away from the core-0 AFE path.
+        // 网络拉流任务需要先于解码和输出任务准备数据，同时避免 TTS 网络工作
+        // 占用运行 AFE 的 0 号核心。
         io->io_cfg.thread.prio = kNetworkStreamPriority;
         io->io_cfg.thread.core = kPlayerCommandCore;
         io->io_cfg.thread.stack_in_ext = true;
@@ -129,9 +128,8 @@ int GmfPlayerEngine::ConfigureInputIo(esp_asp_handle_t handle, void* ctx) {
                  static_cast<unsigned>(kStreamingHttpBufferSize),
                  static_cast<unsigned>(kNetworkStreamPriority),
                  kPlayerCommandCore);
-        // Keep the component's acquire_read implementation intact. The hook
-        // above only observes request lifecycle and its engine context has the
-        // same lifetime as the player handle.
+        // 保留组件原有的 acquire_read 实现。上面的回调只观察请求生命周期，
+        // 这里保存的后端上下文与播放器句柄具有相同的生命周期。
         return ESP_GMF_ERR_OK;
     }
 
@@ -158,7 +156,8 @@ int GmfPlayerEngine::ConfigureInputIo(esp_asp_handle_t handle, void* ctx) {
         input, items.data(), static_cast<int>(items.size()));
 }
 
-GmfPlayerEngine::~GmfPlayerEngine() {
+EspSimplePlayerBackend::~EspSimplePlayerBackend() {
+    // 先停止控制任务和超时定时器，再销毁播放器句柄，确保回调不会访问已释放对象。
     StopCommandTask();
     DisarmTtsPcmTimeout();
     if (tts_pcm_timer_ != nullptr) {
@@ -175,7 +174,7 @@ GmfPlayerEngine::~GmfPlayerEngine() {
     handle_ = nullptr;
 }
 
-bool GmfPlayerEngine::Initialize(AudioService* audio_service, EventCallback callback) {
+bool EspSimplePlayerBackend::Initialize(AudioService* audio_service, EventCallback callback) {
     if (initialized_) {
         return true;
     }
@@ -183,9 +182,9 @@ bool GmfPlayerEngine::Initialize(AudioService* audio_service, EventCallback call
         return false;
     }
 
-    /* Do not print every HTTP read/decoder probe at 115200 baud. Serial log
-       traffic can starve the streaming path during TTS startup. State and
-       error logs remain enabled by the component defaults. */
+    /* 不要在 115200 波特率下打印每一次 HTTP 读取和解码探测日志。
+       启动 TTS 时过多串口日志会阻塞流式播放路径；状态和错误日志仍使用
+       组件默认级别输出。 */
     esp_log_level_set("ESP_GMF_HTTP", ESP_LOG_WARN);
     esp_log_level_set("ESP_GMF_ASMP_DEC", ESP_LOG_WARN);
     esp_log_level_set("ESP_GMF_TASK", ESP_LOG_WARN);
@@ -193,16 +192,16 @@ bool GmfPlayerEngine::Initialize(AudioService* audio_service, EventCallback call
     esp_log_level_set("ESP_GMF_BLOCK", ESP_LOG_WARN);
     esp_log_level_set("ESP_GMF_EMBED_FLASH", ESP_LOG_WARN);
 
+    // Simple Player 内部包含解码任务；输出回调把解码后的 PCM 交给 AudioService。
     esp_asp_cfg_t config = {};
     config.out.cb = OutputCallback;
     config.out.user_ctx = this;
-    // Decode follows the network input task on the secondary core.
+    // 解码任务与网络输入任务一样运行在次级核心。
     config.task_prio = kPlayerDecodePriority;
     config.task_stack = 8 * 1024;
     config.task_core = 1;
-    // The decoder task has an 8 KiB stack. Keeping it in PSRAM preserves
-    // scarce internal SRAM for Wi-Fi/lwIP and DMA during three concurrent
-    // TLS streams.
+    // 解码任务使用 8 KiB 栈，并放在 PSRAM 中，以便在多个 TLS 流并发时
+    // 为 Wi-Fi/lwIP 和 DMA 保留紧张的片上 SRAM。
     config.task_stack_in_ext = true;
     config.prev = ConfigureInputIo;
     config.prev_ctx = this;
@@ -246,7 +245,7 @@ bool GmfPlayerEngine::Initialize(AudioService* audio_service, EventCallback call
     }
     const esp_timer_create_args_t timer_args = {
         .callback = [](void* arg) {
-            static_cast<GmfPlayerEngine*>(arg)->HandleTtsPcmTimeout();
+            static_cast<EspSimplePlayerBackend*>(arg)->HandleTtsPcmTimeout();
         },
         .arg = this,
         .dispatch_method = ESP_TIMER_TASK,
@@ -268,12 +267,13 @@ bool GmfPlayerEngine::Initialize(AudioService* audio_service, EventCallback call
     return true;
 }
 
-bool GmfPlayerEngine::Play(const PlaybackRequest& request) {
+bool EspSimplePlayerBackend::Play(const PlaybackRequest& request) {
     if (!initialized_ || handle_ == nullptr ||
         (request.source_type != PlaybackSourceType::kUrl && request.source_type != PlaybackSourceType::kRomfs)) {
         return false;
     }
 
+    // 所有播放器操作都进入同一个控制任务，避免多个线程同时调用 GMF。
     command_pending_playback_ = true;
     return Enqueue(Command{
         .type = CommandType::kPlay,
@@ -281,7 +281,8 @@ bool GmfPlayerEngine::Play(const PlaybackRequest& request) {
     });
 }
 
-bool GmfPlayerEngine::DoPlay(const PlaybackRequest& request) {
+bool EspSimplePlayerBackend::DoPlay(const PlaybackRequest& request) {
+    // 以下逻辑只在播放器控制任务中执行：清理旧会话、启动新流并记录会话状态。
     if (IsPlaying() && !DoStop(PlaybackEndReason::kPreempted)) {
         ESP_LOGE(TAG, "无法停止当前播放会话");
         command_pending_playback_ = false;
@@ -347,7 +348,7 @@ bool GmfPlayerEngine::DoPlay(const PlaybackRequest& request) {
         last_tts_pcm_us_ = 0;
         tts_timeout_stop_pending_ = false;
     }
-    audio_service_->ClearPlaybackQueue();
+    audio_service_->ClearActivePlaybackQueue();
     command_pending_playback_ = false;
     Emit(PlaybackEvent{
         .session_id = request.session_id,
@@ -358,11 +359,27 @@ bool GmfPlayerEngine::DoPlay(const PlaybackRequest& request) {
     return false;
 }
 
-bool GmfPlayerEngine::Pause() {
-    return Enqueue(Command{.type = CommandType::kPause});
+bool EspSimplePlayerBackend::Pause() {
+    if (!command_task_running_ || command_task_handle_ == nullptr) {
+        return false;
+    }
+
+    // Pause 需要等待 GMF 真正进入 PAUSED，调用方才能安全地覆盖提示音或 TTS。
+    std::unique_lock<std::mutex> lock(command_mutex_);
+    const uint32_t request_id = ++next_pause_request_id_;
+    command_queue_.push_back(Command{
+        .type = CommandType::kPause,
+        .completion_id = request_id,
+    });
+    xTaskNotifyGive(command_task_handle_);
+    command_cv_.wait(lock, [this, request_id]() {
+        return completed_pause_request_id_ >= request_id ||
+               !command_task_running_;
+    });
+    return completed_pause_request_id_ >= request_id && last_pause_result_;
 }
 
-bool GmfPlayerEngine::DoPause() {
+bool EspSimplePlayerBackend::DoPause() {
     bool is_tts = false;
     uint32_t session_id = 0;
     {
@@ -374,8 +391,8 @@ bool GmfPlayerEngine::DoPause() {
         session_id = current_request_.session_id;
     }
 
-    // GMF 的 pause 会同步等待 PAUSED 状态回调。回调也需要 mutex_，因此
-    // 不能在持锁期间调用，否则会互相等待直到 GMF 超时。
+    // GMF 的 pause 会同步等待 PAUSED 状态回调，而回调也需要 mutex_。
+    // 因此不能在持锁期间调用 pause，否则两边会互相等待直到 GMF 超时。
     const bool paused =
         esp_audio_simple_player_pause(handle_) == ESP_GMF_ERR_OK;
     if (paused && is_tts) {
@@ -388,11 +405,13 @@ bool GmfPlayerEngine::DoPause() {
     return paused;
 }
 
-bool GmfPlayerEngine::Resume() {
+bool EspSimplePlayerBackend::Resume() {
+    // Resume 不需要同步等待，实际调用由控制任务串行执行。
     return Enqueue(Command{.type = CommandType::kResume});
 }
 
-bool GmfPlayerEngine::DoResume() {
+bool EspSimplePlayerBackend::DoResume() {
+    // 恢复解码器后，TTS 重新开始计算首帧或连续 PCM 的超时。
     bool is_tts = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -423,7 +442,8 @@ bool GmfPlayerEngine::DoResume() {
     return resumed;
 }
 
-bool GmfPlayerEngine::Stop(PlaybackEndReason reason) {
+bool EspSimplePlayerBackend::Stop(PlaybackEndReason reason) {
+    // Stop 同样异步投递，状态终态由 GMF 回调统一确认。
     command_pending_playback_ = false;
     return Enqueue(Command{
         .type = CommandType::kStop,
@@ -431,7 +451,8 @@ bool GmfPlayerEngine::Stop(PlaybackEndReason reason) {
     });
 }
 
-bool GmfPlayerEngine::DoStop(PlaybackEndReason reason) {
+bool EspSimplePlayerBackend::DoStop(PlaybackEndReason reason) {
+    // 只有控制任务能调用底层 stop，避免停止和播放命令交叉进入 GMF。
     DisarmTtsPcmTimeout();
     bool drain_only = false;
     {
@@ -448,7 +469,7 @@ bool GmfPlayerEngine::DoStop(PlaybackEndReason reason) {
         }
     }
     if (drain_only) {
-        audio_service_->ClearPlaybackQueue();
+        audio_service_->ClearActivePlaybackQueue();
         return true;
     }
 
@@ -460,19 +481,19 @@ bool GmfPlayerEngine::DoStop(PlaybackEndReason reason) {
     return true;
 }
 
-bool GmfPlayerEngine::IsPlaying() const {
+bool EspSimplePlayerBackend::IsPlaying() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return playing_ || draining_ || command_pending_playback_.load();
 }
 
-bool GmfPlayerEngine::Enqueue(Command command) {
+bool EspSimplePlayerBackend::Enqueue(Command command) {
     if (!command_task_running_ || command_task_handle_ == nullptr) {
         return false;
     }
     {
         std::lock_guard<std::mutex> lock(command_mutex_);
-        // Multiple interruption sources can request the same stop. A single
-        // pending stop is sufficient and avoids repeatedly entering GMF.
+        // 多个打断来源可能同时请求停止。同一时刻只保留一个待处理的停止命令，
+        // 避免反复进入 GMF。
         if (command.type == CommandType::kStop && !command_queue_.empty() &&
             command_queue_.back().type == CommandType::kStop) {
             command_queue_.back().reason = command.reason;
@@ -484,11 +505,12 @@ bool GmfPlayerEngine::Enqueue(Command command) {
     return true;
 }
 
-void GmfPlayerEngine::CommandTaskEntry(void* arg) {
-    auto* engine = static_cast<GmfPlayerEngine*>(arg);
+void EspSimplePlayerBackend::CommandTaskEntry(void* arg) {
+    auto* engine = static_cast<EspSimplePlayerBackend*>(arg);
     engine->CommandLoop();
     const bool external_stack = engine->command_task_stack_external_;
     engine->command_task_finished_ = true;
+    engine->command_cv_.notify_all();
     if (external_stack) {
         vTaskDeleteWithCaps(nullptr);
     } else {
@@ -496,7 +518,8 @@ void GmfPlayerEngine::CommandTaskEntry(void* arg) {
     }
 }
 
-void GmfPlayerEngine::CommandLoop() {
+void EspSimplePlayerBackend::CommandLoop() {
+    // 控制任务负责串行处理播放、暂停、恢复和停止命令。
     while (command_task_running_) {
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         while (command_task_running_) {
@@ -513,9 +536,18 @@ void GmfPlayerEngine::CommandLoop() {
                 case CommandType::kPlay:
                     DoPlay(command.request);
                     break;
-                case CommandType::kPause:
-                    DoPause();
+                case CommandType::kPause: {
+                    const bool result = DoPause();
+                    if (command.completion_id != 0) {
+                        {
+                            std::lock_guard<std::mutex> lock(command_mutex_);
+                            completed_pause_request_id_ = command.completion_id;
+                            last_pause_result_ = result;
+                        }
+                        command_cv_.notify_all();
+                    }
                     break;
+                }
                 case CommandType::kResume:
                     DoResume();
                     break;
@@ -531,7 +563,8 @@ void GmfPlayerEngine::CommandLoop() {
     }
 }
 
-void GmfPlayerEngine::StopCommandTask() {
+void EspSimplePlayerBackend::StopCommandTask() {
+    // 析构时发送关闭命令，并等待控制任务完成，避免后台任务继续使用成员变量。
     if (!command_task_running_ || command_task_handle_ == nullptr) {
         return;
     }
@@ -551,7 +584,7 @@ void GmfPlayerEngine::StopCommandTask() {
     }
 }
 
-void GmfPlayerEngine::ArmTtsPcmTimeout(uint64_t timeout_us) {
+void EspSimplePlayerBackend::ArmTtsPcmTimeout(uint64_t timeout_us) {
     std::lock_guard<std::mutex> lock(tts_timer_mutex_);
     if (tts_pcm_timer_ == nullptr) {
         return;
@@ -563,14 +596,15 @@ void GmfPlayerEngine::ArmTtsPcmTimeout(uint64_t timeout_us) {
     }
 }
 
-void GmfPlayerEngine::DisarmTtsPcmTimeout() {
+void EspSimplePlayerBackend::DisarmTtsPcmTimeout() {
     std::lock_guard<std::mutex> lock(tts_timer_mutex_);
     if (tts_pcm_timer_ != nullptr) {
         esp_timer_stop(tts_pcm_timer_);
     }
 }
 
-void GmfPlayerEngine::HandleTtsPcmTimeout() {
+void EspSimplePlayerBackend::HandleTtsPcmTimeout() {
+    // TTS 长时间没有产生首帧或新的 PCM 时，主动断开 HTTP 并停止当前会话。
     PlaybackEndReason timeout_reason = PlaybackEndReason::kNone;
     uint32_t session_id = 0;
     uint64_t remaining_us = 0;
@@ -587,10 +621,9 @@ void GmfPlayerEngine::HandleTtsPcmTimeout() {
                                    ? last_tts_pcm_us_
                                    : tts_timeout_started_us_;
         if (received_pcm) {
-            /* Once playback has started, an upstream synthesis pause is not
-             * an audible stall while the PCM reserve is still draining. Use
-             * the speaker's last completed output block as the deadline so
-             * the five-second timeout measures actual silence. */
+            /* 播放开始后，只要 PCM 缓冲仍在排空，上游合成暂时停顿就不会造成
+             * 实际无声。因此使用扬声器最近一次完成输出的时间作为截止点，
+             * 让五秒超时真正测量扬声器的无声时长。 */
             const uint32_t last_output_ms =
                 audio_service_->GetPlayerOutputLastActivityMs();
             if (last_output_ms != 0) {
@@ -600,10 +633,9 @@ void GmfPlayerEngine::HandleTtsPcmTimeout() {
         if (reference_us <= 0) {
             return;
         }
-        /* Sample time after taking mutex_. A PCM callback can refresh the
-         * reference while this timer callback is waiting for the lock; using
-         * a timestamp captured before the lock would make the subtraction
-         * negative and its unsigned conversion look like a huge timeout. */
+        /* 必须在获取 mutex_ 后读取当前时间。定时器等待锁期间，PCM 回调可能
+         * 已经刷新参考时间；如果使用加锁前的时间戳，减法可能变成负数，
+         * 转成无符号数后会被误认为是一个很大的超时时间。 */
         const int64_t now_us = esp_timer_get_time();
         const uint64_t timeout_us = received_pcm
                                         ? kTtsPcmStallTimeoutUs
@@ -670,31 +702,33 @@ void GmfPlayerEngine::HandleTtsPcmTimeout() {
     }
 }
 
-int GmfPlayerEngine::OutputCallback(uint8_t* data, int data_size, void* ctx) {
-    return static_cast<GmfPlayerEngine*>(ctx)->HandleOutput(data, data_size);
+int EspSimplePlayerBackend::OutputCallback(uint8_t* data, int data_size, void* ctx) {
+    return static_cast<EspSimplePlayerBackend*>(ctx)->HandleOutput(data, data_size);
 }
 
-int GmfPlayerEngine::HttpIoEventCallback(http_stream_event_msg_t* event) {
+int EspSimplePlayerBackend::HttpIoEventCallback(http_stream_event_msg_t* event) {
     if (event == nullptr || event->user_data == nullptr) {
         return ESP_GMF_ERR_OK;
     }
-    return static_cast<GmfPlayerEngine*>(event->user_data)->HandleHttpIoEvent(event);
+    return static_cast<EspSimplePlayerBackend*>(event->user_data)->HandleHttpIoEvent(event);
 }
 
-int GmfPlayerEngine::HandleHttpIoEvent(http_stream_event_msg_t* event) {
+int EspSimplePlayerBackend::HandleHttpIoEvent(http_stream_event_msg_t* event) {
     if (event == nullptr) {
         return ESP_GMF_ERR_OK;
     }
 
+    // PRE_REQUEST 保存 HTTP 句柄，超时处理可以主动中断阻塞中的 socket 读取。
     if (event->event_id == HTTP_STREAM_PRE_REQUEST) {
         std::lock_guard<std::mutex> lock(mutex_);
         if (playing_ && current_request_.channel == PlaybackChannel::kTts) {
-            // Keep the handle so the five-second timeout can unblock a read
-            // that is waiting inside esp_http_client.
+            // 保存 HTTP 句柄，让五秒超时时可以中断正在 esp_http_client 内部
+            // 等待数据的读取操作。
             tts_http_client_ = event->http_client;
         }
         return ESP_GMF_ERR_OK;
     }
+    // ON_RESPONSE 接管 TTS 正文读取，让稀疏的实时音频数据尽快进入解码器。
     if (event->event_id == HTTP_STREAM_ON_RESPONSE) {
         uint32_t session_id = 0;
         uint32_t read_sequence = 0;
@@ -708,9 +742,9 @@ int GmfPlayerEngine::HandleHttpIoEvent(http_stream_event_msg_t* event) {
             read_sequence = ++tts_http_read_sequence_;
         }
 
-        // A positive return tells GMF that the callback filled its buffer.
-        // Retry short body timeouts until data arrives, EOF is reached, the
-        // request is cancelled, or the common five-second deadline expires.
+        // 返回正数表示回调已经填充了输出缓冲区。
+        // 对正文短超时继续重试，直到收到数据、到达 EOF、请求被取消，
+        // 或者达到统一的五秒截止时间。
         const auto client = static_cast<esp_http_client_handle_t>(event->http_client);
         const int64_t started_us = esp_timer_get_time();
 
@@ -776,6 +810,7 @@ int GmfPlayerEngine::HandleHttpIoEvent(http_stream_event_msg_t* event) {
         return ESP_GMF_ERR_OK;
     }
 
+    // POST_REQUEST 表示 HTTP 请求已经真正发出，对外发布 StreamReady。
     PlaybackEvent playback_event;
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -796,14 +831,15 @@ int GmfPlayerEngine::HandleHttpIoEvent(http_stream_event_msg_t* event) {
     return ESP_GMF_ERR_OK;
 }
 
-int GmfPlayerEngine::EventCallbackAdapter(esp_asp_event_pkt_t* event, void* ctx) {
-    return static_cast<GmfPlayerEngine*>(ctx)->HandleEvent(event);
+int EspSimplePlayerBackend::EventCallbackAdapter(esp_asp_event_pkt_t* event, void* ctx) {
+    return static_cast<EspSimplePlayerBackend*>(ctx)->HandleEvent(event);
 }
 
-int GmfPlayerEngine::HandleOutput(uint8_t* data, int data_size) {
+int EspSimplePlayerBackend::HandleOutput(uint8_t* data, int data_size) {
     if (data_size <= 0 || audio_service_ == nullptr) {
         return ESP_FAIL;
     }
+    // 解码器每次输出 PCM 都经过这里，再进入 AudioService 的播放队列。
     PlaybackOutputEvent output;
     uint32_t chunk_index = 0;
     {
@@ -826,7 +862,7 @@ int GmfPlayerEngine::HandleOutput(uint8_t* data, int data_size) {
                  data_size);
     }
     /* 播放器固定输出 CONFIG_AUDIO_SIMPLE_PLAYER_RESAMPLE_DEST_RATE，
-       由 AudioService 在入播放队列前重采样到 codec 实际输出采样率 */
+       AudioService 会在放入播放队列前将其重采样到 codec 的实际输出采样率。 */
     return audio_service_->PushPcmToPlaybackQueue(
                data, static_cast<size_t>(data_size),
                CONFIG_AUDIO_SIMPLE_PLAYER_RESAMPLE_DEST_RATE, output, true)
@@ -834,11 +870,12 @@ int GmfPlayerEngine::HandleOutput(uint8_t* data, int data_size) {
                : ESP_FAIL;
 }
 
-int GmfPlayerEngine::HandleEvent(esp_asp_event_pkt_t* event) {
+int EspSimplePlayerBackend::HandleEvent(esp_asp_event_pkt_t* event) {
     if (event == nullptr || event->payload == nullptr) {
         return ESP_ERR_INVALID_ARG;
     }
 
+    // 先处理采样率、声道数等媒体信息，再处理播放器状态事件。
     if (event->type == ESP_ASP_EVENT_TYPE_MUSIC_INFO &&
         event->payload_size == sizeof(esp_asp_music_info_t)) {
         esp_asp_music_info_t info = {};
@@ -858,6 +895,7 @@ int GmfPlayerEngine::HandleEvent(esp_asp_event_pkt_t* event) {
     esp_asp_state_t state = ESP_ASP_STATE_NONE;
     std::memcpy(&state, event->payload, sizeof(state));
 
+    // 将 ESP Simple Player 的状态转换为项目统一的 PlaybackEvent。
     PlaybackEvent playback_event;
     bool should_emit = true;
     bool terminal = false;
@@ -935,12 +973,12 @@ int GmfPlayerEngine::HandleEvent(esp_asp_event_pkt_t* event) {
             .session_id = playback_event.session_id,
             .channel = playback_event.channel,
         });
-        // GMF 完成表示解码已结束；还要等待 AudioOutputTask 写完最后一批 PCM。
+        // GMF 完成只表示解码结束，还要等待 AudioOutputTask 写完最后一批 PCM。
         audio_service_->WaitForPlaybackComplete();
         std::lock_guard<std::mutex> lock(mutex_);
         draining_ = false;
     } else if (state == ESP_ASP_STATE_STOPPED || state == ESP_ASP_STATE_ERROR) {
-        audio_service_->ClearPlaybackQueue();
+        audio_service_->ClearActivePlaybackQueue();
     }
 
     ESP_LOGI(TAG, "播放状态: session=%lu, state=%s",
@@ -950,7 +988,8 @@ int GmfPlayerEngine::HandleEvent(esp_asp_event_pkt_t* event) {
     return ESP_OK;
 }
 
-void GmfPlayerEngine::Emit(const PlaybackEvent& event) {
+void EspSimplePlayerBackend::Emit(const PlaybackEvent& event) {
+    // 回调只负责把事件交给 AudioPlayer；具体业务处理在 app_event 任务中完成。
     if (event_callback_) {
         event_callback_(event);
     }

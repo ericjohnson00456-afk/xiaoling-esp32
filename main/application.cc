@@ -95,6 +95,17 @@ Application::~Application() {
 }
 
 void Application::HandlePlaybackEvent(const PlaybackEvent& event) {
+    if (event.channel == PlaybackChannel::kMusic) {
+        if ((event.state == PlaybackState::kCompleted ||
+             event.state == PlaybackState::kStopped ||
+             event.state == PlaybackState::kFailed) &&
+            !audio_player_.HasMusicList() &&
+            intent_manager_.Contains(PlaybackIntentId::kMusic)) {
+            ESP_LOGI(TAG, "音乐播放列表已结束，退出音乐事件");
+            intent_manager_.Music().Exit();
+        }
+        return;
+    }
     if (event.channel != PlaybackChannel::kTts) {
         return;
     }

@@ -1,6 +1,6 @@
 #include "tone_player.h"
 
-#include "engine/player_engine.h"
+#include "backend/playback_backend.h"
 #include "resource/resource.h"
 
 #include <esp_log.h>
@@ -8,10 +8,10 @@
 
 #include <utility>
 
-TonePlayer::TonePlayer(PlayerEngine& engine, SessionAllocator allocate_session)
+TonePlayer::TonePlayer(PlaybackBackend& engine, SessionAllocator allocate_session)
     : engine_(&engine), allocate_session_(std::move(allocate_session)) {}
 
-uint32_t TonePlayer::Submit(const PlaybackRequest& request, PlayerEngine& engine) {
+uint32_t TonePlayer::Submit(const PlaybackRequest& request, PlaybackBackend& engine) {
     return engine.Play(request) ? request.session_id : 0;
 }
 
@@ -111,7 +111,7 @@ void TonePlayer::CancelWakeup() {
     }
 }
 
-void TonePlayer::Cancel(PlayerEngine& engine) {
+void TonePlayer::Cancel(PlaybackBackend& engine) {
     CancelWakeup();
     engine.Stop(PlaybackEndReason::kCancelled);
 }

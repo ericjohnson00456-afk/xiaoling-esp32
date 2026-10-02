@@ -12,12 +12,12 @@ public:
     using UrlCallback = std::function<void()>;
     using AdmissionCallback = std::function<bool()>;
 
-    TtsPlayer(PlayerEngine& engine, SessionAllocator allocate_session);
+    TtsPlayer(PlaybackBackend& engine, SessionAllocator allocate_session);
     ~TtsPlayer() override;
 
     PlaybackChannel Type() const override { return PlaybackChannel::kTts; }
-    uint32_t Submit(const PlaybackRequest& request, PlayerEngine& engine) override;
-    void Cancel(PlayerEngine& engine) override;
+    uint32_t Submit(const PlaybackRequest& request, PlaybackBackend& engine) override;
+    void Cancel(PlaybackBackend& engine) override;
 
     uint32_t PlayUrl(const std::string& url);
     bool ResumeDeferredUrl();
@@ -31,7 +31,7 @@ private:
     uint32_t PlayUrlInternal(const std::string& url, bool notify);
     uint32_t SubmitUrl(const std::string& url, bool notify);
 
-    PlayerEngine* engine_;
+    PlaybackBackend* engine_;
     SessionAllocator allocate_session_;
     uint32_t subscription_id_ = 0;
     UrlCallback url_callback_;

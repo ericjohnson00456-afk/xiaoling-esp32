@@ -19,7 +19,7 @@
 #include "audio_codec.h"
 #include "audio_processor.h"
 #include "opus_encoder/opus_wb_encoder.h"
-#include "player/core/playback_event.h"
+#include "player/types/playback_event.h"
 #include "wake_word.h"
 #include "wake_words/micro_wake_word/config.h"
 #include "xiaoling/xiaoling_types.h"
@@ -172,7 +172,12 @@ public:
                                 const PlaybackOutputEvent& output,
                                 bool wait = true);
     void BeginPlayerPlayback(const PlaybackOutputEvent& output);
+    // 暂存音乐暂停瞬间已经解码、但尚未送到 DAC 的 PCM，避免恢复时跳过。
+    void SuspendPlayerPlayback();
+    void ResumePlayerPlayback(const PlaybackOutputEvent& output);
     void MarkPlayerPlaybackFinished(const PlaybackOutputEvent& output);
+    // 清理当前活动播放队列，但保留被音乐暂停保存的 PCM。
+    void ClearActivePlaybackQueue();
     void ClearPlaybackQueue();
     void WaitForPlaybackComplete();
     uint32_t GetPlayerOutputLastActivityMs() const {
@@ -249,6 +254,9 @@ private:
     // AFE 输出的 PCM 待编码；下行解码或播放器 PCM 待送 DAC。
     std::deque<std::unique_ptr<AudioTask>> audio_encode_queue_;
     std::deque<std::unique_ptr<AudioTask>> audio_playback_queue_;
+    // 音乐被 TTS/提示音抢占时保存的待输出 PCM；恢复后重新放回活动队列。
+    std::deque<std::unique_ptr<AudioTask>> suspended_player_playback_queue_;
+    size_t suspended_player_pcm_bytes_ = 0;
 
     // ===== 6. 播放状态 =====
     // 播放器流的预缓冲、尾帧和等待状态，由 audio_queue_mutex_ 保护。
@@ -297,6 +305,7 @@ private:
     void AudioInputTask();
     void AudioOutputTask();
     void OpusCodecTask();
+    void ResetPlayerPlaybackState(bool clear_suspended_queue);
 #if CONFIG_USE_MICRO_WAKE_WORD
     void ProcessedWakeTask();
     void SetWakeInputFromProcessor(bool enable);

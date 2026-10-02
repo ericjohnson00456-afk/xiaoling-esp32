@@ -329,6 +329,8 @@ void AudioService::Stop() {
     opus_packet_queue_.clear();
     audio_decode_queue_.clear();
     audio_playback_queue_.clear();
+    suspended_player_playback_queue_.clear();
+    suspended_player_pcm_bytes_ = 0;
     audio_testing_queue_.clear();
     audio_queue_cv_.notify_all();
 #if CONFIG_USE_MICRO_WAKE_WORD
@@ -974,14 +976,74 @@ bool AudioService::PushPcmToPlaybackQueue(const uint8_t* data, size_t size,
     return true;
 }
 
-// 新播放器会话重置下行解码/缓冲状态；stream_active 防止等待首帧时关闭 DAC。
+// 新播放器会话重置下行解码/缓冲状态；暂停保存的音乐 PCM 不能被新 TTS 会话清掉。
 void AudioService::BeginPlayerPlayback(const PlaybackOutputEvent& output) {
-    ResetDecoder();
+    ResetPlayerPlaybackState(false);
     {
         std::lock_guard<std::mutex> lock(audio_queue_mutex_);
         player_tts_stream_ = output.channel == PlaybackChannel::kTts;
     }
     player_stream_active_.store(true);
+}
+
+void AudioService::SuspendPlayerPlayback() {
+    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    suspended_player_playback_queue_.clear();
+    suspended_player_pcm_bytes_ = 0;
+    while (!audio_playback_queue_.empty()) {
+        auto task = std::move(audio_playback_queue_.front());
+        audio_playback_queue_.pop_front();
+        if (task != nullptr && task->type == kAudioTaskTypePlayerToPlaybackQueue) {
+            suspended_player_pcm_bytes_ += task->PlaybackSamples() * sizeof(int16_t);
+            suspended_player_playback_queue_.push_back(std::move(task));
+        }
+    }
+    player_pcm_bytes_ = 0;
+    player_playback_finished_ = false;
+    player_stream_active_.store(false);
+    audio_queue_cv_.notify_all();
+    ESP_LOGI(TAG, "保存暂停音乐 PCM: tasks=%u, bytes=%u",
+             static_cast<unsigned>(suspended_player_playback_queue_.size()),
+             static_cast<unsigned>(suspended_player_pcm_bytes_));
+}
+
+void AudioService::ResumePlayerPlayback(const PlaybackOutputEvent& output) {
+    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    if (suspended_player_playback_queue_.empty()) {
+        player_playback_finished_ = false;
+        player_tts_stream_ = false;
+        player_stream_active_.store(true);
+        return;
+    }
+
+    // TTS 已经排空活动队列。把暂停时尚未输出的音乐 PCM 放回队首，
+    // 随后再恢复 GMF，这样恢复的第一个声音就是暂停点附近的音乐。
+    audio_playback_queue_.clear();
+    while (!suspended_player_playback_queue_.empty()) {
+        audio_playback_queue_.push_back(
+            std::move(suspended_player_playback_queue_.front()));
+        suspended_player_playback_queue_.pop_front();
+    }
+    suspended_player_pcm_bytes_ = 0;
+    player_pcm_bytes_ = 0;
+    for (const auto& task : audio_playback_queue_) {
+        if (task != nullptr) {
+            player_pcm_bytes_ += task->PlaybackSamples() * sizeof(int16_t);
+        }
+    }
+    player_playback_finished_ = false;
+    player_tts_stream_ = false;
+    player_prebuffering_ = false;
+    player_prebuffer_wait_logged_ = false;
+    player_output_chunks_.store(0);
+    player_output_last_activity_ms_.store(esp_log_timestamp());
+    player_audio_clock_ms_.store(0);
+    player_stream_active_.store(true);
+    audio_queue_cv_.notify_all();
+    ESP_LOGI(TAG, "恢复暂停音乐 PCM: session=%lu, tasks=%u, bytes=%u",
+             static_cast<unsigned long>(output.session_id),
+             static_cast<unsigned>(audio_playback_queue_.size()),
+             static_cast<unsigned>(player_pcm_bytes_));
 }
 
 // 标记 PCM 已全部入队，使短尾帧越过预缓冲门槛，并补齐最后一个 DMA 缓冲。
@@ -1015,11 +1077,23 @@ void AudioService::MarkPlayerPlaybackFinished(
     audio_queue_cv_.notify_all();
 }
 
-// 立即撤销待播放 PCM；正在执行的 codec 写入由输出任务自行结束。
+// 立即撤销活动队列；暂停保存的音乐 PCM 保留给后续恢复。
+void AudioService::ClearActivePlaybackQueue() {
+    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    player_stream_active_.store(false);
+    audio_playback_queue_.clear();
+    player_pcm_bytes_ = 0;
+    audio_queue_cv_.notify_all();
+}
+
+// 立即撤销所有待播放 PCM，包括暂停保存的音乐。
 void AudioService::ClearPlaybackQueue() {
     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
     player_stream_active_.store(false);
     audio_playback_queue_.clear();
+    suspended_player_playback_queue_.clear();
+    suspended_player_pcm_bytes_ = 0;
+    player_pcm_bytes_ = 0;
     audio_queue_cv_.notify_all();
 }
 
@@ -1360,11 +1434,17 @@ void AudioService::PlaySound(const std::string_view& ogg) {
 // ============================================================================
 bool AudioService::IsIdle() {
     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
-    return audio_encode_queue_.empty() && audio_decode_queue_.empty() && audio_playback_queue_.empty() && audio_testing_queue_.empty();
+    return audio_encode_queue_.empty() && audio_decode_queue_.empty() &&
+           audio_playback_queue_.empty() && suspended_player_playback_queue_.empty() &&
+           audio_testing_queue_.empty();
 }
 
 // 清理一次下行播放会话的解码器、重采样器、播放队列和首帧统计。
 void AudioService::ResetDecoder() {
+    ResetPlayerPlaybackState(true);
+}
+
+void AudioService::ResetPlayerPlaybackState(bool clear_suspended_queue) {
     std::scoped_lock lock(player_resampler_mutex_, audio_queue_mutex_);
     opus_decoder_->ResetState();
     /* 新播放会话以干净的重采样状态开始，避免上一段音频的残留相位 */
@@ -1375,6 +1455,10 @@ void AudioService::ResetDecoder() {
     player_pcm_bytes_ = 0;
     audio_decode_queue_.clear();
     audio_playback_queue_.clear();
+    if (clear_suspended_queue) {
+        suspended_player_playback_queue_.clear();
+        suspended_player_pcm_bytes_ = 0;
+    }
     player_playback_finished_ = false;
     player_tts_stream_ = false;
     player_prebuffering_ = true;

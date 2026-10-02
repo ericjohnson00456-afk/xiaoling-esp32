@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <deque>
+#include <condition_variable>
 #include <mutex>
 
 #include <esp_audio_simple_player.h>
@@ -11,12 +12,12 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
-#include "player_engine.h"
+#include "playback_backend.h"
 
-class GmfPlayerEngine final : public PlayerEngine {
+class EspSimplePlayerBackend final : public PlaybackBackend {
 public:
-    GmfPlayerEngine() = default;
-    ~GmfPlayerEngine() override;
+    EspSimplePlayerBackend() = default;
+    ~EspSimplePlayerBackend() override;
 
     bool Initialize(AudioService* audio_service, EventCallback callback) override;
     bool Play(const PlaybackRequest& request) override;
@@ -38,6 +39,7 @@ private:
         CommandType type = CommandType::kStop;
         PlaybackRequest request;
         PlaybackEndReason reason = PlaybackEndReason::kNone;
+        uint32_t completion_id = 0;
     };
 
     static int ConfigureInputIo(esp_asp_handle_t handle, void* ctx);
@@ -80,7 +82,11 @@ private:
     bool playing_ = false;
     bool draining_ = false;
     std::mutex command_mutex_;
+    std::condition_variable command_cv_;
     std::deque<Command> command_queue_;
+    uint32_t next_pause_request_id_ = 0;
+    uint32_t completed_pause_request_id_ = 0;
+    bool last_pause_result_ = false;
     std::atomic_bool command_task_running_{false};
     std::atomic_bool command_task_finished_{false};
     std::atomic_bool command_pending_playback_{false};

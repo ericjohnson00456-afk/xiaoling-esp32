@@ -59,16 +59,15 @@ main/
 │   └── wake_words/            # 唤醒词
 └── player/                    # 新的下行播放系统
     ├── audio_player.*
-    ├── core/
+    ├── types/
     │   ├── playback_manager.*
     │   ├── playback_session.*
     │   ├── playback_request.h
     │   ├── playback_event.h
     │   └── playback_policy.h
-    ├── engine/
-    │   ├── player_engine.h
-    │   ├── adf_player_engine.*
-    │   └── adf_pipeline_factory.*
+    ├── backend/
+    │   ├── playback_backend.h
+    │   └── esp_simple_player_backend.*
     ├── sources/
     │   ├── audio_source.h
     │   ├── url_source.*
@@ -79,8 +78,7 @@ main/
     │   ├── codec_output.*
     │   └── pa_controller.*
     └── playlist/
-        ├── playlist.*
-        └── playlist_item.h
+        ├── music_playlist.*
 
 main/workflow/
 ├── workflow_engine.*
@@ -226,7 +224,7 @@ APP_EVENT_UPLOAD_STOPPED
 
 事件只传状态和少量元数据，不传 PCM、MP3 或 Opus 数据。大数据仍使用 GMF RingBuffer 或专用队列。
 
-GMF 状态回调只在引擎适配层内部使用，由 `GmfPlayerEngine` 转换成项目自己的 `PlaybackEvent`。
+GMF 状态回调只在引擎适配层内部使用，由 `EspSimplePlayerBackend` 转换成项目自己的 `PlaybackEvent`。
 
 ## 9. 工作流示例
 
@@ -332,7 +330,7 @@ URL 播放：HTTP/HTTPS 流式播放
 小聆 WebSocket 下发 data.sub=tts
         -> Base64 解码 data.content 得到 TTS URL
         -> AudioPlayer::PlayTtsUrl()
-        -> GmfPlayerEngine HTTP/HTTPS 流读取和 MP3 解码
+        -> EspSimplePlayerBackend HTTP/HTTPS 流读取和 MP3 解码
         -> 转换为 16 kHz / 单声道 / 16-bit PCM
         -> AudioService 播放队列
         -> AudioOutputTask

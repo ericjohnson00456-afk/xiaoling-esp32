@@ -1,14 +1,14 @@
 #include "music_player.h"
 
-#include "engine/player_engine.h"
+#include "backend/playback_backend.h"
 #include "tts_player.h"
 
 #include <utility>
 
-MusicPlayer::MusicPlayer(PlayerEngine& engine, SessionAllocator allocate_session)
+MusicPlayer::MusicPlayer(PlaybackBackend& engine, SessionAllocator allocate_session)
     : engine_(&engine), allocate_session_(std::move(allocate_session)) {}
 
-uint32_t MusicPlayer::Submit(const PlaybackRequest& request, PlayerEngine& engine) {
+uint32_t MusicPlayer::Submit(const PlaybackRequest& request, PlaybackBackend& engine) {
     return engine.Play(request) ? request.session_id : 0;
 }
 
@@ -65,7 +65,7 @@ bool MusicPlayer::IsAudible() const {
     return engine_->IsPlaying() && !paused_;
 }
 
-void MusicPlayer::Cancel(PlayerEngine& engine) {
+void MusicPlayer::Cancel(PlaybackBackend& engine) {
     engine.Stop(PlaybackEndReason::kCancelled);
     paused_ = false;
     session_id_ = 0;

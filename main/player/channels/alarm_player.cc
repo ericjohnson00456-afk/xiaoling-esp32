@@ -1,6 +1,6 @@
 #include "alarm_player.h"
 
-#include "engine/player_engine.h"
+#include "backend/playback_backend.h"
 #include "resource/resource.h"
 
 #include <esp_log.h>
@@ -38,10 +38,10 @@ bool IsHttpUrl(const std::string& url) {
 
 }  // namespace
 
-AlarmPlayer::AlarmPlayer(PlayerEngine& engine, SessionAllocator allocate_session)
+AlarmPlayer::AlarmPlayer(PlaybackBackend& engine, SessionAllocator allocate_session)
     : engine_(&engine), allocate_session_(std::move(allocate_session)) {}
 
-uint32_t AlarmPlayer::Submit(const PlaybackRequest& request, PlayerEngine& engine) {
+uint32_t AlarmPlayer::Submit(const PlaybackRequest& request, PlaybackBackend& engine) {
     if (!engine.Play(request)) {
         session_id_ = 0;
         return 0;
@@ -80,7 +80,7 @@ uint32_t AlarmPlayer::PlayUrl(const std::string& url) {
     return Submit(request, *engine_);
 }
 
-void AlarmPlayer::Cancel(PlayerEngine& engine) {
+void AlarmPlayer::Cancel(PlaybackBackend& engine) {
     engine.Stop(PlaybackEndReason::kCancelled);
 }
 
