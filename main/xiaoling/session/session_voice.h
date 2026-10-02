@@ -39,7 +39,6 @@ public:
                       BinarySender binary_sender,
                       SessionStateCallback session_state_callback,
                       ErrorCallback error_callback);
-    void SetNarrowbandMode(bool enabled);
     // HTTP 字幕流与 WebSocket 使用同一份鉴权信息。
     void SetAccessToken(std::string token);
     void OnIncomingAudio(IncomingAudioCallback callback);
@@ -100,7 +99,6 @@ private:
 
     std::atomic_bool session_active_{false};
     std::atomic_bool audio_upload_enabled_{false};
-    bool narrowband_mode_ = false;
     std::string session_id_;
     std::string pending_wake_word_;
     std::atomic_bool uplink_audio_format_checked_{false};

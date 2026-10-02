@@ -77,8 +77,6 @@ public:
     void CancelAlarmTtsRequest();
     bool FetchAlarmList(std::string& response_body);
     bool ResolveCustomAlarmDate(const std::string& alarm_id, std::string& date);
-    void SetNarrowbandMode(bool enabled);
-
     int server_sample_rate() const;
     int server_frame_duration() const;
     const std::string& session_id() const;

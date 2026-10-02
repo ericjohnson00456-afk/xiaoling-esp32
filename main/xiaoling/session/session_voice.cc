@@ -514,10 +514,6 @@ void XiaolingSessionVoice::SetTransport(TextSender text_sender,
     error_callback_ = std::move(error_callback);
 }
 
-void XiaolingSessionVoice::SetNarrowbandMode(bool enabled) {
-    narrowband_mode_ = enabled;
-}
-
 void XiaolingSessionVoice::SetAccessToken(std::string token) {
     if (subtitle_fetcher_ != nullptr) {
         subtitle_fetcher_->SetAccessToken(std::move(token));

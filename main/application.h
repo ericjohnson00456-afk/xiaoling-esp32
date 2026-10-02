@@ -227,8 +227,6 @@ private:
 #ifdef CONFIG_LSPLATFORM
     Watchdog uplink_watchdog_{5000, "uplink"};
     Watchdog downlink_watchdog_{15000, "downlink"};
-    std::vector<int32_t> last_watchdog_bites_{};
-    bool narrowband_mode_ = false;
 #endif  // 小聆平台
 
     bool aborted_ = false;
@@ -277,9 +275,6 @@ private:
     // 播放提示音后执行恢复出厂和重启。
     void FactoryResetTask();
 
-#ifdef CONFIG_LSPLATFORM
-    void CountWatchdogBites();
-#endif  // 小聆平台
 };
 
 

@@ -770,12 +770,6 @@ void AudioService::OpusCodecTask() {
                     packet->payload[i * 2] = static_cast<uint8_t>(sample & 0xff);
                     packet->payload[i * 2 + 1] = static_cast<uint8_t>(sample >> 8);
                 }
-            } else if (opus_encoder_->sample_rate() != 16000) {
-                int target_size = uplink_resampler_.GetOutputSamples(task->pcm.size());
-                std::vector<int16_t> resampled(target_size);
-                uplink_resampler_.Process(task->pcm.data(), task->pcm.size(), resampled.data());
-                task->pcm = std::move(resampled);
-                packet->sample_rate = opus_encoder_->sample_rate();
             }
             if (!raw_uplink && !opus_encoder_->Encode(std::move(task->pcm), packet->payload)) {
 #else
@@ -815,31 +809,6 @@ void AudioService::OpusCodecTask() {
 
     ESP_LOGW(TAG, "Opus codec task stopped");
 }
-
-#ifdef CONFIG_LSPLATFORM
-// 平台会话可选窄带上行；只改编码参数，不改 ADC/AFE 的 16 kHz 输入。
-void AudioService::SetNarrowbandMode(bool enabled) {
-    if (enabled) {
-        SetEncodeSampleRate(8000, OPUS_FRAME_DURATION_MS);
-    } else {
-        SetEncodeSampleRate(16000, OPUS_FRAME_DURATION_MS);
-    }
-}
-
-void AudioService::SetEncodeSampleRate(int sample_rate, int frame_duration) {
-    if (opus_encoder_->sample_rate() == sample_rate && opus_encoder_->duration_ms() == frame_duration) {
-        return;
-    }
-
-    opus_encoder_.reset();
-    opus_encoder_ = std::make_unique<OpusWbEncoder>(sample_rate, 1, frame_duration);
-
-    if (opus_encoder_->sample_rate() != 16000) {
-        ESP_LOGI(TAG, "Resampling uplink audio to %d", opus_encoder_->sample_rate());
-        uplink_resampler_.Configure(16000, opus_encoder_->sample_rate());
-    }
-}
-#endif // CONFIG_LSPLATFORM
 
 // 下行包参数变化时重建解码器，并准备到 DAC 采样率的重采样。
 void AudioService::SetDecodeSampleRate(int sample_rate, int frame_duration) {

@@ -221,12 +221,6 @@ void XiaolingConn::HandleIatBargeIn() {
     }
 }
 
-void XiaolingConn::SetNarrowbandMode(bool enabled) {
-    if (voice_ != nullptr) {
-        voice_->SetNarrowbandMode(enabled);
-    }
-}
-
 int XiaolingConn::server_sample_rate() const {
     return voice_ != nullptr ? voice_->server_sample_rate() : 16000;
 }

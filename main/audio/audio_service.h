@@ -159,9 +159,6 @@ public:
     void EnableAudioUpload(bool enable);
     std::unique_ptr<AudioStreamPacket> PopOpusPacket();
     void EnableAudioTesting(bool enable);
-#ifdef CONFIG_LSPLATFORM
-    void SetNarrowbandMode(bool enabled);
-#endif // CONFIG_LSPLATFORM
 
     // ===== 5. 下行解码与播放 =====
     // 服务端 Opus 走解码队列，本地播放器 PCM 直接走播放队列。
@@ -222,10 +219,6 @@ private:
     // ADC 麦克风与参考声道分别重采样到 16 kHz，保留声道顺序供 AEC 使用。
     OpusResampler input_resampler_;
     OpusResampler reference_resampler_;
-#ifdef CONFIG_LSPLATFORM
-    // 小聆窄带上报时，编码前再由 16 kHz 转为 8 kHz。
-    OpusResampler uplink_resampler_;
-#endif // CONFIG_LSPLATFORM
     // 下行 Opus 解码后转换为 codec 的 DAC 采样率。
     OpusResampler output_resampler_;
     /* TTS URL 播放器等外部 PCM 源的采样率与 codec 输出采样率可能不一致，由它按需重采样 */
@@ -310,9 +303,6 @@ private:
     void ClearProcessedWakeQueue();
 #endif
     void PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t>&& pcm);
-#ifdef CONFIG_LSPLATFORM
-    void SetEncodeSampleRate(int sample_rate, int frame_duration);
-#endif // CONFIG_LSPLATFORM
     void SetDecodeSampleRate(int sample_rate, int frame_duration);
     void CheckAndUpdateAudioPowerState();
 };

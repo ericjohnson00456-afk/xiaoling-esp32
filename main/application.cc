@@ -34,11 +34,6 @@
 
 #define TAG "Application"
 
-#ifdef CONFIG_LSPLATFORM
-static const int kBadNetworkSampleWindowSec = 60;
-static const int kBadNetworkSampleCount = 3;
-#endif
-
 static constexpr EventBits_t kAllMainEvents =
     MAIN_EVENT_SCHEDULE |
     MAIN_EVENT_CLOCK_TICK |
@@ -604,18 +599,6 @@ void Application::InitializeXiaolingConn() {
     // 小聆只使用 HTTP 鉴权和 WebSocket 会话。
     xiaoling_conn_ = std::make_unique<XiaolingConn>();
 
-#ifdef CONFIG_LSPLATFORM
-    {
-        Settings settings("wifi", true);
-        if (settings.GetBool("narrowband_mode", false)) {
-            xiaoling_conn_->SetNarrowbandMode(true);
-            audio_service_.SetNarrowbandMode(true);
-            narrowband_mode_ = true;
-            ESP_LOGI(TAG, "Narrowband mode enabled");
-        }
-    }
-#endif  // 小聆平台
-
     xiaoling_conn_->OnConnected([this, codec, &board]() {
         if (GetDeviceState() == kDeviceStateIdle) {
             Ui::SetStatus(Ui::Status::Standby);
@@ -1174,35 +1157,6 @@ void Application::SetListeningMode(ListeningMode mode) {
     listening_mode_ = mode;
     SetDeviceState(kDeviceStateListening);
 }
-
-#ifdef CONFIG_LSPLATFORM
-void Application::CountWatchdogBites() {
-    int32_t now = (int32_t)(esp_timer_get_time() / 1000000);
-    last_watchdog_bites_.push_back(now);
-
-    if (last_watchdog_bites_.size() > kBadNetworkSampleCount) {
-        last_watchdog_bites_.erase(last_watchdog_bites_.begin(), last_watchdog_bites_.end() - kBadNetworkSampleCount);
-    }
-
-    int bites_in_window = 0;
-    for (const auto& t : last_watchdog_bites_) {
-        if (now - t <= kBadNetworkSampleWindowSec) {
-            bites_in_window++;
-        }
-    }
-
-    ESP_LOGI(TAG, "Watchdog bites in last minute: %d", bites_in_window);
-
-    if (bites_in_window >= kBadNetworkSampleCount && !narrowband_mode_) {
-        ESP_LOGW(TAG, "Too many watchdog bites, switch to narrowband mode");
-        xiaoling_conn_->SetNarrowbandMode(true);
-        audio_service_.SetNarrowbandMode(true);
-        Settings settings("wifi", true);
-        settings.SetBool("narrowband_mode", true);
-        narrowband_mode_ = true;
-    }
-}
-#endif  // 小聆平台
 
 void Application::HandleStateChangedEvent() {
     DeviceState new_state = DeviceStatus::GetState();
