@@ -1,5 +1,4 @@
 #include "custom_wake_word.h"
-#include "audio_service.h"
 #include "system/system_info.h"
 #include "resource/resource.h"
 
@@ -13,22 +12,12 @@
 #define TAG "CustomWakeWord"
 
 
-CustomWakeWord::CustomWakeWord()
-    : wake_word_pcm_(), wake_word_opus_() {
-}
+CustomWakeWord::CustomWakeWord() = default;
 
 CustomWakeWord::~CustomWakeWord() {
     if (multinet_model_data_ != nullptr && multinet_ != nullptr) {
         multinet_->destroy(multinet_model_data_);
         multinet_model_data_ = nullptr;
-    }
-
-    if (wake_word_encode_task_stack_ != nullptr) {
-        heap_caps_free(wake_word_encode_task_stack_);
-    }
-
-    if (wake_word_encode_task_buffer_ != nullptr) {
-        heap_caps_free(wake_word_encode_task_buffer_);
     }
 
     if (models_ != nullptr) {
@@ -154,10 +143,8 @@ void CustomWakeWord::Feed(const std::vector<int16_t>& data) {
             mono_data[i] = data[j];
         }
 
-        StoreWakeWordData(mono_data);
         mn_state = multinet_->detect(multinet_model_data_, const_cast<int16_t*>(mono_data.data()));
     } else {
-        StoreWakeWordData(data);
         mn_state = multinet_->detect(multinet_model_data_, const_cast<int16_t*>(data.data()));
     }
 
@@ -190,65 +177,4 @@ size_t CustomWakeWord::GetFeedSize() {
         return 0;
     }
     return multinet_->get_samp_chunksize(multinet_model_data_);
-}
-
-void CustomWakeWord::StoreWakeWordData(const std::vector<int16_t>& data) {
-    // store audio data to wake_word_pcm_
-    wake_word_pcm_.push_back(data);
-    // keep about 2 seconds of data, detect duration is 30ms (sample_rate == 16000, chunksize == 512)
-    while (wake_word_pcm_.size() > 2000 / 30) {
-        wake_word_pcm_.pop_front();
-    }
-}
-
-void CustomWakeWord::EncodeWakeWordData() {
-    const size_t stack_size = 4096 * 7;
-    wake_word_opus_.clear();
-    if (wake_word_encode_task_stack_ == nullptr) {
-        wake_word_encode_task_stack_ = (StackType_t*)heap_caps_malloc(stack_size, MALLOC_CAP_SPIRAM);
-        assert(wake_word_encode_task_stack_ != nullptr);
-    }
-    if (wake_word_encode_task_buffer_ == nullptr) {
-        wake_word_encode_task_buffer_ = (StaticTask_t*)heap_caps_malloc(sizeof(StaticTask_t), MALLOC_CAP_INTERNAL);
-        assert(wake_word_encode_task_buffer_ != nullptr);
-    }
-
-    wake_word_encode_task_ = xTaskCreateStatic([](void* arg) {
-        auto this_ = (CustomWakeWord*)arg;
-        {
-            auto start_time = esp_timer_get_time();
-            auto encoder = std::make_unique<OpusWbEncoder>(16000, 1, OPUS_FRAME_DURATION_MS);
-            encoder->SetComplexity(0); // 0 is the fastest
-
-            int packets = 0;
-            for (auto& pcm: this_->wake_word_pcm_) {
-                encoder->Encode(std::move(pcm), [this_](std::vector<uint8_t>&& opus) {
-                    std::lock_guard<std::mutex> lock(this_->wake_word_mutex_);
-                    this_->wake_word_opus_.emplace_back(std::move(opus));
-                    this_->wake_word_cv_.notify_all();
-                });
-                packets++;
-            }
-            this_->wake_word_pcm_.clear();
-
-            auto end_time = esp_timer_get_time();
-            ESP_LOGI(TAG, "Encode wake word opus %d packets in %ld ms", packets, (long)((end_time - start_time) / 1000));
-
-            std::lock_guard<std::mutex> lock(this_->wake_word_mutex_);
-            this_->wake_word_opus_.push_back(std::vector<uint8_t>());
-            this_->wake_word_cv_.notify_all();
-        }
-        vTaskDelete(NULL);
-    }, "encode_wake_word", stack_size, this, 8,
-       wake_word_encode_task_stack_, wake_word_encode_task_buffer_);
-}
-
-bool CustomWakeWord::GetWakeWordOpus(std::vector<uint8_t>& opus) {
-    std::unique_lock<std::mutex> lock(wake_word_mutex_);
-    wake_word_cv_.wait(lock, [this]() {
-        return !wake_word_opus_.empty();
-    });
-    opus.swap(wake_word_opus_.front());
-    wake_word_opus_.pop_front();
-    return !opus.empty();
 }

@@ -552,14 +552,7 @@ bool XiaolingSessionVoice::SendAudioBatch(
     const uint32_t sequence = uplink_batch_sequence_.fetch_add(1) + 1;
     const bool trace_batch = sequence <= 3 || (sequence % 50) == 1;
 
-    // 唤醒音频在 start 之前到达，先缓存到服务端确认 started。
     if (!audio_upload_enabled_) {
-        if (!pending_wake_word_.empty()) {
-            for (auto& packet : packets) {
-                pending_wake_audio_.push_back(std::move(packet));
-            }
-            return true;
-        }
         const uint32_t rejected = uplink_rejected_batches_.fetch_add(1) + 1;
         if ((rejected % 10) == 1) {
             ESP_LOGW(TAG,
@@ -610,8 +603,7 @@ bool XiaolingSessionVoice::SendAudioBatch(
 }
 
 void XiaolingSessionVoice::SendWakeWordDetected(const std::string& wake_word) {
-    // 云端不处理 wake_properties；本地仅用唤醒状态缓存 start 前的音频并设置 oneshot。
-    pending_wake_audio_.clear();
+    // 云端通过 oneshot 标记识别本轮由唤醒词触发。
     pending_wake_word_ = wake_word;
 }
 
@@ -701,7 +693,6 @@ void XiaolingSessionVoice::SendStartListening(ListeningMode mode) {
     xEventGroupClearBits(event_group_, kSessionStartedBit);
     SetSessionActive(text_sender_(BuildStartMessage(mode)));
     if (!session_active_) {
-        pending_wake_audio_.clear();
         return;
     }
 
@@ -712,14 +703,10 @@ void XiaolingSessionVoice::SendStartListening(ListeningMode mode) {
     if (!(bits & kSessionStartedBit) || !audio_upload_enabled_) {
         ESP_LOGE(TAG, "等待 lschat started 消息超时");
         SetSessionActive(false);
-        pending_wake_audio_.clear();
         if (error_callback_) {
             error_callback_(XiaolingSessionVoiceError::kServerTimeout);
         }
         return;
-    }
-    if (!FlushPendingWakeAudio() && error_callback_) {
-        error_callback_(XiaolingSessionVoiceError::kServerError);
     }
 }
 
@@ -741,7 +728,6 @@ bool XiaolingSessionVoice::CancelSession() {
     // leak into the next voice session.
     SetAudioUploadEnabled(false, "cancel_session");
     pending_wake_word_.clear();
-    pending_wake_audio_.clear();
     uplink_audio_format_checked_ = false;
     SetSessionActive(false);
     ResetResultState();
@@ -861,21 +847,6 @@ void XiaolingSessionVoice::HandleIatBargeIn() {
     }
     CancelSubtitleStream(true);
     ESP_LOGI(TAG, "IAT 已打断 TTS 字幕，保持当前会话和音频上行");
-}
-
-bool XiaolingSessionVoice::FlushPendingWakeAudio() {
-    while (!pending_wake_audio_.empty()) {
-        auto packet = std::move(pending_wake_audio_.front());
-        pending_wake_audio_.pop_front();
-        if (packet == nullptr || packet->payload.empty()) {
-            continue;
-        }
-        if (!CheckUplinkAudioFormat(*packet) || !SendUplinkAudioPacket(*packet)) {
-            pending_wake_audio_.clear();
-            return false;
-        }
-    }
-    return true;
 }
 
 bool XiaolingSessionVoice::CheckUplinkAudioFormat(const AudioStreamPacket& packet) {
@@ -1041,7 +1012,6 @@ void XiaolingSessionVoice::Reset() {
     SetAudioUploadEnabled(false, "reset");
     SetSessionActive(false);
     pending_wake_word_.clear();
-    pending_wake_audio_.clear();
     uplink_audio_format_checked_ = false;
     if (event_group_ != nullptr) {
         xEventGroupSetBits(event_group_, kSessionStartedBit);

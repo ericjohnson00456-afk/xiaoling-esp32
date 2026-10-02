@@ -2,7 +2,7 @@
 
 #include <cJSON.h>
 
-#include "audio_codec.h"
+#include "codecs/audio_codec.h"
 #include "display/display.h"
 
 #include <esp_log.h>

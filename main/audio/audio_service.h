@@ -16,7 +16,7 @@
 #include <opus_decoder.h>
 #include <opus_resampler.h>
 
-#include "audio_codec.h"
+#include "codecs/audio_codec.h"
 #include "processors/audio_processor.h"
 #include "opus_encoder/opus_wb_encoder.h"
 #include "player/types/playback_event.h"
@@ -136,12 +136,10 @@ public:
     bool IsVoiceDetected() const { return voice_detected_.load(); }
 
     // ===== 3. 唤醒词 =====
-    // 唤醒词结果和预录音：算法检测后由 Application 回调发布 AppEvent。
+    // 唤醒词检测结果由 Application 回调发布 AppEvent。
     void EnableWakeWordDetection(bool enable);
     void PauseWakeWordDetection();
     bool IsWakeWordRunning() const { return wake_word_running_.load(); }
-    void EncodeWakeWord();
-    std::unique_ptr<AudioStreamPacket> PopWakeWordPacket();
     const std::string& GetLastWakeWord() const;
     std::string GetWakeWordName() const;
     bool IsAfeWakeWord();

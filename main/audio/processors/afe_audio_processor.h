@@ -11,7 +11,7 @@
 #include <functional>
 
 #include "audio_processor.h"
-#include "audio_codec.h"
+#include "codecs/audio_codec.h"
 
 class AfeAudioProcessor : public AudioProcessor {
 public:

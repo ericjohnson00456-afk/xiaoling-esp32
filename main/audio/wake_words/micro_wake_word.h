@@ -2,7 +2,7 @@
 #define __MICRO_WAKE_WORD_H__
 
 #include "wake_word.h"
-#include "audio_codec.h"
+#include "codecs/audio_codec.h"
 #include "micro_wake_word/config.h"
 #include "micro_wake_word/streaming_model.h"
 #include "micro_wake_word/preprocessor_settings.h"
@@ -35,8 +35,6 @@ public:
     bool ResetInputState();
     void Stop() override;
     size_t GetFeedSize() override;
-    void EncodeWakeWordData() override;
-    bool GetWakeWordOpus(std::vector<uint8_t>& opus) override;
     const std::string& GetLastDetectedWakeWord() const override { return last_detected_wake_word_; }
 
 private:

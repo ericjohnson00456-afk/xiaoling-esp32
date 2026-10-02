@@ -1,5 +1,5 @@
 # Define source files
-set(SOURCES "audio/audio_codec.cc"
+set(SOURCES "audio/codecs/audio_codec.cc"
             "audio/audio_service.cc"
             "audio/opus_encoder/opus_wb_encoder.cc"
             "player/audio_player.cc"

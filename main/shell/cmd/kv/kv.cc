@@ -1,7 +1,7 @@
 #include "kv_user.h"
 
 #include "application.h"
-#include "audio_codec.h"
+#include "codecs/audio_codec.h"
 #include "backlight.h"
 #include "board.h"
 #include "settings.h"

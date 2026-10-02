@@ -1,6 +1,6 @@
 #include "wifi_board.h"
 
-#include "audio_codec.h"
+#include "codecs/audio_codec.h"
 #include "display/display.h"
 #include "ui/i18n/lang_config.h"
 #include "ui/ui.h"

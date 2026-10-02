@@ -5,7 +5,6 @@
 
 #include <atomic>
 #include <cstdint>
-#include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -104,7 +103,6 @@ private:
     bool narrowband_mode_ = false;
     std::string session_id_;
     std::string pending_wake_word_;
-    std::deque<std::unique_ptr<AudioStreamPacket>> pending_wake_audio_;
     std::atomic_bool uplink_audio_format_checked_{false};
     std::atomic<uint32_t> uplink_batch_sequence_{0};
     std::atomic<uint32_t> uplink_rejected_batches_{0};
@@ -135,7 +133,6 @@ private:
     uint32_t tts_stopped_subscription_id_ = 0;
 
     std::string BuildStartMessage(ListeningMode mode);
-    bool FlushPendingWakeAudio();
     bool CheckUplinkAudioFormat(const AudioStreamPacket& packet);
     bool SendUplinkAudioPacket(const AudioStreamPacket& packet);
     void SetSessionActive(bool active);

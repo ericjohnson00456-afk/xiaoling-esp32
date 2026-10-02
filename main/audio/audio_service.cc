@@ -1153,13 +1153,6 @@ std::unique_ptr<AudioStreamPacket> AudioService::PopOpusPacket() {
     return packet;
 }
 
-// 将唤醒模型保留的唤醒词录音编码，供后续 PopWakeWordPacket() 读取。
-void AudioService::EncodeWakeWord() {
-    if (wake_word_) {
-        wake_word_->EncodeWakeWordData();
-    }
-}
-
 const std::string& AudioService::GetLastWakeWord() const {
     static const std::string kEmptyWakeWord;
     if (!wake_word_) {
@@ -1177,20 +1170,6 @@ std::string AudioService::GetWakeWordName() const {
 #else
     return GetLastWakeWord();
 #endif
-}
-
-// 读取唤醒词预录音，与常规上行 opus_packet_queue_ 相互独立。
-std::unique_ptr<AudioStreamPacket> AudioService::PopWakeWordPacket() {
-    if (!wake_word_) {
-        return nullptr;
-    }
-    auto packet = std::make_unique<AudioStreamPacket>();
-    if (wake_word_->GetWakeWordOpus(packet->payload)) {
-        packet->sample_rate = 16000;
-        packet->frame_duration = OPUS_FRAME_DURATION_MS;
-        return packet;
-    }
-    return nullptr;
 }
 
 // 只控制唤醒模型的运行与喂帧，不停止 ADC、AFE 或编码任务。

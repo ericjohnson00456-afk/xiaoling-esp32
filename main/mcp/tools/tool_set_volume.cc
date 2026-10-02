@@ -2,7 +2,7 @@
 #include <stdexcept>
 #include <string>
 
-#include "audio_codec.h"
+#include "codecs/audio_codec.h"
 #include "board.h"
 #include "mcp_server.h"
 #include "shell/cmd/kv/kv_user.h"

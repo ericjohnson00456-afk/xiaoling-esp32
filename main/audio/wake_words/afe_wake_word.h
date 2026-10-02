@@ -2,21 +2,17 @@
 #define AFE_WAKE_WORD_H
 
 #include <freertos/FreeRTOS.h>
-#include <freertos/task.h>
 #include <freertos/event_groups.h>
 
 #include <esp_afe_sr_models.h>
 #include <esp_nsn_models.h>
 #include <model_path.h>
 
-#include <deque>
 #include <string>
 #include <vector>
 #include <functional>
-#include <mutex>
-#include <condition_variable>
 
-#include "audio_codec.h"
+#include "codecs/audio_codec.h"
 #include "wake_word.h"
 
 class AfeWakeWord : public WakeWord {
@@ -30,8 +26,6 @@ public:
     void Start();
     void Stop();
     size_t GetFeedSize();
-    void EncodeWakeWordData();
-    bool GetWakeWordOpus(std::vector<uint8_t>& opus);
     const std::string& GetLastDetectedWakeWord() const { return last_detected_wake_word_; }
 
 private:
@@ -45,15 +39,6 @@ private:
     AudioCodec* codec_ = nullptr;
     std::string last_detected_wake_word_;
 
-    TaskHandle_t wake_word_encode_task_ = nullptr;
-    StaticTask_t* wake_word_encode_task_buffer_ = nullptr;
-    StackType_t* wake_word_encode_task_stack_ = nullptr;
-    std::deque<std::vector<int16_t>> wake_word_pcm_;
-    std::deque<std::vector<uint8_t>> wake_word_opus_;
-    std::mutex wake_word_mutex_;
-    std::condition_variable wake_word_cv_;
-
-    void StoreWakeWordData(const int16_t* data, size_t size);
     void AudioDetectionTask();
 };
 

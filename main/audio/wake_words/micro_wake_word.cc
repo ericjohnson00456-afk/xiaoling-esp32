@@ -232,15 +232,6 @@ size_t MicroWakeWord::GetFeedSize() {
     return GetNewSamplesToGet();
 }
 
-void MicroWakeWord::EncodeWakeWordData() {
-    // Not implemented for this version
-}
-
-bool MicroWakeWord::GetWakeWordOpus(std::vector<uint8_t>& opus) {
-    // Not implemented for this version
-    return false;
-}
-
 bool MicroWakeWord::LoadModels() {
     if (frontend_initialized_) {
         FrontendFreeStateContents(&frontend_state_);

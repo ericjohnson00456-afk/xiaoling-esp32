@@ -3,7 +3,7 @@
 #include <string>
 
 #include "board.h"
-#include "audio_codec.h"
+#include "codecs/audio_codec.h"
 #include "mcp_server.h"
 #include "system/system_info.h"
 #include <esp_app_desc.h>

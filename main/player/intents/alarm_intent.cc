@@ -1,6 +1,6 @@
 #include "alarm_intent.h"
 
-#include "audio_codec.h"
+#include "codecs/audio_codec.h"
 #include "board.h"
 #include "playback_intent_manager.h"
 #include "shell/cmd/kv/kv_user.h"

@@ -6,7 +6,7 @@
 #include <functional>
 
 #include <model_path.h>
-#include "audio_codec.h"
+#include "codecs/audio_codec.h"
 
 class AudioProcessor {
 public:

@@ -10,7 +10,7 @@
 #include <functional>
 #include <atomic>
 
-#include "audio_codec.h"
+#include "codecs/audio_codec.h"
 #include "wake_word.h"
 
 class EspWakeWord : public WakeWord {
@@ -24,8 +24,6 @@ public:
     void Start();
     void Stop();
     size_t GetFeedSize();
-    void EncodeWakeWordData();
-    bool GetWakeWordOpus(std::vector<uint8_t>& opus);
     const std::string& GetLastDetectedWakeWord() const { return last_detected_wake_word_; }
 
 private:

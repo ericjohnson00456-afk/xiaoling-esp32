@@ -8,7 +8,7 @@
 
 #include "display/display.h"
 #include "board.h"
-#include "audio_codec.h"
+#include "codecs/audio_codec.h"
 #include "settings.h"
 #include "ui/i18n/lang_config.h"
 

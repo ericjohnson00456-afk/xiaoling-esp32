@@ -2,7 +2,7 @@
 #include "board.h"
 #include "display/display.h"
 #include "system/system_info.h"
-#include "audio_codec.h"
+#include "codecs/audio_codec.h"
 #include "xiaoling/conn/xiaoling_conn.h"
 #include "xiaoling/conn/xiaoling_conn_activation.h"
 #include "ui/i18n/lang_config.h"
@@ -936,10 +936,6 @@ void Application::HandleWakeWordDetectedEvent() {
         return;
     }
 
-#if CONFIG_SEND_WAKE_WORD_DATA
-    audio_service_.EncodeWakeWord();
-#endif
-
     if (state == kDeviceStateSpeaking) {
         // 语音唤醒与按键唤醒走同一条 TTS 打断链路：先冻结 timeline
         // 游标并停止旧回复，再启动下一轮，避免旧 sid 被新 start 覆盖。
@@ -954,12 +950,6 @@ void Application::HandleWakeWordDetectedEvent() {
     auto wake_word = audio_service_.GetLastWakeWord();
     ESP_LOGI(TAG, "Wake word detected: %s", wake_word.c_str());
     xiaoling_conn_->SendWakeWordDetected(wake_word);
-#if CONFIG_SEND_WAKE_WORD_DATA
-    // lschat 在 started 前不接收音频，客户端会暂存这些唤醒词数据。
-    while (auto packet = audio_service_.PopWakeWordPacket()) {
-        xiaoling_conn_->SendAudio(std::move(packet));
-    }
-#endif
     BeginWakeup(listening_mode_);
 }
 
@@ -1355,8 +1345,6 @@ void Application::WakeWordInvoke(const std::string& wake_word) {
     auto state = GetDeviceState();
 
     if (state == kDeviceStateIdle || state == kDeviceStateListening) {
-        audio_service_.EncodeWakeWord();
-
         if (!EnsureXiaolingReadyForWakeup()) {
             return;
         }
@@ -1366,12 +1354,6 @@ void Application::WakeWordInvoke(const std::string& wake_word) {
             return;
         }
         xiaoling_conn_->SendWakeWordDetected(wake_word);
-#if CONFIG_USE_AFE_WAKE_WORD || CONFIG_USE_CUSTOM_WAKE_WORD
-        // lschat 在 started 前不接收音频，客户端会暂存这些唤醒词数据。
-        while (auto packet = audio_service_.PopWakeWordPacket()) {
-            xiaoling_conn_->SendAudio(std::move(packet));
-        }
-#endif
         BeginWakeup(listening_mode_);
     } else if (state == kDeviceStateSpeaking) {
         AbortSpeaking(kAbortReasonWakeWordDetected);
