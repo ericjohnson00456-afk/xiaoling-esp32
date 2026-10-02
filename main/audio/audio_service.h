@@ -17,10 +17,10 @@
 #include <opus_resampler.h>
 
 #include "audio_codec.h"
-#include "audio_processor.h"
+#include "processors/audio_processor.h"
 #include "opus_encoder/opus_wb_encoder.h"
 #include "player/types/playback_event.h"
-#include "wake_word.h"
+#include "wake_words/wake_word.h"
 #include "wake_words/micro_wake_word/config.h"
 #include "xiaoling/xiaoling_types.h"
 
