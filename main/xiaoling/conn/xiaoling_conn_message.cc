@@ -2,7 +2,7 @@
 
 #include "board.h"
 #include "system/system_info.h"
-#include "xiaoling/xiaoling_events.h"
+#include "event/app_event.h"
 #include "xiaoling/session/session_voice.h"
 #include "xiaoling_config.h"
 
@@ -334,7 +334,7 @@ void XiaolingConn::HandleIncomingText(const std::string& text) {
             if (event_group_ != nullptr) {
                 xEventGroupSetBits(event_group_, kProtocolConnectedBit);
             }
-            XiaolingEventBus::GetInstance().Publish(XIAOLING_CONNECTED);
+            AppEvent::Publish(AppEvent::Id::XiaolingConnected);
             if (on_connected_) {
                 on_connected_();
             }

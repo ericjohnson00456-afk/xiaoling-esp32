@@ -11,7 +11,7 @@
 #include <esp_log.h>
 
 // 设备全局状态（enum + 状态机，header-only）。语音会话状态（听/说）不在这里，
-// 见 xiaoling/xiaoling_events.h。
+// 设备状态变化通过 Application 的主流程处理。
 enum DeviceState {
     kDeviceStateUnknown,
     kDeviceStateStarting,

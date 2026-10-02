@@ -11,7 +11,6 @@
 #include "settings.h"
 #include "serial_shell.h"
 #include "ui/ui.h"
-#include "xiaoling/xiaoling_events.h"
 #include "shell/cmd/kv/kv_user.h"
 #include "event/app_event.h"
 
@@ -74,16 +73,16 @@ Application::~Application() {
         AppEvent::Unsubscribe(subscription_id);
     }
     if (iat_subscription_id_ != 0) {
-        XiaolingEventBus::GetInstance().Unsubscribe(iat_subscription_id_);
+        AppEvent::Unsubscribe(iat_subscription_id_);
     }
     if (iat_update_subscription_id_ != 0) {
-        XiaolingEventBus::GetInstance().Unsubscribe(iat_update_subscription_id_);
+        AppEvent::Unsubscribe(iat_update_subscription_id_);
     }
     if (iat_end_subscription_id_ != 0) {
-        XiaolingEventBus::GetInstance().Unsubscribe(iat_end_subscription_id_);
+        AppEvent::Unsubscribe(iat_end_subscription_id_);
     }
     if (tts_url_subscription_id_ != 0) {
-        XiaolingEventBus::GetInstance().Unsubscribe(tts_url_subscription_id_);
+        AppEvent::Unsubscribe(tts_url_subscription_id_);
     }
     if (clock_timer_handle_ != nullptr) {
         esp_timer_stop(clock_timer_handle_);
@@ -109,13 +108,13 @@ void Application::HandlePlaybackEvent(const PlaybackEvent& event) {
     }
     if (event.state == PlaybackState::kStreamReady) {
         pending_tts_session_id_ = event.session_id;
-        XiaolingEventBus::GetInstance().Publish(XIAOLING_TTS_STREAM_READY);
+        AppEvent::Publish(AppEvent::Id::XiaolingTtsStreamReady);
         return;
     }
     if (event.state == PlaybackState::kPlaying) {
         pending_tts_session_id_ = 0;
         active_tts_session_id_ = event.session_id;
-        XiaolingEventBus::GetInstance().Publish(XIAOLING_TTS_PLAYING);
+        AppEvent::Publish(AppEvent::Id::XiaolingTtsPlaying);
         session_controller_.StartTts(event.session_id);
         // kPlaying 只表示播放器已进入播放态，仍需等待 DAC 首个 PCM 输出。
         if (!exit_requested_.load() &&
@@ -152,7 +151,7 @@ void Application::HandlePlaybackEvent(const PlaybackEvent& event) {
         ESP_LOGW(TAG, "TTS 播放中 PCM 断流超时: session=%lu",
                  static_cast<unsigned long>(event.session_id));
     }
-    XiaolingEventBus::GetInstance().Publish(XIAOLING_TTS_STOPPED, reason_text);
+    AppEvent::PublishText(AppEvent::Id::XiaolingTtsStopped, reason_text);
     pending_tts_session_id_ = 0;
     active_tts_session_id_ = 0;
     if (active_session) {
@@ -216,7 +215,7 @@ void Application::HandlePlayerOutputStartedEvent(
     }
 
     tts_output_started_.store(true);
-    XiaolingEventBus::GetInstance().Publish(XIAOLING_TTS_STARTED);
+    AppEvent::Publish(AppEvent::Id::XiaolingTtsStarted);
     if (!exit_requested_.load() && active_tts_session_id_ != 0 &&
         tts_output_started_.exchange(false) &&
         tts_waiting_for_playback_.exchange(false) &&
@@ -234,9 +233,8 @@ void Application::HandlePlayerOutputProgressEvent(
     if (event.channel != PlaybackChannel::kTts) {
         return;
     }
-    XiaolingEventBus::GetInstance().Publish(
-        XIAOLING_TTS_OUTPUT_PROGRESS,
-        std::to_string(event.audio_clock_ms));
+    AppEvent::PublishText(AppEvent::Id::XiaolingTtsOutputProgress,
+                          std::to_string(event.audio_clock_ms));
 }
 
 void Application::Initialize() {
@@ -1043,12 +1041,12 @@ void Application::BeginWakeup(ListeningMode mode) {
     ESP_LOGI(TAG, "Wakeup tone started; start audio upload in parallel");
     SetListeningMode(mode);
     if (iat_subscription_id_ == 0) {
-        auto on_iat_text = [this](const XiaolingEvent& event) {
-            /* This callback runs on the connection task before dispatch to the
-             * application task. Preserve which TTS existed at that instant. */
+        auto on_iat_text = [this](const AppEvent::Event& event) {
+            // 事件已经在 app_event 任务中串行执行；仍记录接收时的 TTS 世代，
+            // 防止排队中的旧 IAT 打断后续 TTS。
             const uint32_t observed_tts_generation = tts_url_generation_.load();
             const uint32_t received_ms = esp_log_timestamp();
-            ScheduleUrgent([this, text = event.text, observed_tts_generation,
+            ScheduleUrgent([this, text = std::string(event.Text()), observed_tts_generation,
                             received_ms]() {
                 if (text.empty()) {
                     return;
@@ -1104,13 +1102,13 @@ void Application::BeginWakeup(ListeningMode mode) {
                 }
             });
         };
-        iat_subscription_id_ = XiaolingEventBus::GetInstance().Subscribe(
-            XIAOLING_IAT_START, on_iat_text);
-        iat_update_subscription_id_ = XiaolingEventBus::GetInstance().Subscribe(
-            XIAOLING_IAT_UPDATE, on_iat_text);
-        iat_end_subscription_id_ = XiaolingEventBus::GetInstance().Subscribe(
-            XIAOLING_IAT_END, [this](const XiaolingEvent& event) {
-                Schedule([this, text = event.text]() {
+        iat_subscription_id_ = AppEvent::Subscribe(
+            AppEvent::Id::XiaolingIatStart, on_iat_text);
+        iat_update_subscription_id_ = AppEvent::Subscribe(
+            AppEvent::Id::XiaolingIatUpdate, on_iat_text);
+        iat_end_subscription_id_ = AppEvent::Subscribe(
+            AppEvent::Id::XiaolingIatEnd, [this](const AppEvent::Event& event) {
+                Schedule([this, text = std::string(event.Text())]() {
                     iat_utterance_active_ = false;
                     // 非空的最终 IAT 表示用户已经说完。在 TTS URL 到达前显示云端
                     // 思考状态。URL 回调会先设置此标志，再将自己的 UI 更新入队，

@@ -4,7 +4,6 @@
 
 #include "board.h"
 #include "event/app_event.h"
-#include "xiaoling/xiaoling_events.h"
 #include "ui/ui.h"
 
 #define TAG "ApplicationAudio"
@@ -20,16 +19,6 @@ void Application::InitializeAudio() {
     if (!audio_player_.Initialize(&audio_service_)) {
         ESP_LOGE(TAG, "音频播放器初始化失败");
     }
-    // TTS URL 由 Application 统一接入，再交给播放器管理通道和抢占关系。
-    tts_url_subscription_id_ = XiaolingEventBus::GetInstance().Subscribe(
-        XIAOLING_TTS_URL, [this](const XiaolingEvent& event) {
-            if (audio_player_.PlayTtsUrl(event.text) == 0) {
-                ESP_LOGW(TAG, "TTS URL 未能立即提交，播放器可能正在暂存");
-            }
-        });
-    if (tts_url_subscription_id_ == 0) {
-        ESP_LOGE(TAG, "订阅 TTS URL 事件失败");
-    }
     // 播放器事件栈初始化
     intent_manager_.Initialize(*this);
 
@@ -43,11 +32,25 @@ void Application::InitializeAudio() {
 
 void Application::RegisterAudioEventSubscribers() {
     // Application::Initialize() 只应调用一次；此保护同时避免意外重复订阅。
-    if (!playback_event_subscription_ids_.empty() ||
+    if (tts_url_subscription_id_ != 0 ||
+        !playback_event_subscription_ids_.empty() ||
         !playback_output_event_subscription_ids_.empty() ||
         !audio_event_subscription_ids_.empty()) {
         ESP_LOGW(TAG, "音频事件已订阅，跳过重复注册");
         return;
+    }
+
+    // TTS URL 是小聆输入到播放器的音频事件，也在这里统一接入。
+    tts_url_subscription_id_ = AppEvent::Subscribe(
+        AppEvent::Id::XiaolingTtsUrl,
+        [](const AppEvent::Event& event, void* context) {
+            auto* application = static_cast<Application*>(context);
+            if (application->audio_player_.PlayTtsUrl(std::string(event.Text())) == 0) {
+                ESP_LOGW(TAG, "TTS URL 未能立即提交，播放器可能正在暂存");
+            }
+        }, this);
+    if (tts_url_subscription_id_ == 0) {
+        ESP_LOGE(TAG, "订阅 TTS URL 事件失败");
     }
 
     // 播放器先在 app_event 中整理内部状态，再发布统一的公共生命周期事件。

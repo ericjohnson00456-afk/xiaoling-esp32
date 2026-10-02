@@ -1,7 +1,7 @@
 #include "xiaoling/session/session_voice.h"
 
 #include "system/system_info.h"
-#include "xiaoling/xiaoling_events.h"
+#include "event/app_event.h"
 #include "xiaoling/conn/xiaoling_config.h"
 #include "xiaoling/conn/network_diagnostics.h"
 #include "board.h"
@@ -451,52 +451,53 @@ XiaolingSessionVoice::XiaolingSessionVoice()
               HandleSubtitleEvent(event, text);
           })) {
     event_group_ = xEventGroupCreate();
-    auto& events = XiaolingEventBus::GetInstance();
-    tts_stream_ready_subscription_id_ = events.Subscribe(
-        XIAOLING_TTS_STREAM_READY, [this](const XiaolingEvent&) {
+    tts_stream_ready_subscription_id_ = AppEvent::Subscribe(
+        AppEvent::Id::XiaolingTtsStreamReady, [this](const AppEvent::Event&) {
             OnTtsPipelinePlaying();
         });
-    tts_pipeline_subscription_id_ = events.Subscribe(
-        XIAOLING_TTS_PLAYING, [this](const XiaolingEvent&) {
+    tts_pipeline_subscription_id_ = AppEvent::Subscribe(
+        AppEvent::Id::XiaolingTtsPlaying, [this](const AppEvent::Event&) {
             OnTtsPipelinePlaying();
         });
-    tts_started_subscription_id_ = events.Subscribe(
-        XIAOLING_TTS_STARTED, [this](const XiaolingEvent&) {
+    tts_started_subscription_id_ = AppEvent::Subscribe(
+        AppEvent::Id::XiaolingTtsStarted, [this](const AppEvent::Event&) {
             OnTtsStarted();
         });
-    tts_progress_subscription_id_ = events.Subscribe(
-        XIAOLING_TTS_OUTPUT_PROGRESS, [this](const XiaolingEvent& event) {
-            if (event.text.empty()) {
+    tts_progress_subscription_id_ = AppEvent::Subscribe(
+        AppEvent::Id::XiaolingTtsOutputProgress,
+        [this](const AppEvent::Event& event) {
+            const auto text = event.Text();
+            if (text.empty()) {
                 return;
             }
             char* end = nullptr;
-            const unsigned long value = std::strtoul(event.text.c_str(), &end, 10);
-            if (end != event.text.c_str() && *end == '\0' && value <= UINT32_MAX) {
+            const std::string text_copy(text);
+            const unsigned long value = std::strtoul(text_copy.c_str(), &end, 10);
+            if (end != text_copy.c_str() && *end == '\0' && value <= UINT32_MAX) {
                 OnTtsAudioProgress(static_cast<uint32_t>(value));
             }
         });
-    tts_stopped_subscription_id_ = events.Subscribe(
-        XIAOLING_TTS_STOPPED, [this](const XiaolingEvent& event) {
-            OnTtsPlaybackStopped(event.text == "natural");
+    tts_stopped_subscription_id_ = AppEvent::Subscribe(
+        AppEvent::Id::XiaolingTtsStopped, [this](const AppEvent::Event& event) {
+            OnTtsPlaybackStopped(event.Text() == "natural");
         });
 }
 
 XiaolingSessionVoice::~XiaolingSessionVoice() {
-    auto& events = XiaolingEventBus::GetInstance();
     if (tts_stream_ready_subscription_id_ != 0) {
-        events.Unsubscribe(tts_stream_ready_subscription_id_);
+        AppEvent::Unsubscribe(tts_stream_ready_subscription_id_);
     }
     if (tts_pipeline_subscription_id_ != 0) {
-        events.Unsubscribe(tts_pipeline_subscription_id_);
+        AppEvent::Unsubscribe(tts_pipeline_subscription_id_);
     }
     if (tts_started_subscription_id_ != 0) {
-        events.Unsubscribe(tts_started_subscription_id_);
+        AppEvent::Unsubscribe(tts_started_subscription_id_);
     }
     if (tts_progress_subscription_id_ != 0) {
-        events.Unsubscribe(tts_progress_subscription_id_);
+        AppEvent::Unsubscribe(tts_progress_subscription_id_);
     }
     if (tts_stopped_subscription_id_ != 0) {
-        events.Unsubscribe(tts_stopped_subscription_id_);
+        AppEvent::Unsubscribe(tts_stopped_subscription_id_);
     }
     OnTtsPlaybackStopped(false);
     if (event_group_ != nullptr) {
@@ -1057,17 +1058,16 @@ void XiaolingSessionVoice::HandleIat(const cJSON* data) {
     }
 
     last_iat_text_ = text;
-    auto& events = XiaolingEventBus::GetInstance();
     const bool is_last = ReadBool(data, "is_last");
     if (!iat_active_) {
         iat_active_ = true;
-        events.Publish(XIAOLING_IAT_START, last_iat_text_);
+        AppEvent::PublishText(AppEvent::Id::XiaolingIatStart, last_iat_text_);
     } else if (!ReadBool(data, "is_last")) {
-        events.Publish(XIAOLING_IAT_UPDATE, last_iat_text_);
+        AppEvent::PublishText(AppEvent::Id::XiaolingIatUpdate, last_iat_text_);
     }
 
     if (is_last) {
-        events.Publish(XIAOLING_IAT_END, last_iat_text_);
+        AppEvent::PublishText(AppEvent::Id::XiaolingIatEnd, last_iat_text_);
         iat_active_ = false;
     }
 }
@@ -1118,7 +1118,7 @@ void XiaolingSessionVoice::StartTtsAudio(std::string url, const std::string& rep
     // 音频已经建连并开始解码；但无需再等首个 PCM 真正交给 codec。
     ESP_LOGI(TAG, "TTS 音频优先启动: audio_url_bytes=%u",
              static_cast<unsigned>(url.size()));
-    XiaolingEventBus::GetInstance().Publish(XIAOLING_TTS_URL, std::move(url));
+    AppEvent::PublishText(AppEvent::Id::XiaolingTtsUrl, url);
 }
 
 void XiaolingSessionVoice::StartPendingSubtitleStream() {
@@ -1215,7 +1215,7 @@ void XiaolingSessionVoice::CancelSubtitleStream(bool notify_interrupt) {
     }
     tts_text_active_.store(false);
     if (notify_interrupt) {
-        XiaolingEventBus::GetInstance().Publish(XIAOLING_TTS_TXT_INTERRUPT);
+        AppEvent::Publish(AppEvent::Id::XiaolingTtsTextInterrupt);
     }
 }
 
@@ -1231,7 +1231,6 @@ void XiaolingSessionVoice::ResetTimelineStateLocked() {
 }
 
 void XiaolingSessionVoice::HandleSubtitleEvent(int event, const std::string& text) {
-    auto& events = XiaolingEventBus::GetInstance();
     if (event == 0) {
         cJSON* root = cJSON_ParseWithLength(text.data(), text.size());
         const cJSON* item = root;
@@ -1311,12 +1310,12 @@ void XiaolingSessionVoice::HandleSubtitleEvent(int event, const std::string& tex
                  static_cast<unsigned long>(start_ms),
                  static_cast<unsigned long>(end_ms));
         if (!tts_text_active_.exchange(true)) {
-            events.Publish(XIAOLING_TTS_TXT_START);
+            AppEvent::Publish(AppEvent::Id::XiaolingTtsTextStart);
         }
-        events.Publish(XIAOLING_TTS_TXT_UPDATE, text);
+        AppEvent::PublishText(AppEvent::Id::XiaolingTtsTextUpdate, text);
     } else if (event == 1) {
         if (tts_text_active_.exchange(false)) {
-            events.Publish(XIAOLING_TTS_TXT_END);
+            AppEvent::Publish(AppEvent::Id::XiaolingTtsTextEnd);
         }
     }
 }
@@ -1325,12 +1324,12 @@ void XiaolingSessionVoice::EndIat() {
     if (!iat_active_) {
         return;
     }
-    XiaolingEventBus::GetInstance().Publish(XIAOLING_IAT_END, last_iat_text_);
+    AppEvent::PublishText(AppEvent::Id::XiaolingIatEnd, last_iat_text_);
     iat_active_ = false;
 }
 
 void XiaolingSessionVoice::EndTtsText() {
     if (tts_text_active_.exchange(false)) {
-        XiaolingEventBus::GetInstance().Publish(XIAOLING_TTS_TXT_END);
+        AppEvent::Publish(AppEvent::Id::XiaolingTtsTextEnd);
     }
 }

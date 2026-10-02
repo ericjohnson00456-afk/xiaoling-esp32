@@ -2,6 +2,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <string_view>
 #include <type_traits>
 
 namespace AppEvent {
@@ -25,6 +27,23 @@ enum class Id : uint16_t {
     VadChanged,
     PlayerOutputStarted,
     PlayerOutputProgress,
+
+    // 小聆连接、IAT 和 TTS 事件；文本内容通过 PublishText() 复制传递。
+    XiaolingConnected,
+    XiaolingDisconnected,
+    XiaolingIatStart,
+    XiaolingIatUpdate,
+    XiaolingIatEnd,
+    XiaolingTtsUrl,
+    XiaolingTtsTextStart,
+    XiaolingTtsTextUpdate,
+    XiaolingTtsTextEnd,
+    XiaolingTtsTextInterrupt,
+    XiaolingTtsStreamReady,
+    XiaolingTtsPlaying,
+    XiaolingTtsStarted,
+    XiaolingTtsOutputProgress,
+    XiaolingTtsStopped,
 };
 
 enum class Priority : uint8_t {
@@ -45,9 +64,16 @@ struct Event {
                    ? static_cast<const T*>(data)
                    : nullptr;
     }
+
+    // 仅用于 PublishText() 发布的事件；返回值只在当前回调期间有效。
+    std::string_view Text() const {
+        return data == nullptr ? std::string_view{}
+                               : std::string_view(static_cast<const char*>(data), size);
+    }
 };
 
 using Handler = void (*)(const Event& event, void* context);
+using Callback = std::function<void(const Event& event)>;
 using SubscriptionId = uint32_t;
 
 /**
@@ -59,6 +85,7 @@ bool Initialize();
  * 订阅指定事件。回调统一在 app_event 任务中串行执行。
  */
 SubscriptionId Subscribe(Id id, Handler handler, void* context = nullptr);
+SubscriptionId Subscribe(Id id, Callback callback);
 
 /**
  * 取消订阅。当前阶段订阅者均为进程级对象，主要用于完整生命周期管理。
@@ -70,6 +97,10 @@ void Unsubscribe(SubscriptionId subscription_id);
  */
 bool Publish(Id id, const void* data = nullptr, size_t size = 0,
              Priority priority = Priority::Normal);
+
+// 复制文本后异步发布；接收方通过 Event::Text() 读取。
+bool PublishText(Id id, std::string_view text,
+                 Priority priority = Priority::Normal);
 
 template <typename T>
 bool Publish(Id id, const T& value,

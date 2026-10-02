@@ -2,7 +2,7 @@
 
 #include "board.h"
 #include "system/system_info.h"
-#include "xiaoling/xiaoling_events.h"
+#include "event/app_event.h"
 #include "xiaoling/session/session_voice.h"
 
 #include <esp_log.h>
@@ -294,7 +294,7 @@ void XiaolingConn::StopSupervisor() {
     const bool was_transport_connected = transport_connected_.exchange(false);
     session_active_ = false;
     if (was_transport_connected || protocol_connected_.exchange(false)) {
-        XiaolingEventBus::GetInstance().Publish(XIAOLING_DISCONNECTED);
+        AppEvent::Publish(AppEvent::Id::XiaolingDisconnected);
         if (on_disconnected_) {
             on_disconnected_();
         }
@@ -679,7 +679,7 @@ void XiaolingConn::ForceReconnect() {
 
 void XiaolingConn::PublishDisconnected() {
     ESP_LOGE(TAG, "小聆 WebSocket 连续 3 次重连失败");
-    XiaolingEventBus::GetInstance().Publish(XIAOLING_DISCONNECTED);
+    AppEvent::Publish(AppEvent::Id::XiaolingDisconnected);
     if (on_disconnected_) {
         on_disconnected_();
     }

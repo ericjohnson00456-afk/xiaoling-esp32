@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <string_view>
 
 #include <esp_log.h>
 #include <esp_timer.h>
@@ -33,8 +34,7 @@ struct QueuedEvent {
 struct Subscription {
     SubscriptionId id = 0;
     Id event_id = Id::None;
-    Handler handler = nullptr;
-    void* context = nullptr;
+    Callback callback;
 };
 
 std::mutex subscription_mutex;
@@ -77,7 +77,7 @@ void Dispatch(const QueuedEvent& queued) {
     };
     for (size_t i = 0; i < matching_count; ++i) {
         const int64_t started_us = esp_timer_get_time();
-        matching[i].handler(event, matching[i].context);
+        matching[i].callback(event);
         const int64_t elapsed_us = esp_timer_get_time() - started_us;
         if (elapsed_us >= kSlowHandlerUs) {
             ESP_LOGW(kTag,
@@ -154,6 +154,16 @@ SubscriptionId Subscribe(Id id, Handler handler, void* context) {
         return 0;
     }
 
+    return Subscribe(id, [handler, context](const Event& event) {
+        handler(event, context);
+    });
+}
+
+SubscriptionId Subscribe(Id id, Callback callback) {
+    if (id == Id::None || !callback) {
+        return 0;
+    }
+
     std::lock_guard<std::mutex> lock(subscription_mutex);
     for (auto& subscription : subscriptions) {
         if (subscription.id == 0) {
@@ -161,7 +171,7 @@ SubscriptionId Subscribe(Id id, Handler handler, void* context) {
             if (id_value == 0) {
                 id_value = next_subscription_id++;
             }
-            subscription = Subscription{id_value, id, handler, context};
+            subscription = Subscription{id_value, id, std::move(callback)};
             return id_value;
         }
     }
@@ -211,6 +221,10 @@ bool Publish(Id id, const void* data, size_t size, Priority priority) {
     }
     xTaskNotifyGive(task_handle);
     return true;
+}
+
+bool PublishText(Id id, std::string_view text, Priority priority) {
+    return Publish(id, text.data(), text.size(), priority);
 }
 
 }  // namespace AppEvent

@@ -1,7 +1,7 @@
 #include "application.h"
 
 #include "alarm/alarm_service.h"
-#include "xiaoling/xiaoling_events.h"
+#include "event/app_event.h"
 
 #include <esp_log.h>
 
@@ -15,7 +15,7 @@ constexpr char kTag[] = "ApplicationAlarm";
 
 Application::AlarmFlowState::~AlarmFlowState() {
     if (connected_subscription_id != 0) {
-        XiaolingEventBus::GetInstance().Unsubscribe(connected_subscription_id);
+        AppEvent::Unsubscribe(connected_subscription_id);
     }
 }
 
@@ -37,8 +37,8 @@ void Application::InitializeAlarm() {
         }
     };
     // 小聆鉴权和 WebSocket 协议握手完成后，再开始云端闹钟全量对账。
-    alarm_flow_.connected_subscription_id = XiaolingEventBus::GetInstance().Subscribe(
-        XIAOLING_CONNECTED, [](const XiaolingEvent&) {
+    alarm_flow_.connected_subscription_id = AppEvent::Subscribe(
+        AppEvent::Id::XiaolingConnected, [](const AppEvent::Event&) {
             AlarmService::GetInstance().RequestCloudSync();
         });
 

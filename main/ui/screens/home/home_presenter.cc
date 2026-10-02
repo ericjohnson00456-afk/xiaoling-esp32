@@ -7,7 +7,7 @@
 #include "ui/ui_manager.h"
 #include "ui/ui_page_ids.h"
 #include "ui/utils/image/lvgl_image.h"
-#include "xiaoling/xiaoling_events.h"
+#include "event/app_event.h"
 #include "system/device_status.h"
 
 #include <utility>
@@ -173,31 +173,31 @@ void HomePresenter::SetPowerSaveMode(bool enabled) {
 }
 
 void HomePresenter::SubscribeVoiceEvents() {
-    auto& events = XiaolingEventBus::GetInstance();
-    auto subscribe_text = [this, &events](XiaolingEventType type) {
-        voice_event_subscriptions_.push_back(events.Subscribe(type, [this](const XiaolingEvent& event) {
-            QueueIatText(event.text);
-        }));
+    auto subscribe_text = [this](AppEvent::Id id) {
+        voice_event_subscriptions_.push_back(AppEvent::Subscribe(
+            id, [this](const AppEvent::Event& event) {
+                QueueIatText(std::string(event.Text()));
+            }));
     };
-    subscribe_text(XIAOLING_IAT_START);
-    subscribe_text(XIAOLING_IAT_UPDATE);
-    subscribe_text(XIAOLING_IAT_END);
-    voice_event_subscriptions_.push_back(events.Subscribe(
-        XIAOLING_TTS_TXT_START, [this](const XiaolingEvent&) {
+    subscribe_text(AppEvent::Id::XiaolingIatStart);
+    subscribe_text(AppEvent::Id::XiaolingIatUpdate);
+    subscribe_text(AppEvent::Id::XiaolingIatEnd);
+    voice_event_subscriptions_.push_back(AppEvent::Subscribe(
+        AppEvent::Id::XiaolingTtsTextStart, [this](const AppEvent::Event&) {
             UiManager::GetInstance().Dispatch([this]() { OnTtsTextStart(); });
         }));
-    voice_event_subscriptions_.push_back(events.Subscribe(
-        XIAOLING_TTS_TXT_UPDATE, [this](const XiaolingEvent& event) {
+    voice_event_subscriptions_.push_back(AppEvent::Subscribe(
+        AppEvent::Id::XiaolingTtsTextUpdate, [this](const AppEvent::Event& event) {
             UiManager::GetInstance().Dispatch(
-                [this, text = event.text]() { OnTtsTextUpdate(text); });
+                [this, text = std::string(event.Text())]() { OnTtsTextUpdate(text); });
         }));
-    voice_event_subscriptions_.push_back(events.Subscribe(
-        XIAOLING_TTS_TXT_INTERRUPT, [this](const XiaolingEvent&) {
+    voice_event_subscriptions_.push_back(AppEvent::Subscribe(
+        AppEvent::Id::XiaolingTtsTextInterrupt, [this](const AppEvent::Event&) {
             UiManager::GetInstance().Dispatch(
                 [this]() { OnTtsTextInterrupt(); });
         }));
-    voice_event_subscriptions_.push_back(events.Subscribe(
-        XIAOLING_TTS_STARTED, [this](const XiaolingEvent&) {
+    voice_event_subscriptions_.push_back(AppEvent::Subscribe(
+        AppEvent::Id::XiaolingTtsStarted, [this](const AppEvent::Event&) {
             const uint32_t generation = tts_progress_generation_.fetch_add(1) + 1;
             latest_tts_audio_clock_ms_.store(0);
             tts_progress_dispatch_pending_.store(false);
@@ -207,20 +207,22 @@ void HomePresenter::SubscribeVoiceEvents() {
                 }
             });
         }));
-    voice_event_subscriptions_.push_back(events.Subscribe(
-        XIAOLING_TTS_OUTPUT_PROGRESS, [this](const XiaolingEvent& event) {
+    voice_event_subscriptions_.push_back(AppEvent::Subscribe(
+        AppEvent::Id::XiaolingTtsOutputProgress,
+        [this](const AppEvent::Event& event) {
             uint32_t audio_clock_ms = 0;
-            if (!event.text.empty()) {
+            const std::string text(event.Text());
+            if (!text.empty()) {
                 char* end = nullptr;
-                const unsigned long value = std::strtoul(event.text.c_str(), &end, 10);
-                if (end != event.text.c_str() && *end == '\0' && value <= UINT32_MAX) {
+                const unsigned long value = std::strtoul(text.c_str(), &end, 10);
+                if (end != text.c_str() && *end == '\0' && value <= UINT32_MAX) {
                     audio_clock_ms = static_cast<uint32_t>(value);
                 }
             }
             QueueTtsAudioProgress(audio_clock_ms);
         }));
-    voice_event_subscriptions_.push_back(events.Subscribe(
-        XIAOLING_TTS_STOPPED, [this](const XiaolingEvent&) {
+    voice_event_subscriptions_.push_back(AppEvent::Subscribe(
+        AppEvent::Id::XiaolingTtsStopped, [this](const AppEvent::Event&) {
             const uint32_t generation = tts_progress_generation_.fetch_add(1) + 1;
             latest_tts_audio_clock_ms_.store(0);
             tts_progress_dispatch_pending_.store(false);
@@ -325,9 +327,8 @@ void HomePresenter::QueueTtsAudioProgress(uint32_t audio_clock_ms) {
 }
 
 void HomePresenter::UnsubscribeVoiceEvents() {
-    auto& events = XiaolingEventBus::GetInstance();
     for (const auto id : voice_event_subscriptions_) {
-        events.Unsubscribe(id);
+        AppEvent::Unsubscribe(id);
     }
     voice_event_subscriptions_.clear();
 }
