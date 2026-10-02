@@ -17,9 +17,9 @@
 #include <opus_resampler.h>
 
 #include "codecs/audio_codec.h"
+#include "audio_output.h"
 #include "processors/audio_processor.h"
 #include "opus_encoder/opus_wb_encoder.h"
-#include "player/types/playback_event.h"
 #include "wake_words/wake_word.h"
 #include "wake_words/micro_wake_word/config.h"
 #include "xiaoling/xiaoling_types.h"
@@ -49,8 +49,6 @@
 #define MAX_PLAYER_PLAYBACK_TASKS_IN_QUEUE 192
 /* Two seconds of 16 kHz, mono, 16-bit PCM is 64 KiB. Start TTS as soon as
  * that amount is decoded; short streams are released at EOF. */
-#define PLAYER_INITIAL_PREBUFFER_BYTES (4 * 1024)
-#define TTS_INITIAL_PREBUFFER_BYTES (64 * 1024)
 /* After a mid-stream underrun, resume as soon as any PCM block arrives. */
 #define PLAYER_RECOVERY_PREBUFFER_BYTES 1
 #define MAX_DECODE_PACKETS_IN_QUEUE (2400 / OPUS_FRAME_DURATION_MS)
@@ -80,9 +78,9 @@ struct AudioServiceUploadCallbacks {
 // AudioPlayer 负责维护播放通道，并将通知转换成 PlayerOutput* AppEvent。
 struct AudioServiceOutputCallbacks {
     // 首个播放器 PCM 完成 codec 输出后触发，用于确认扬声器真正开始播报。
-    std::function<void(const PlaybackOutputEvent&)> on_output_started;
+    std::function<void(const AudioOutputEvent&)> on_output_started;
     // 每个播放器 PCM 块输出后触发，AudioPlayer 负责合并高频进度通知。
-    std::function<void(const PlaybackOutputEvent&)> on_output_progress;
+    std::function<void(const AudioOutputEvent&)> on_output_progress;
 };
 
 
@@ -102,7 +100,7 @@ struct AudioTask {
     int16_t* player_pcm = nullptr;
     size_t player_pcm_samples = 0;
     uint32_t upload_generation = 0;
-    PlaybackOutputEvent player_output;
+    AudioOutputEvent player_output;
 
     AudioTask() = default;
     ~AudioTask();
@@ -118,7 +116,7 @@ struct AudioTask {
     }
 };
 
-class AudioService {
+class AudioService final : public AudioOutput {
 public:
     AudioService() = default;
     ~AudioService() = default;
@@ -163,19 +161,18 @@ public:
     // ===== 5. 下行解码与播放 =====
     // 服务端 Opus 走解码队列，本地播放器 PCM 直接走播放队列。
     bool PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> packet, bool wait = false);
-    bool PushPcmToPlaybackQueue(const uint8_t* data, size_t size, int sample_rate,
-                                const PlaybackOutputEvent& output,
-                                bool wait = true);
-    void BeginPlayerPlayback(const PlaybackOutputEvent& output);
+    bool PushPcm(const uint8_t* data, size_t size, int sample_rate,
+                 const AudioOutputEvent& output, bool wait = true) override;
+    void BeginPlayback(const AudioPlaybackConfig& config) override;
     // 暂存音乐暂停瞬间已经解码、但尚未送到 DAC 的 PCM，避免恢复时跳过。
-    void SuspendPlayerPlayback();
-    void ResumePlayerPlayback(const PlaybackOutputEvent& output);
-    void MarkPlayerPlaybackFinished(const PlaybackOutputEvent& output);
+    void SuspendPlayback() override;
+    void ResumePlayback(const AudioOutputEvent& output) override;
+    void MarkPlaybackFinished(const AudioOutputEvent& output) override;
     // 清理当前活动播放队列，但保留被音乐暂停保存的 PCM。
-    void ClearActivePlaybackQueue();
-    void ClearPlaybackQueue();
-    void WaitForPlaybackComplete();
-    uint32_t GetPlayerOutputLastActivityMs() const {
+    void ClearActivePlaybackQueue() override;
+    void ClearPlaybackQueue() override;
+    void WaitForPlaybackComplete() override;
+    uint32_t GetOutputLastActivityMs() const override {
         return player_output_last_activity_ms_.load();
     }
     void PlaySound(const std::string_view& sound);
@@ -254,8 +251,8 @@ private:
     bool audio_output_busy_ = false;
     // true 表示播放器不再入新帧，允许 AudioOutputTask 播放不足预缓冲长度的尾音。
     bool player_playback_finished_ = false;
-    // TTS 首播使用更大的 PCM 预缓冲门槛。
-    bool player_tts_stream_ = false;
+    // 当前播放器会话的首播预缓冲门槛，由 AudioOutput 配置传入。
+    size_t player_initial_prebuffer_bytes_ = 0;
     bool player_prebuffering_ = true;
     bool player_prebuffer_wait_logged_ = false;
     uint32_t player_rebuffer_count_ = 0;

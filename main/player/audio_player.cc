@@ -78,10 +78,10 @@ bool AudioPlayer::Initialize(AudioService* audio_service) {
     }
     audio_service_ = audio_service;
     AudioServiceOutputCallbacks output_callbacks;
-    output_callbacks.on_output_started = [this](const PlaybackOutputEvent& event) {
+    output_callbacks.on_output_started = [this](const AudioOutputEvent& event) {
         PublishPlayerOutputStarted(event);
     };
-    output_callbacks.on_output_progress = [this](const PlaybackOutputEvent& event) {
+    output_callbacks.on_output_progress = [this](const AudioOutputEvent& event) {
         PublishPlayerOutputProgress(event);
     };
     audio_service_->SetOutputCallbacks(output_callbacks);
@@ -116,7 +116,9 @@ uint32_t AudioPlayer::PlayTtsUrl(const std::string& url) {
         ESP_LOGE(TAG, "播放器尚未初始化");
         return 0;
     }
-    return tts_channel_->PlayUrl(url);
+    const uint32_t session_id = tts_channel_->PlayUrl(url);
+    RememberSession(session_id, PlaybackChannel::kTts);
+    return session_id;
 }
 
 uint32_t AudioPlayer::PlayMusicUrl(const std::string& url) {
@@ -194,7 +196,9 @@ uint32_t AudioPlayer::PlayMusicUrlInternal(const std::string& url) {
     if (!StopNonMusic(PlaybackEndReason::kPreempted)) {
         return 0;
     }
-    return music_channel_->PlayUrl(url);
+    const uint32_t session_id = music_channel_->PlayUrl(url);
+    RememberSession(session_id, PlaybackChannel::kMusic);
+    return session_id;
 }
 
 uint32_t AudioPlayer::PlayTone(uint16_t tone_id) {
@@ -205,7 +209,9 @@ uint32_t AudioPlayer::PlayTone(uint16_t tone_id) {
     if (!PauseMusic()) {
         return 0;
     }
-    return tone_channel_->PlayTone(tone_id);
+    const uint32_t session_id = tone_channel_->PlayTone(tone_id);
+    RememberSession(session_id, PlaybackChannel::kPrompt);
+    return session_id;
 }
 
 uint32_t AudioPlayer::PlayAlarmTone(uint16_t tone_id) {
@@ -216,7 +222,9 @@ uint32_t AudioPlayer::PlayAlarmTone(uint16_t tone_id) {
     if (!PauseMusic() || !StopNonMusic(PlaybackEndReason::kPreempted)) {
         return 0;
     }
-    return alarm_channel_->PlayTone(tone_id);
+    const uint32_t session_id = alarm_channel_->PlayTone(tone_id);
+    RememberSession(session_id, PlaybackChannel::kAlarm);
+    return session_id;
 }
 
 uint32_t AudioPlayer::PlayAlarmTtsUrl(const std::string& url) {
@@ -227,7 +235,9 @@ uint32_t AudioPlayer::PlayAlarmTtsUrl(const std::string& url) {
     if (!PauseMusic() || !StopNonMusic(PlaybackEndReason::kPreempted)) {
         return 0;
     }
-    return alarm_channel_->PlayUrl(url);
+    const uint32_t session_id = alarm_channel_->PlayUrl(url);
+    RememberSession(session_id, PlaybackChannel::kAlarm);
+    return session_id;
 }
 
 void AudioPlayer::PlayWakeup(std::function<void(bool)> completion) {
@@ -253,6 +263,7 @@ void AudioPlayer::PlayWakeup(std::function<void(bool)> completion) {
         }
         if (completion) completion(proceed);
     });
+    RememberSession(tone_channel_->WakeupSessionId(), PlaybackChannel::kPrompt);
 }
 
 void AudioPlayer::CancelWakeup() {
@@ -319,9 +330,8 @@ bool AudioPlayer::ResumeMusic() {
     if (resume_paused_session && music_channel_ != nullptr) {
         if (music_channel_->IsPaused()) {
             // TTS 已经结束，先恢复暂停点前已经解码的 PCM，再恢复 GMF。
-            audio_service_->ResumePlayerPlayback(PlaybackOutputEvent{
+            audio_service_->ResumePlayback(AudioOutputEvent{
                 .session_id = session_id,
-                .channel = PlaybackChannel::kMusic,
             });
             if (music_channel_->Resume()) {
                 return true;
@@ -361,8 +371,20 @@ bool AudioPlayer::PauseMusic() {
         return false;
     }
     // 暂停点前已经解码的 PCM 需要保留，TTS 结束后与 GMF 一起续播。
-    audio_service_->SuspendPlayerPlayback();
+    audio_service_->SuspendPlayback();
     return true;
+}
+
+void AudioPlayer::PlaySound(std::string_view sound) {
+    if (audio_service_ != nullptr) {
+        audio_service_->PlaySound(sound);
+    }
+}
+
+void AudioPlayer::ResetPlayback() {
+    if (audio_service_ != nullptr) {
+        audio_service_->ResetDecoder();
+    }
 }
 
 void AudioPlayer::SetTtsUrlCallback(TtsUrlCallback callback) {
@@ -370,16 +392,18 @@ void AudioPlayer::SetTtsUrlCallback(TtsUrlCallback callback) {
     tts_url_callback_ = std::move(callback);
 }
 
-void AudioPlayer::PublishPlayerOutputStarted(const PlaybackOutputEvent& event) {
-    if (!AppEvent::Publish(AppEvent::Id::PlayerOutputStarted, event)) {
+void AudioPlayer::PublishPlayerOutputStarted(const AudioOutputEvent& event) {
+    const auto output = ToPlaybackOutputEvent(event);
+    if (!AppEvent::Publish(AppEvent::Id::PlayerOutputStarted, output)) {
         ESP_LOGE(TAG, "发布播放器首帧输出事件失败");
     }
 }
 
-void AudioPlayer::PublishPlayerOutputProgress(const PlaybackOutputEvent& event) {
+void AudioPlayer::PublishPlayerOutputProgress(const AudioOutputEvent& event) {
+    const auto output = ToPlaybackOutputEvent(event);
     {
         std::lock_guard<std::mutex> lock(output_progress_mutex_);
-        latest_output_progress_ = event;
+        latest_output_progress_ = output;
     }
     // 播放进度属于高频事件，只保留一个待处理通知，Application 取最新值。
     if (!output_progress_event_pending_.exchange(true) &&
@@ -395,7 +419,31 @@ PlaybackOutputEvent AudioPlayer::TakeLatestOutputProgress() {
     return latest;
 }
 
+PlaybackOutputEvent AudioPlayer::ToPlaybackOutputEvent(
+        const AudioOutputEvent& event) const {
+    PlaybackOutputEvent output;
+    output.session_id = event.session_id;
+    output.audio_clock_ms = event.audio_clock_ms;
+    {
+        std::lock_guard<std::mutex> lock(session_mutex_);
+        const auto it = session_channels_.find(event.session_id);
+        if (it != session_channels_.end()) {
+            output.channel = it->second;
+        }
+    }
+    return output;
+}
+
+void AudioPlayer::RememberSession(uint32_t session_id, PlaybackChannel channel) {
+    if (session_id == 0) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(session_mutex_);
+    session_channels_[session_id] = channel;
+}
+
 void AudioPlayer::PublishBackendEvent(const PlaybackEvent& event) {
+    RememberSession(event.session_id, event.channel);
     if (!AppEvent::Publish(AppEvent::Id::PlaybackBackend, event)) {
         ESP_LOGE(TAG, "发布播放器内部事件失败: session=%lu, state=%u",
                  static_cast<unsigned long>(event.session_id),

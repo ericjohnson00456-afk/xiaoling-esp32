@@ -82,6 +82,9 @@ Application::~Application() {
     if (iat_end_subscription_id_ != 0) {
         XiaolingEventBus::GetInstance().Unsubscribe(iat_end_subscription_id_);
     }
+    if (tts_url_subscription_id_ != 0) {
+        XiaolingEventBus::GetInstance().Unsubscribe(tts_url_subscription_id_);
+    }
     if (clock_timer_handle_ != nullptr) {
         esp_timer_stop(clock_timer_handle_);
         esp_timer_delete(clock_timer_handle_);
@@ -1251,7 +1254,7 @@ void Application::HandleStateChangedEvent() {
             // GMF 解码结束后仍需排空 TTS PCM；此时 IsPlaying() 已可能为 false。
             if (active_tts_session_id_ == 0 && !tts_waiting_for_playback_.load() &&
                 !audio_player_.IsPlaying()) {
-                audio_service_.ResetDecoder();
+                audio_player_.ResetPlayback();
             } else if (active_tts_session_id_ != 0 && !audio_player_.IsPlaying()) {
                 ESP_LOGI(TAG, "TTS 会话仍在排空，保留播放器 PCM 队列: session=%lu",
                          static_cast<unsigned long>(active_tts_session_id_));
@@ -1401,7 +1404,7 @@ void Application::PlayRespakAudio(const char* name) {
             return;
         }
     }
-    audio_service_.PlaySound(std::string_view(
+    audio_player_.PlaySound(std::string_view(
         reinterpret_cast<const char*>(resource.address), resource.size));
 }
 
@@ -1423,7 +1426,7 @@ void Application::PlayActivationAudio(const char* name) {
             return;
         }
     }
-    audio_service_.PlaySound(std::string_view(
+    audio_player_.PlaySound(std::string_view(
         reinterpret_cast<const char*>(resource.address), resource.size));
 }
 

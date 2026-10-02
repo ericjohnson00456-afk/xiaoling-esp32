@@ -22,6 +22,7 @@ public:
     void PlayWakeup(std::function<void(bool)> completion);
     void CancelWakeup();
     bool IsWakeupPending() const { return static_cast<bool>(completion_); }
+    uint32_t WakeupSessionId() const { return wakeup_session_id_.load(); }
     bool IsWakeupTerminalEvent(const PlaybackEvent& event) const;
 
 private:

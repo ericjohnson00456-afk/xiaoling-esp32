@@ -20,6 +20,16 @@ void Application::InitializeAudio() {
     if (!audio_player_.Initialize(&audio_service_)) {
         ESP_LOGE(TAG, "音频播放器初始化失败");
     }
+    // TTS URL 由 Application 统一接入，再交给播放器管理通道和抢占关系。
+    tts_url_subscription_id_ = XiaolingEventBus::GetInstance().Subscribe(
+        XIAOLING_TTS_URL, [this](const XiaolingEvent& event) {
+            if (audio_player_.PlayTtsUrl(event.text) == 0) {
+                ESP_LOGW(TAG, "TTS URL 未能立即提交，播放器可能正在暂存");
+            }
+        });
+    if (tts_url_subscription_id_ == 0) {
+        ESP_LOGE(TAG, "订阅 TTS URL 事件失败");
+    }
     // 播放器事件栈初始化
     intent_manager_.Initialize(*this);
 

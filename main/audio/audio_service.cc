@@ -581,9 +581,7 @@ void AudioService::AudioOutputTask() {
             audio_playback_queue_.front()->type == kAudioTaskTypePlayerToPlaybackQueue;
         const bool initial_prebuffer = player_output_chunks_.load() == 0;
         const size_t prebuffer_target = initial_prebuffer
-                                            ? (player_tts_stream_
-                                                   ? TTS_INITIAL_PREBUFFER_BYTES
-                                                   : PLAYER_INITIAL_PREBUFFER_BYTES)
+                                            ? player_initial_prebuffer_bytes_
                                             : PLAYER_RECOVERY_PREBUFFER_BYTES;
         const auto queued_player_pcm_bytes = [this]() {
             size_t bytes = 0;
@@ -871,10 +869,8 @@ void AudioService::PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t
 }
 
 // 本地播放器入口：PCM 转为 codec 采样率后放入统一播放队列，wait 控制背压。
-bool AudioService::PushPcmToPlaybackQueue(const uint8_t* data, size_t size,
-                                          int sample_rate,
-                                          const PlaybackOutputEvent& output,
-                                          bool wait) {
+bool AudioService::PushPcm(const uint8_t* data, size_t size, int sample_rate,
+                           const AudioOutputEvent& output, bool wait) {
     if (data == nullptr || size == 0 || (size % sizeof(int16_t)) != 0) {
         ESP_LOGE(TAG, "无效的播放器 PCM 数据: data=%p, bytes=%u", data,
                  static_cast<unsigned>(size));
@@ -946,16 +942,16 @@ bool AudioService::PushPcmToPlaybackQueue(const uint8_t* data, size_t size,
 }
 
 // 新播放器会话重置下行解码/缓冲状态；暂停保存的音乐 PCM 不能被新 TTS 会话清掉。
-void AudioService::BeginPlayerPlayback(const PlaybackOutputEvent& output) {
+void AudioService::BeginPlayback(const AudioPlaybackConfig& config) {
     ResetPlayerPlaybackState(false);
     {
         std::lock_guard<std::mutex> lock(audio_queue_mutex_);
-        player_tts_stream_ = output.channel == PlaybackChannel::kTts;
+        player_initial_prebuffer_bytes_ = config.initial_prebuffer_bytes;
     }
     player_stream_active_.store(true);
 }
 
-void AudioService::SuspendPlayerPlayback() {
+void AudioService::SuspendPlayback() {
     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
     suspended_player_playback_queue_.clear();
     suspended_player_pcm_bytes_ = 0;
@@ -976,11 +972,11 @@ void AudioService::SuspendPlayerPlayback() {
              static_cast<unsigned>(suspended_player_pcm_bytes_));
 }
 
-void AudioService::ResumePlayerPlayback(const PlaybackOutputEvent& output) {
+void AudioService::ResumePlayback(const AudioOutputEvent& output) {
     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
     if (suspended_player_playback_queue_.empty()) {
         player_playback_finished_ = false;
-        player_tts_stream_ = false;
+        player_initial_prebuffer_bytes_ = 0;
         player_stream_active_.store(true);
         return;
     }
@@ -1001,7 +997,7 @@ void AudioService::ResumePlayerPlayback(const PlaybackOutputEvent& output) {
         }
     }
     player_playback_finished_ = false;
-    player_tts_stream_ = false;
+    player_initial_prebuffer_bytes_ = 0;
     player_prebuffering_ = false;
     player_prebuffer_wait_logged_ = false;
     player_output_chunks_.store(0);
@@ -1016,8 +1012,7 @@ void AudioService::ResumePlayerPlayback(const PlaybackOutputEvent& output) {
 }
 
 // 标记 PCM 已全部入队，使短尾帧越过预缓冲门槛，并补齐最后一个 DMA 缓冲。
-void AudioService::MarkPlayerPlaybackFinished(
-        const PlaybackOutputEvent& output) {
+void AudioService::MarkPlaybackFinished(const AudioOutputEvent& output) {
     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
     player_playback_finished_ = true;
 
@@ -1408,7 +1403,7 @@ void AudioService::ResetPlayerPlaybackState(bool clear_suspended_queue) {
         suspended_player_pcm_bytes_ = 0;
     }
     player_playback_finished_ = false;
-    player_tts_stream_ = false;
+    player_initial_prebuffer_bytes_ = 0;
     player_prebuffering_ = true;
     player_prebuffer_wait_logged_ = false;
     player_rebuffer_count_ = 0;

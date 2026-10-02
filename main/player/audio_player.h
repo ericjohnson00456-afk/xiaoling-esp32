@@ -5,9 +5,12 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <cstdint>
+#include <unordered_map>
 #include <vector>
 
+#include "audio/audio_output.h"
 #include "playlist/music_playlist.h"
 #include "types/playback_event.h"
 
@@ -55,6 +58,9 @@ public:
     bool IsMusicPlaying() const;
     bool PauseMusic();
     bool ResumeMusic();
+    // 应用层的本地提示音统一通过播放器提交，避免直接依赖 AudioService。
+    void PlaySound(std::string_view sound);
+    void ResetPlayback();
     void SetTtsUrlCallback(TtsUrlCallback callback);
 
     // 返回并清除最近一次合并后的实际扬声器输出进度。
@@ -63,8 +69,10 @@ public:
 private:
     // 后端线程只复制事件；通道状态和业务事件都在 app_event 任务处理。
     void PublishBackendEvent(const PlaybackEvent& event);
-    void PublishPlayerOutputStarted(const PlaybackOutputEvent& event);
-    void PublishPlayerOutputProgress(const PlaybackOutputEvent& event);
+    void PublishPlayerOutputStarted(const AudioOutputEvent& event);
+    void PublishPlayerOutputProgress(const AudioOutputEvent& event);
+    PlaybackOutputEvent ToPlaybackOutputEvent(const AudioOutputEvent& event) const;
+    void RememberSession(uint32_t session_id, PlaybackChannel channel);
     void HandleBackendEvent(const PlaybackEvent& event);
     void DispatchPlaybackEvent(const PlaybackEvent& event);
     uint32_t PlayMusicUrlInternal(const std::string& url);
@@ -85,4 +93,6 @@ private:
     mutable std::mutex output_progress_mutex_;
     PlaybackOutputEvent latest_output_progress_;
     std::atomic_bool output_progress_event_pending_{false};
+    mutable std::mutex session_mutex_;
+    std::unordered_map<uint32_t, PlaybackChannel> session_channels_;
 };

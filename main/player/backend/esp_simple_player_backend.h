@@ -19,7 +19,7 @@ public:
     EspSimplePlayerBackend() = default;
     ~EspSimplePlayerBackend() override;
 
-    bool Initialize(AudioService* audio_service, EventCallback callback) override;
+    bool Initialize(AudioOutput* audio_output, EventCallback callback) override;
     bool Play(const PlaybackRequest& request) override;
     bool Pause() override;
     bool Resume() override;
@@ -63,7 +63,7 @@ private:
     void HandleTtsPcmTimeout();
     static void CommandTaskEntry(void* arg);
 
-    AudioService* audio_service_ = nullptr;
+    AudioOutput* audio_output_ = nullptr;
     esp_asp_handle_t handle_ = nullptr;
     EventCallback event_callback_;
     mutable std::mutex mutex_;

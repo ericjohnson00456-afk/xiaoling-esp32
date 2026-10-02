@@ -1,7 +1,6 @@
 #include "tts_player.h"
 
 #include "backend/playback_backend.h"
-#include "xiaoling/xiaoling_events.h"
 
 #include <esp_log.h>
 
@@ -12,16 +11,7 @@
 #define TAG "TtsPlayer"
 
 TtsPlayer::TtsPlayer(PlaybackBackend& engine, SessionAllocator allocate_session)
-    : engine_(&engine), allocate_session_(std::move(allocate_session)) {
-    subscription_id_ = XiaolingEventBus::GetInstance().Subscribe(
-        XIAOLING_TTS_URL, [this](const XiaolingEvent& event) {
-            HandleSubscribedUrl(event.text);
-        });
-}
-
-TtsPlayer::~TtsPlayer() {
-    XiaolingEventBus::GetInstance().Unsubscribe(subscription_id_);
-}
+    : engine_(&engine), allocate_session_(std::move(allocate_session)) {}
 
 bool TtsPlayer::IsHttpUrl(const std::string& url) {
     const size_t scheme_size = url.rfind("https://", 0) == 0 ? 8 :
@@ -44,25 +34,7 @@ uint32_t TtsPlayer::Submit(const PlaybackRequest& request, PlaybackBackend& engi
 }
 
 uint32_t TtsPlayer::PlayUrl(const std::string& url) {
-    return PlayUrlInternal(url, false);
-}
-
-void TtsPlayer::HandleSubscribedUrl(std::string url) {
-    if (!IsHttpUrl(url)) {
-        ESP_LOGE(TAG, "拒绝无效的 TTS URL, bytes=%u", static_cast<unsigned>(url.size()));
-        return;
-    }
-    if (admission_callback_ && !admission_callback_()) {
-        {
-            std::lock_guard<std::mutex> lock(deferred_mutex_);
-            deferred_url_ = std::move(url);
-        }
-        ESP_LOGI(TAG, "唤醒提示音尚未排空，暂存 TTS URL");
-        return;
-    }
-    if (SubmitUrl(url, true) == 0) {
-        ESP_LOGE(TAG, "订阅到 TTS URL，但提交流式播放失败");
-    }
+    return PlayUrlInternal(url, true);
 }
 
 uint32_t TtsPlayer::PlayUrlInternal(const std::string& url, bool notify) {
@@ -71,6 +43,9 @@ uint32_t TtsPlayer::PlayUrlInternal(const std::string& url, bool notify) {
         return 0;
     }
     if (admission_callback_ && !admission_callback_()) {
+        std::lock_guard<std::mutex> lock(deferred_mutex_);
+        deferred_url_ = url;
+        ESP_LOGI(TAG, "唤醒提示音尚未排空，暂存 TTS URL");
         return 0;
     }
     return SubmitUrl(url, notify);

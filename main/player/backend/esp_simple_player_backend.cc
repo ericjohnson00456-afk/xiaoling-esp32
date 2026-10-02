@@ -1,6 +1,5 @@
 #include "esp_simple_player_backend.h"
 
-#include "audio_service.h"
 #include "resource/resource.h"
 #include "xiaoling/conn/network_diagnostics.h"
 
@@ -174,11 +173,11 @@ EspSimplePlayerBackend::~EspSimplePlayerBackend() {
     handle_ = nullptr;
 }
 
-bool EspSimplePlayerBackend::Initialize(AudioService* audio_service, EventCallback callback) {
+bool EspSimplePlayerBackend::Initialize(AudioOutput* audio_output, EventCallback callback) {
     if (initialized_) {
         return true;
     }
-    if (audio_service == nullptr) {
+    if (audio_output == nullptr) {
         return false;
     }
 
@@ -192,7 +191,7 @@ bool EspSimplePlayerBackend::Initialize(AudioService* audio_service, EventCallba
     esp_log_level_set("ESP_GMF_BLOCK", ESP_LOG_WARN);
     esp_log_level_set("ESP_GMF_EMBED_FLASH", ESP_LOG_WARN);
 
-    // Simple Player 内部包含解码任务；输出回调把解码后的 PCM 交给 AudioService。
+    // Simple Player 内部包含解码任务；输出回调把解码后的 PCM 交给 AudioOutput。
     esp_asp_cfg_t config = {};
     config.out.cb = OutputCallback;
     config.out.user_ctx = this;
@@ -221,7 +220,7 @@ bool EspSimplePlayerBackend::Initialize(AudioService* audio_service, EventCallba
         return false;
     }
 
-    audio_service_ = audio_service;
+    audio_output_ = audio_output;
     event_callback_ = std::move(callback);
     command_task_running_ = true;
     command_task_finished_ = false;
@@ -291,9 +290,11 @@ bool EspSimplePlayerBackend::DoPlay(const PlaybackRequest& request) {
     DisarmTtsPcmTimeout();
 
     // 新媒体开始前清掉旧下行 Opus 和残留 PCM，物理 I2S 仍由 AudioOutputTask 独占。
-    audio_service_->BeginPlayerPlayback(PlaybackOutputEvent{
+    audio_output_->BeginPlayback(AudioPlaybackConfig{
         .session_id = request.session_id,
-        .channel = request.channel,
+        .initial_prebuffer_bytes = request.channel == PlaybackChannel::kTts
+                                        ? kAudioTtsInitialPrebufferBytes
+                                        : kAudioPlayerInitialPrebufferBytes,
     });
     playback_started_ms_ = esp_log_timestamp();
     ESP_LOGI(TAG, "开始流式播放: session=%lu, channel=%d, host=%s, url_bytes=%u",
@@ -348,7 +349,7 @@ bool EspSimplePlayerBackend::DoPlay(const PlaybackRequest& request) {
         last_tts_pcm_us_ = 0;
         tts_timeout_stop_pending_ = false;
     }
-    audio_service_->ClearActivePlaybackQueue();
+    audio_output_->ClearActivePlaybackQueue();
     command_pending_playback_ = false;
     Emit(PlaybackEvent{
         .session_id = request.session_id,
@@ -469,7 +470,7 @@ bool EspSimplePlayerBackend::DoStop(PlaybackEndReason reason) {
         }
     }
     if (drain_only) {
-        audio_service_->ClearActivePlaybackQueue();
+        audio_output_->ClearActivePlaybackQueue();
         return true;
     }
 
@@ -625,7 +626,7 @@ void EspSimplePlayerBackend::HandleTtsPcmTimeout() {
              * 实际无声。因此使用扬声器最近一次完成输出的时间作为截止点，
              * 让五秒超时真正测量扬声器的无声时长。 */
             const uint32_t last_output_ms =
-                audio_service_->GetPlayerOutputLastActivityMs();
+                audio_output_->GetOutputLastActivityMs();
             if (last_output_ms != 0) {
                 reference_us = static_cast<int64_t>(last_output_ms) * 1000;
             }
@@ -836,16 +837,15 @@ int EspSimplePlayerBackend::EventCallbackAdapter(esp_asp_event_pkt_t* event, voi
 }
 
 int EspSimplePlayerBackend::HandleOutput(uint8_t* data, int data_size) {
-    if (data_size <= 0 || audio_service_ == nullptr) {
+    if (data_size <= 0 || audio_output_ == nullptr) {
         return ESP_FAIL;
     }
-    // 解码器每次输出 PCM 都经过这里，再进入 AudioService 的播放队列。
-    PlaybackOutputEvent output;
+    // 解码器每次输出 PCM 都经过这里，再进入 AudioOutput 的播放队列。
+    AudioOutputEvent output;
     uint32_t chunk_index = 0;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         output.session_id = current_request_.session_id;
-        output.channel = current_request_.channel;
         chunk_index = ++output_chunks_;
         if (playing_ && current_request_.channel == PlaybackChannel::kTts &&
             current_request_.session_id == tts_timeout_session_id_ &&
@@ -863,7 +863,7 @@ int EspSimplePlayerBackend::HandleOutput(uint8_t* data, int data_size) {
     }
     /* 播放器固定输出 CONFIG_AUDIO_SIMPLE_PLAYER_RESAMPLE_DEST_RATE，
        AudioService 会在放入播放队列前将其重采样到 codec 的实际输出采样率。 */
-    return audio_service_->PushPcmToPlaybackQueue(
+    return audio_output_->PushPcm(
                data, static_cast<size_t>(data_size),
                CONFIG_AUDIO_SIMPLE_PLAYER_RESAMPLE_DEST_RATE, output, true)
                ? ESP_OK
@@ -969,16 +969,15 @@ int EspSimplePlayerBackend::HandleEvent(esp_asp_event_pkt_t* event) {
              static_cast<unsigned long>(esp_log_timestamp() - playback_started_ms_),
              static_cast<unsigned long>(output_chunks_));
     if (state == ESP_ASP_STATE_FINISHED) {
-        audio_service_->MarkPlayerPlaybackFinished(PlaybackOutputEvent{
+        audio_output_->MarkPlaybackFinished(AudioOutputEvent{
             .session_id = playback_event.session_id,
-            .channel = playback_event.channel,
         });
         // GMF 完成只表示解码结束，还要等待 AudioOutputTask 写完最后一批 PCM。
-        audio_service_->WaitForPlaybackComplete();
+        audio_output_->WaitForPlaybackComplete();
         std::lock_guard<std::mutex> lock(mutex_);
         draining_ = false;
     } else if (state == ESP_ASP_STATE_STOPPED || state == ESP_ASP_STATE_ERROR) {
-        audio_service_->ClearActivePlaybackQueue();
+        audio_output_->ClearActivePlaybackQueue();
     }
 
     ESP_LOGI(TAG, "播放状态: session=%lu, state=%s",

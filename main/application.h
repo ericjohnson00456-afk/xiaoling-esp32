@@ -177,6 +177,7 @@ private:
     uint32_t iat_subscription_id_ = 0;
     uint32_t iat_update_subscription_id_ = 0;
     uint32_t iat_end_subscription_id_ = 0;
+    uint32_t tts_url_subscription_id_ = 0;
     std::vector<uint32_t> playback_event_subscription_ids_;
     std::vector<uint32_t> playback_output_event_subscription_ids_;
     std::vector<uint32_t> audio_event_subscription_ids_;
