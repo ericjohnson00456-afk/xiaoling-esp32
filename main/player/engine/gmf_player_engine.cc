@@ -364,17 +364,26 @@ bool GmfPlayerEngine::Pause() {
 
 bool GmfPlayerEngine::DoPause() {
     bool is_tts = false;
-    bool paused = false;
+    uint32_t session_id = 0;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!initialized_ || handle_ == nullptr || !playing_) {
             return false;
         }
         is_tts = current_request_.channel == PlaybackChannel::kTts;
-        paused = esp_audio_simple_player_pause(handle_) == ESP_GMF_ERR_OK;
+        session_id = current_request_.session_id;
     }
+
+    // GMF 的 pause 会同步等待 PAUSED 状态回调。回调也需要 mutex_，因此
+    // 不能在持锁期间调用，否则会互相等待直到 GMF 超时。
+    const bool paused =
+        esp_audio_simple_player_pause(handle_) == ESP_GMF_ERR_OK;
     if (paused && is_tts) {
         DisarmTtsPcmTimeout();
+    }
+    if (paused) {
+        ESP_LOGI(TAG, "播放已暂停: session=%lu",
+                 static_cast<unsigned long>(session_id));
     }
     return paused;
 }
@@ -385,15 +394,20 @@ bool GmfPlayerEngine::Resume() {
 
 bool GmfPlayerEngine::DoResume() {
     bool is_tts = false;
-    bool resumed = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!initialized_ || handle_ == nullptr || !playing_) {
             return false;
         }
         is_tts = current_request_.channel == PlaybackChannel::kTts;
-        resumed = esp_audio_simple_player_resume(handle_) == ESP_GMF_ERR_OK;
-        if (resumed && is_tts) {
+    }
+
+    // resume 同样会同步触发 RUNNING 状态回调，必须在 mutex_ 外调用。
+    const bool resumed =
+        esp_audio_simple_player_resume(handle_) == ESP_GMF_ERR_OK;
+    if (resumed && is_tts) {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
             const int64_t now_us = esp_timer_get_time();
             if (output_chunks_.load() == 0) {
                 tts_timeout_started_us_ = now_us;
@@ -402,8 +416,6 @@ bool GmfPlayerEngine::DoResume() {
             }
             tts_timeout_stop_pending_ = false;
         }
-    }
-    if (resumed && is_tts) {
         ArmTtsPcmTimeout(output_chunks_.load() == 0
                              ? kTtsFirstPcmTimeoutUs
                              : kTtsPcmStallTimeoutUs);

@@ -174,6 +174,8 @@ bool XiaolingConn::ResolveKuwoMusicUrl(const std::string& item_id, std::string& 
     const cJSON* audio_path = cJSON_GetObjectItemCaseSensitive(first, "audiopath");
     if (cJSON_IsString(audio_path) && audio_path->valuestring != nullptr) {
         url = audio_path->valuestring;
+        ESP_LOGI(TAG, "酷我歌曲 URL: itemid=%s, url=%s", item_id.c_str(),
+                 url.c_str());
     }
     cJSON_Delete(root);
     return !url.empty();

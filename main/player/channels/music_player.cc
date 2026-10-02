@@ -33,7 +33,9 @@ bool MusicPlayer::Pause() {
     if (!engine_->IsPlaying() || paused_) {
         return true;
     }
-    if (!engine_->Stop(PlaybackEndReason::kPreempted)) {
+    // 暂停必须保留 GMF 的 HTTP/解码会话和当前进度；Stop 会结束会话，
+    // 后续 Resume 只能重新提交 URL，导致音乐从头开始播放。
+    if (!engine_->Pause()) {
         return false;
     }
     paused_ = true;
