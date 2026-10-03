@@ -7,13 +7,9 @@
 #include "ui/ui_manager.h"
 #include "ui/ui_page_ids.h"
 #include "ui/utils/image/lvgl_image.h"
-#include "event/app_event.h"
 #include "system/device_status.h"
 
 #include <utility>
-#include <cstring>
-#include <algorithm>
-#include <cstdlib>
 
 #include <esp_log.h>
 
@@ -38,30 +34,13 @@ private:
 }  // namespace
 #endif
 
-namespace {
-
-bool ReadJsonUint32(const cJSON* object, const char* name, uint32_t* value) {
-    if (!cJSON_IsObject(object) || value == nullptr) {
-        return false;
-    }
-    const auto* item = cJSON_GetObjectItemCaseSensitive(object, name);
-    if (!cJSON_IsNumber(item) || item->valuedouble < 0.0 ||
-        item->valuedouble > static_cast<double>(UINT32_MAX)) {
-        return false;
-    }
-    const auto converted = static_cast<uint32_t>(item->valuedouble);
-    if (static_cast<double>(converted) != item->valuedouble) {
-        return false;
-    }
-    *value = converted;
-    return true;
-}
-
-}  // namespace
-
 HomePresenter& HomePresenter::GetInstance() {
     static HomePresenter instance;
     return instance;
+}
+
+HomePresenter::HomePresenter()
+    : voice_subtitles_(*this) {
 }
 
 const UiNavScreen& HomePresenter::Screen() {
@@ -85,7 +64,7 @@ int HomePresenter::Open(const UiNavScreen* screen, void** data) {
     (void)screen;
     auto& presenter = GetInstance();
     presenter.view_ = std::make_unique<HomeView>(UiManager::GetInstance().display());
-    presenter.SubscribeVoiceEvents();
+    presenter.voice_subtitles_.Start();
     *data = &presenter;
     return 0;
 }
@@ -133,24 +112,12 @@ int HomePresenter::Close(const UiNavScreen* screen, void* data) {
     if (presenter == nullptr) {
         return 0;
     }
-    presenter->UnsubscribeVoiceEvents();
+    presenter->voice_subtitles_.Stop();
     presenter->StopBannerTimer();
-    presenter->ResetSubtitles(true);
     presenter->view_.reset();
     presenter->last_emotion_.clear();
     presenter->last_chat_role_.clear();
     presenter->last_chat_text_.clear();
-    {
-        std::lock_guard<std::mutex> lock(presenter->iat_text_mutex_);
-        presenter->pending_iat_text_.clear();
-        presenter->pending_iat_received_us_ = 0;
-        presenter->iat_dispatch_pending_ = false;
-        ++presenter->last_voice_text_revision_;
-    }
-    presenter->iat_text_visible_ = false;
-    presenter->tts_progress_generation_.fetch_add(1);
-    presenter->latest_tts_audio_clock_ms_.store(0);
-    presenter->tts_progress_dispatch_pending_.store(false);
     return 0;
 }
 
@@ -170,328 +137,6 @@ void HomePresenter::ShowEmotionOnce(std::string emotion) {
 void HomePresenter::SetPowerSaveMode(bool enabled) {
     SetEmotion(enabled ? "sleepy" : "neutral");
     SetChatMessage("system", "");
-}
-
-void HomePresenter::SubscribeVoiceEvents() {
-    auto subscribe_text = [this](AppEvent::Id id) {
-        voice_event_subscriptions_.push_back(AppEvent::Subscribe(
-            id, [this](const AppEvent::Event& event) {
-                QueueIatText(std::string(event.Text()));
-            }));
-    };
-    subscribe_text(AppEvent::Id::XiaolingIatStart);
-    subscribe_text(AppEvent::Id::XiaolingIatUpdate);
-    subscribe_text(AppEvent::Id::XiaolingIatEnd);
-    voice_event_subscriptions_.push_back(AppEvent::Subscribe(
-        AppEvent::Id::XiaolingTtsTextStart, [this](const AppEvent::Event&) {
-            UiManager::GetInstance().Dispatch([this]() { OnTtsTextStart(); });
-        }));
-    voice_event_subscriptions_.push_back(AppEvent::Subscribe(
-        AppEvent::Id::XiaolingTtsTextUpdate, [this](const AppEvent::Event& event) {
-            UiManager::GetInstance().Dispatch(
-                [this, text = std::string(event.Text())]() { OnTtsTextUpdate(text); });
-        }));
-    voice_event_subscriptions_.push_back(AppEvent::Subscribe(
-        AppEvent::Id::XiaolingTtsTextInterrupt, [this](const AppEvent::Event&) {
-            UiManager::GetInstance().Dispatch(
-                [this]() { OnTtsTextInterrupt(); });
-        }));
-    voice_event_subscriptions_.push_back(AppEvent::Subscribe(
-        AppEvent::Id::XiaolingTtsStarted, [this](const AppEvent::Event&) {
-            const uint32_t generation = tts_progress_generation_.fetch_add(1) + 1;
-            latest_tts_audio_clock_ms_.store(0);
-            tts_progress_dispatch_pending_.store(false);
-            UiManager::GetInstance().Dispatch([this, generation]() {
-                if (generation == tts_progress_generation_.load()) {
-                    OnTtsPlaying();
-                }
-            });
-        }));
-    voice_event_subscriptions_.push_back(AppEvent::Subscribe(
-        AppEvent::Id::XiaolingTtsOutputProgress,
-        [this](const AppEvent::Event& event) {
-            uint32_t audio_clock_ms = 0;
-            const std::string text(event.Text());
-            if (!text.empty()) {
-                char* end = nullptr;
-                const unsigned long value = std::strtoul(text.c_str(), &end, 10);
-                if (end != text.c_str() && *end == '\0' && value <= UINT32_MAX) {
-                    audio_clock_ms = static_cast<uint32_t>(value);
-                }
-            }
-            QueueTtsAudioProgress(audio_clock_ms);
-        }));
-    voice_event_subscriptions_.push_back(AppEvent::Subscribe(
-        AppEvent::Id::XiaolingTtsStopped, [this](const AppEvent::Event&) {
-            const uint32_t generation = tts_progress_generation_.fetch_add(1) + 1;
-            latest_tts_audio_clock_ms_.store(0);
-            tts_progress_dispatch_pending_.store(false);
-            UiManager::GetInstance().Dispatch([this, generation]() {
-                if (generation == tts_progress_generation_.load()) {
-                    OnTtsStopped();
-                }
-            });
-        }));
-}
-
-void HomePresenter::QueueIatText(std::string text) {
-    if (text.empty()) {
-        return;
-    }
-    bool schedule = false;
-    {
-        std::lock_guard<std::mutex> lock(iat_text_mutex_);
-        pending_iat_text_ = std::move(text);
-        pending_iat_received_us_ = esp_timer_get_time();
-        ++last_voice_text_revision_;
-        if (!iat_dispatch_pending_) {
-            iat_dispatch_pending_ = true;
-            schedule = true;
-        }
-    }
-    if (schedule) {
-        UiManager::GetInstance().Dispatch([this]() { DrainIatText(); });
-    }
-}
-
-void HomePresenter::DrainIatText() {
-    std::string text;
-    uint32_t revision = 0;
-    int64_t received_us = 0;
-    {
-        std::lock_guard<std::mutex> lock(iat_text_mutex_);
-        text = pending_iat_text_;
-        revision = last_voice_text_revision_;
-        received_us = pending_iat_received_us_;
-    }
-    if (!text.empty()) {
-        if (subtitle_audio_started_) {
-            // In full duplex DeviceStatus intentionally remains listening
-            // during TTS, so its state callback cannot restore this UI. Let
-            // the first real IAT take ownership immediately, before GMF stop
-            // waits for the HTTP/decode pipeline to drain.
-            ResetSubtitles(true);
-            SetStatus(Lang::Strings::LISTENING);
-            SetEmotion("聆听");
-            ESP_LOGI(TAG, "非空 IAT 已接管 TTS UI，字幕时钟停止");
-        }
-        iat_text_visible_ = true;
-        SetText(std::move(text));
-        const int64_t now_us = esp_timer_get_time();
-        const int64_t delay_ms = (now_us - received_us) / 1000;
-        if (delay_ms >= 100 && now_us - last_iat_delay_log_us_ >= 1000000) {
-            last_iat_delay_log_us_ = now_us;
-            ESP_LOGW(TAG, "IAT UI 更新延迟: %ldms", static_cast<long>(delay_ms));
-        }
-    }
-
-    bool reschedule = false;
-    {
-        std::lock_guard<std::mutex> lock(iat_text_mutex_);
-        if (revision == last_voice_text_revision_) {
-            iat_dispatch_pending_ = false;
-        } else {
-            reschedule = true;
-        }
-    }
-    if (reschedule) {
-        UiManager::GetInstance().Dispatch([this]() { DrainIatText(); });
-    }
-}
-
-void HomePresenter::QueueTtsAudioProgress(uint32_t audio_clock_ms) {
-    uint32_t observed = latest_tts_audio_clock_ms_.load(std::memory_order_relaxed);
-    while (observed < audio_clock_ms &&
-           !latest_tts_audio_clock_ms_.compare_exchange_weak(
-               observed, audio_clock_ms, std::memory_order_release,
-               std::memory_order_relaxed)) {
-    }
-
-    bool expected = false;
-    if (!tts_progress_dispatch_pending_.compare_exchange_strong(expected, true)) {
-        return;
-    }
-    const uint32_t generation = tts_progress_generation_.load();
-    UiManager::GetInstance().Dispatch([this, generation]() {
-        if (generation != tts_progress_generation_.load()) {
-            return;
-        }
-        const uint32_t handled_clock = latest_tts_audio_clock_ms_.load();
-        OnTtsAudioProgress(handled_clock);
-        tts_progress_dispatch_pending_.store(false);
-        if (generation == tts_progress_generation_.load() &&
-            latest_tts_audio_clock_ms_.load() > handled_clock) {
-            QueueTtsAudioProgress(latest_tts_audio_clock_ms_.load());
-        }
-    });
-}
-
-void HomePresenter::UnsubscribeVoiceEvents() {
-    for (const auto id : voice_event_subscriptions_) {
-        AppEvent::Unsubscribe(id);
-    }
-    voice_event_subscriptions_.clear();
-}
-
-void HomePresenter::ResetSubtitles(bool clear_text) {
-    subtitle_segments_.clear();
-    subtitle_index_ = 0;
-    subtitle_audio_started_ = false;
-    subtitle_audio_clock_ms_ = 0;
-    if (clear_text && view_ != nullptr) {
-        view_->SetSubtitleText("");
-    }
-}
-
-void HomePresenter::OnTtsTextStart() {
-    if (view_ == nullptr) {
-        return;
-    }
-    const bool audio_started = subtitle_audio_started_;
-    const uint32_t audio_clock_ms = subtitle_audio_clock_ms_;
-    iat_text_visible_ = false;
-    ResetSubtitles(true);
-    if (audio_started) {
-        subtitle_audio_started_ = true;
-        subtitle_audio_clock_ms_ = audio_clock_ms;
-    }
-    ESP_LOGI(TAG, "字幕 UI 流开始: audio_started=%d, clock=%lums",
-             subtitle_audio_started_ ? 1 : 0,
-             static_cast<unsigned long>(subtitle_audio_clock_ms_));
-}
-
-void HomePresenter::OnTtsTextUpdate(const std::string& text) {
-    if (view_ == nullptr || text.empty()) {
-        return;
-    }
-    cJSON* root = cJSON_ParseWithLength(text.data(), text.size());
-    if (root == nullptr) {
-        ESP_LOGW(TAG, "字幕时间段 JSON 解析失败，已忽略: bytes=%u",
-                 static_cast<unsigned>(text.size()));
-        return;
-    }
-    std::function<void(const cJSON*)> add_segment = [this](const cJSON* item) {
-        if (!cJSON_IsObject(item)) {
-            return;
-        }
-        const auto* text_item = cJSON_GetObjectItemCaseSensitive(item, "text");
-        uint32_t cloud_index = 0;
-        uint32_t start_ms = 0;
-        uint32_t end_ms = 0;
-        const bool valid = cJSON_IsString(text_item) && text_item->valuestring != nullptr &&
-            text_item->valuestring[0] != '\0' &&
-            ReadJsonUint32(item, "index", &cloud_index) &&
-            ReadJsonUint32(item, "start_ms", &start_ms) &&
-            ReadJsonUint32(item, "end_ms", &end_ms) &&
-            end_ms > start_ms;
-        if (!valid) {
-            ESP_LOGW(TAG, "字幕时间段字段无效，已忽略");
-            return;
-        }
-
-        if ((subtitle_segments_.empty() && cloud_index != 0) ||
-            (!subtitle_segments_.empty() &&
-             (cloud_index != subtitle_segments_.back().cloud_index + 1 ||
-              start_ms < subtitle_segments_.back().end_ms))) {
-            ESP_LOGW(TAG, "字幕时间段乱序或重复，已忽略: index=%lu, start=%lums",
-                     static_cast<unsigned long>(cloud_index),
-                     static_cast<unsigned long>(start_ms));
-            return;
-        }
-        subtitle_segments_.push_back(
-            {cloud_index, text_item->valuestring, start_ms, end_ms});
-    };
-    if (cJSON_IsArray(root)) {
-        cJSON* item = nullptr;
-        cJSON_ArrayForEach(item, root) { add_segment(item); }
-    } else {
-        const cJSON* item = root;
-        const auto* nested = cJSON_IsObject(root)
-            ? cJSON_GetObjectItemCaseSensitive(root, "data") : nullptr;
-        if (nested != nullptr && cJSON_IsObject(nested)) item = nested;
-        add_segment(item);
-    }
-    ScheduleSubtitle();
-    cJSON_Delete(root);
-}
-
-void HomePresenter::OnTtsTextInterrupt() {
-    if (view_ == nullptr) {
-        return;
-    }
-    ResetSubtitles(true);
-}
-
-void HomePresenter::OnTtsPlaying() {
-    if (view_ == nullptr) {
-        return;
-    }
-    // 第一段 PCM 输出后才显示说话状态，避免仅收到 URL 时过早切换界面。
-    // DeviceStatus 仍是业务状态的唯一数据源。
-    SetStatus(Lang::Strings::SPEAKING);
-    SetEmotion("说话");
-    subtitle_audio_started_ = true;
-    subtitle_audio_clock_ms_ = 0;
-    ESP_LOGI(TAG, "字幕 UI 音频时钟启动");
-    ScheduleSubtitle();
-}
-
-void HomePresenter::OnTtsAudioProgress(uint32_t audio_clock_ms) {
-    if (view_ == nullptr || !subtitle_audio_started_) {
-        return;
-    }
-    subtitle_audio_clock_ms_ = std::max(subtitle_audio_clock_ms_, audio_clock_ms);
-    ScheduleSubtitle();
-}
-
-void HomePresenter::OnTtsStopped() {
-    if (view_ == nullptr) {
-        return;
-    }
-    ResetSubtitles(true);
-
-    // 这里只按 DeviceStatus 恢复界面，不自行决定下一业务状态。通常后续的
-    // 状态变化事件也会刷新 UI；退出请求已经处于 idle 时则由这里补一次刷新。
-    const auto state = DeviceStatus::GetState();
-    if (state == kDeviceStateIdle) {
-        SetStatus(Lang::Strings::STANDBY);
-        SetEmotion("待机");
-    } else if (state == kDeviceStateListening) {
-        SetStatus(Lang::Strings::LISTENING);
-        SetEmotion("聆听");
-    }
-}
-
-void HomePresenter::ScheduleSubtitle() {
-    if (iat_text_visible_ || !subtitle_audio_started_ ||
-        subtitle_index_ >= subtitle_segments_.size()) {
-        return;
-    }
-
-    const uint64_t elapsed_ms = subtitle_audio_clock_ms_;
-    while (subtitle_index_ < subtitle_segments_.size() &&
-           subtitle_segments_[subtitle_index_].end_ms <= elapsed_ms) {
-        ++subtitle_index_;
-    }
-    if (subtitle_index_ >= subtitle_segments_.size()) {
-        return;
-    }
-
-    const auto& segment = subtitle_segments_[subtitle_index_];
-    if (elapsed_ms < segment.start_ms) {
-        return;
-    }
-    if (view_ != nullptr) {
-        view_->SetSubtitleText(segment.text);
-        ESP_LOGI(TAG, "字幕 UI 显示: cloud_index=%lu, queue_index=%u, bytes=%u, interval=%lu-%lums, clock=%lums",
-                 static_cast<unsigned long>(segment.cloud_index),
-                 static_cast<unsigned>(subtitle_index_),
-                 static_cast<unsigned>(segment.text.size()),
-                 static_cast<unsigned long>(segment.start_ms),
-                 static_cast<unsigned long>(segment.end_ms),
-                 static_cast<unsigned long>(elapsed_ms));
-    }
-    ++subtitle_index_;
 }
 
 void HomePresenter::SetText(std::string text) {
