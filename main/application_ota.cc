@@ -2,7 +2,7 @@
 
 #include "board.h"
 #include "resource/resource.h"
-#include "settings.h"
+#include "system/settings.h"
 #include "shell/cmd/kv/kv_user.h"
 #include "system/time_sync.h"
 #include "ui/i18n/lang_config.h"

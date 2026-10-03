@@ -2,7 +2,7 @@
 #include "config.h"
 #include "custom_lcd_display.h"
 #include "display/lcd_display.h"
-#include "settings.h"
+#include "system/settings.h"
 #include "board.h"
 
 #include <vector>

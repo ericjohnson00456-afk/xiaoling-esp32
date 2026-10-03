@@ -15,7 +15,7 @@
 #include "otto_movements.h"
 #include "power_manager.h"
 #include "sdkconfig.h"
-#include "settings.h"
+#include "system/settings.h"
 #include <wifi_manager.h>
 
 #define TAG "OttoController"

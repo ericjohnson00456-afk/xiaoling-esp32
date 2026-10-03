@@ -4,7 +4,7 @@
 #include "codecs/audio_codec.h"
 #include "backlight.h"
 #include "board.h"
-#include "settings.h"
+#include "system/settings.h"
 #include "ui/ui.h"
 #include "xiaoling/session/session_core.h"
 

@@ -4,7 +4,7 @@
 #include "board.h"
 #include "display/display.h"
 #include "lvgl_theme.h"
-#include "settings.h"
+#include "system/settings.h"
 #include "ui/utils/emoji/emoji_repository.h"
 
 #include <algorithm>

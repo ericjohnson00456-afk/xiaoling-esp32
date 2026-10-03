@@ -17,7 +17,7 @@
 #include <driver/i2c_master.h>
 #include <driver/spi_master.h>
 #include "esp_io_expander_tca9554.h"
-#include "settings.h"
+#include "system/settings.h"
 
 #include <esp_lcd_touch_gt911.h>
 #include <esp_lvgl_port.h>

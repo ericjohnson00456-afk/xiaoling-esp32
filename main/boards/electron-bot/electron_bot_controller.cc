@@ -13,7 +13,7 @@
 #include "mcp_server.h"
 #include "movements.h"
 #include "sdkconfig.h"
-#include "settings.h"
+#include "system/settings.h"
 
 #define TAG "ElectronBotController"
 

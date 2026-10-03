@@ -7,7 +7,7 @@
 #include "board.h"
 #include "config.h"
 #include "esp_lvgl_port.h"
-#include "settings.h"
+#include "system/settings.h"
 
 #define TAG "CustomLcdDisplay"
 

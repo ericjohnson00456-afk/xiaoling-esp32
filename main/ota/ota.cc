@@ -1,6 +1,6 @@
 #include "ota.h"
 
-#include "settings.h"
+#include "system/settings.h"
 #include "system/system_info.h"
 #include "ui/i18n/lang_config.h"
 #include "xiaoling/conn/xiaoling_config.h"

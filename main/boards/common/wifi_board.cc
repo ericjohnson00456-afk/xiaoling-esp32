@@ -6,7 +6,7 @@
 #include "ui/ui.h"
 #include "system/system_info.h"
 #include "shell/cmd/kv/kv_user.h"
-#include "settings.h"
+#include "system/settings.h"
 #include "application.h"
 #include "resource/resource.h"
 

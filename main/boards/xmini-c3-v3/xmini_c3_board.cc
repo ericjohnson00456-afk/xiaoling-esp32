@@ -5,7 +5,7 @@
 #include "button.h"
 #include "led/single_led.h"
 #include "mcp_server.h"
-#include "settings.h"
+#include "system/settings.h"
 #include "config.h"
 #include "power_save_timer.h"
 #include "adc_battery_monitor.h"

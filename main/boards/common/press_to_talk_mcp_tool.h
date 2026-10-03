@@ -2,7 +2,7 @@
 #define PRESS_TO_TALK_MCP_TOOL_H
 
 #include "mcp_server.h"
-#include "settings.h"
+#include "system/settings.h"
 
 // 可复用的按键说话模式MCP工具类
 class PressToTalkMcpTool {

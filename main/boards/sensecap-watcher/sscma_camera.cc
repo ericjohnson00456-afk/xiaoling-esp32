@@ -5,7 +5,7 @@
 #include "board.h"
 #include "system_info.h"
 #include "config.h"
-#include "settings.h"
+#include "system/settings.h"
 
 #include <esp_log.h>
 #include <esp_heap_caps.h>

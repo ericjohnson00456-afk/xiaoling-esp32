@@ -16,7 +16,7 @@
 #include <esp_sleep.h>
 
 #include <esp_lcd_nv3023.h>
-#include "settings.h"
+#include "system/settings.h"
 
 #define TAG "XINGZHI_CUBE_0_85TFT_ML307"
 

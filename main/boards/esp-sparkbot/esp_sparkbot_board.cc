@@ -5,7 +5,7 @@
 #include "button.h"
 #include "config.h"
 #include "mcp_server.h"
-#include "settings.h"
+#include "system/settings.h"
 
 #include <esp_log.h>
 #include <esp_lcd_panel_vendor.h>

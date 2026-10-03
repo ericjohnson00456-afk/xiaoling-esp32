@@ -1,6 +1,6 @@
 #include "system_info.h"
 #include "xiaoling/conn/xiaoling_config.h"
-#include "shell/settings.h"
+#include "system/settings.h"
 
 #include <freertos/task.h>
 #include <esp_log.h>

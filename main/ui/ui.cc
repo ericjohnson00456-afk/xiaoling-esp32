@@ -4,7 +4,7 @@
 #include "board.h"
 #include "display/display.h"
 #include "system/device_status.h"
-#include "shell/settings.h"
+#include "system/settings.h"
 #include "shell/cmd/kv/kv_user.h"
 #include "ui/i18n/lang_config.h"
 #include "ui/screens/home/home_presenter.h"

@@ -2,7 +2,7 @@
 #include "display/display.h"
 #include "display/oled_display.h"
 #include "system/system_info.h"
-#include "settings.h"
+#include "system/settings.h"
 #include "ui/i18n/lang_config.h"
 
 #include <esp_log.h>

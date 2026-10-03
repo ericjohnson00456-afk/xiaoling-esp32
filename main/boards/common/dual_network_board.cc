@@ -1,7 +1,7 @@
 #include "dual_network_board.h"
 #include "display/display.h"
 #include "ui/i18n/lang_config.h"
-#include "settings.h"
+#include "system/settings.h"
 #include <esp_log.h>
 #include <esp_system.h>
 

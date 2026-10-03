@@ -1,7 +1,7 @@
 #include <esp_lcd_panel_vendor.h>
 #include <esp_log.h>
 #include <esp_system.h>
-#include "settings.h"
+#include "system/settings.h"
 #include "application.h"
 #include "ui/i18n/lang_config.h"
 #include "button.h"

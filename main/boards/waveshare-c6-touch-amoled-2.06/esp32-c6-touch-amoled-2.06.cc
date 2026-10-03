@@ -16,7 +16,7 @@
 #include <esp_lcd_panel_vendor.h>
 #include <driver/i2c_master.h>
 #include <driver/spi_master.h>
-#include "settings.h"
+#include "system/settings.h"
 
 #include <esp_lvgl_port.h>
 #include <lvgl.h>

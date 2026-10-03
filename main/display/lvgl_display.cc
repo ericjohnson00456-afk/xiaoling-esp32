@@ -10,7 +10,7 @@
 #include "display/lvgl_display.h"
 #include "board.h"
 #include "codecs/audio_codec.h"
-#include "settings.h"
+#include "system/settings.h"
 #include "ui/i18n/lang_config.h"
 #include "image_to_jpeg.h"
 

@@ -8,7 +8,7 @@
 #include "ui/i18n/lang_config.h"
 #include "mcp_server.h"
 #include "resource/resource.h"
-#include "settings.h"
+#include "system/settings.h"
 #include "serial_shell.h"
 #include "ui/ui.h"
 #include "shell/cmd/kv/kv_user.h"
@@ -238,16 +238,17 @@ void Application::HandlePlayerOutputProgressEvent(
 }
 
 void Application::Initialize() {
-    // 先挂载 ROMFS 格式资源。
-    if (!Resource::Initialize()) {
-        ESP_LOGE(TAG, "One or more required ROMFS resources are unavailable");
-    }
-
-    // 业务事件在独立任务中串行分发；必须先于音频、网络等事件生产者启动。
+    // 业务事件在独立任务中串行分发。
     if (!AppEvent::Initialize()) {
         ESP_LOGE(TAG, "应用事件循环初始化失败");
     }
 
+    // 挂载 ROMFS 格式资源。
+    if (!Resource::Initialize()) {
+        ESP_LOGE(TAG, "One or more required ROMFS resources are unavailable");
+    }
+
+    // 板型初始化。
     auto& board = Board::GetInstance();
     SetDeviceState(kDeviceStateStarting);
 
@@ -260,22 +261,27 @@ void Application::Initialize() {
     // 显示开发板名称和版本信息。
     Ui::SetChatMessage("system", SystemInfo::GetUserAgent());
 
+    // 启动串口调试终端。
+    if (!SerialShell::GetInstance().Initialize()) {
+        ESP_LOGW(TAG, "串口 Shell 初始化失败");
+    }
+
+    // 构造一次本地 MCP 工具表；WebSocket 首连和重连时直接复用。
+    McpServer::GetInstance().Initialize();
+
     // 音频模块内部按固定顺序完成订阅、回调绑定和任务启动。
     InitializeAudio();
+
+    // 闹钟的恢复、播放、时钟及云端同步钩子统一在 application_alarm.cc 安装。
+    InitializeAlarm();
 
     // 注册设备状态变化监听器。
     DeviceStatus::AddStateChangeListener([this](DeviceState old_state, DeviceState new_state) {
         xEventGroupSetBits(event_group_, MAIN_EVENT_STATE_CHANGED);
     });
 
-    // 闹钟的恢复、播放、时钟及云端同步钩子统一在 application_alarm.cc 安装。
-    InitializeAlarm();
-
     // 启动时钟定时器，用于更新状态栏。
     esp_timer_start_periodic(clock_timer_handle_, 1000000);
-
-    // 构造一次本地 MCP 工具表；WebSocket 首连和重连时直接复用。
-    McpServer::GetInstance().Initialize();
 
     // 注册网络事件回调，用于更新 UI 和处理网络状态。
     board.SetNetworkEventCallback([this](NetworkEvent event, const std::string& data) {
@@ -345,14 +351,10 @@ void Application::Initialize() {
 
     // 异步启动网络。
     board.StartNetwork();
+    board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
 
     // 立即更新状态栏以显示当前网络状态。
     Ui::UpdateStatusBar(true);
-
-    // 启动串口调试终端；该模块相互独立，启动失败不影响主流程。
-    if (!SerialShell::GetInstance().Initialize()) {
-        ESP_LOGW(TAG, "Serial shell initialization failed");
-    }
 
     // 初始化阶段必须等 OTA 检查与更新结束后，才能读取激活信息并创建小聆连接。
     // 等待期间仍复用应用事件分发器，保证升级确认按键、UI 调度和网络事件可用。
@@ -379,9 +381,6 @@ void Application::Initialize() {
     Ui::ShowNotification(std::string(Lang::Strings::VERSION) + version);
     Ui::SetChatMessage("system", "");
     PlayTone(59);
-
-    // 小聆会维持 WebSocket，并建立对时延敏感的 TTS HTTP 流。
-    Board::GetInstance().SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
 }
 
 void Application::Run() {

@@ -29,7 +29,7 @@
 #endif
 
 #include "ssid_manager.h"
-#include "settings.h"
+#include "system/settings.h"
 #include "ui/i18n/lang_config.h"
 #include "ui/ui.h"
 #include "application.h"

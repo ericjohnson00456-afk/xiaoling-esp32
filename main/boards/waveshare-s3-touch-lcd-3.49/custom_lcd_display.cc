@@ -7,7 +7,7 @@
 #include <esp_err.h>
 #include <esp_lvgl_port.h>
 #include <cstring>
-#include "settings.h"
+#include "system/settings.h"
 
 #include "esp_lcd_panel_io.h"
 

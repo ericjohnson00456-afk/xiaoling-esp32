@@ -1,6 +1,6 @@
 #include "device.h"
 
-#include "settings.h"
+#include "system/settings.h"
 #include "system/system_info.h"
 
 #include <cstdio>

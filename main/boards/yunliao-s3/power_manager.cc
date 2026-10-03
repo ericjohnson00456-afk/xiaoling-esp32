@@ -5,7 +5,7 @@
 #include "config.h"
 #include <esp_sleep.h>
 #include "esp_log.h"
-#include "settings.h"
+#include "system/settings.h"
 
 #define TAG "PowerManager"
 
