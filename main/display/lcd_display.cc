@@ -116,10 +116,9 @@ SpiLcdDisplay::SpiLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_h
 
     ESP_LOGI(TAG, "Initialize LVGL port");
     lvgl_port_cfg_t port_cfg = ESP_LVGL_PORT_INIT_CONFIG();
-    // The activation/OTA task runs at priority 2 and can spend long periods
-    // receiving resources. Keep LVGL above it so progress/result pages remain
-    // responsive while the download is in progress.
-    port_cfg.task_priority = 3;
+    // UI/OTA 使用优先级 7，音频实时任务使用优先级 8；保持界面及时刷新，
+    // 同时不抢占音频采集、AEC、编码和播放任务。
+    port_cfg.task_priority = 7;
 #if CONFIG_SPIRAM
     // LVGL is a low-priority UI task and its 7 KiB stack does not participate
     // in ISR/DMA work. Keep that stack out of scarce internal SRAM on boards
@@ -193,7 +192,7 @@ RgbLcdDisplay::RgbLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_h
 
     ESP_LOGI(TAG, "Initialize LVGL port");
     lvgl_port_cfg_t port_cfg = ESP_LVGL_PORT_INIT_CONFIG();
-    port_cfg.task_priority = 3;
+    port_cfg.task_priority = 7;
     port_cfg.timer_period_ms = 50;
     lvgl_port_init(&port_cfg);
 

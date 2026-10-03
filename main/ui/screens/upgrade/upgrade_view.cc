@@ -65,7 +65,7 @@ void UpgradeView::CreateUi() {
     bar_ = lv_bar_create(root_);
     lv_obj_set_width(bar_, LV_PCT(85));
     lv_obj_set_height(bar_, theme->spacing(5));
-    lv_bar_set_range(bar_, 0, 100);
+    lv_bar_set_range(bar_, 0, 1000);
     lv_bar_set_value(bar_, 0, LV_ANIM_OFF);
     lv_obj_align(bar_, LV_ALIGN_CENTER, 0, theme->spacing(4));
 
@@ -97,11 +97,11 @@ void UpgradeView::SetProgress(const std::string& target, int progress, size_t sp
     if (root_ == nullptr) return;
     DisplayLockGuard lock(display_);
     if (!lock.locked()) return;
-    const int bounded = std::max(0, std::min(100, progress));
+    const int bounded = std::max(0, std::min(1000, progress));
     char text[48];
     lv_label_set_text(target_, target.c_str());
     lv_bar_set_value(bar_, bounded, LV_ANIM_OFF);
-    std::snprintf(text, sizeof(text), "%d%%", bounded);
+    std::snprintf(text, sizeof(text), "%d.%d%%", bounded / 10, bounded % 10);
     lv_label_set_text(percent_, text);
     if (speed != 0) {
         std::snprintf(text, sizeof(text), "%u KB/s", static_cast<unsigned>(speed / 1024));

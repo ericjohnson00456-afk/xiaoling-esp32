@@ -245,6 +245,7 @@ bool Ota::Upgrade(const std::string& firmware_url, std::function<void(int progre
 
     char buffer[4096];
     size_t total_read = 0, recent_read = 0;
+    constexpr int64_t kProgressReportIntervalUs = 200000;
     auto last_calc_time = esp_timer_get_time();
     bool ota_started = false;
     std::string pending;
@@ -258,16 +259,27 @@ bool Ota::Upgrade(const std::string& firmware_url, std::function<void(int progre
             return false;
         }
 
-        // Calculate speed and progress every second
+        // 高频回调让升级页及时刷新；进度使用千分之一百分比，避免大文件
+        // 在整数百分比不变时看起来长时间没有变化。
         recent_read += ret;
         total_read += ret;
-        if (esp_timer_get_time() - last_calc_time >= 1000000 || ret == 0) {
-            size_t progress = total_read * 100 / content_length;
-            ESP_LOGI(TAG, "Progress: %u%% (%u/%u), Speed: %uB/s", progress, total_read, content_length, recent_read);
+        const int64_t now = esp_timer_get_time();
+        const int64_t elapsed = now - last_calc_time;
+        if (elapsed >= kProgressReportIntervalUs || ret == 0) {
+            const int progress = static_cast<int>(
+                std::min<uint64_t>(1000U,
+                    static_cast<uint64_t>(total_read) * 1000U / content_length));
+            const size_t speed = elapsed > 0
+                                     ? static_cast<size_t>(
+                                           static_cast<uint64_t>(recent_read) * 1000000U /
+                                           static_cast<uint64_t>(elapsed))
+                                     : 0;
+            ESP_LOGI(TAG, "Progress: %d.%d%% (%u/%u), Speed: %uB/s",
+                     progress / 10, progress % 10, total_read, content_length, speed);
             if (callback) {
-                callback(progress, recent_read);
+                callback(progress, speed);
             }
-            last_calc_time = esp_timer_get_time();
+            last_calc_time = now;
             recent_read = 0;
         }
 

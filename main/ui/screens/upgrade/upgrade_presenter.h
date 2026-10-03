@@ -13,6 +13,7 @@ public:
     static UpgradePresenter& GetInstance();
     static const UiNavScreen& Screen();
 
+    // progress uses 0.1% units: 0 is 0%, 1000 is 100%.
     void SetProgress(std::string target, int progress, size_t speed);
     void SetResult(std::string message);
 

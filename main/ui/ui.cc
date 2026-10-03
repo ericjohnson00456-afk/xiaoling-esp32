@@ -23,6 +23,7 @@
 #include <cJSON.h>
 
 #include <string>
+#include <algorithm>
 #include <cstdio>
 #include <optional>
 #include <utility>
@@ -447,7 +448,9 @@ void ShowUpgradeProgress(std::string target, int progress, size_t speed) {
         }
         if (auto* display = UiManager::GetInstance().display(); display != nullptr) {
             char text[80];
-            std::snprintf(text, sizeof(text), "%s %d%%", target.c_str(), progress);
+            const int bounded = std::max(0, std::min(1000, progress));
+            std::snprintf(text, sizeof(text), "%s %d.%d%%", target.c_str(),
+                          bounded / 10, bounded % 10);
             display->SetChatMessage("system", text);
         }
     });

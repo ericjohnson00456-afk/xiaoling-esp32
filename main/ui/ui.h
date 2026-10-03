@@ -86,6 +86,7 @@ void ShowWifiConfigHint(std::string ssid, std::string url);
 void SetPowerSaveMode(bool enabled);
 void SetDuplexMode(DuplexMode mode);
 void SetDuplexVisible(bool visible);
+// progress 使用千分之一百分比：0 表示 0%，1000 表示 100%。
 void ShowUpgradeProgress(std::string target, int progress, size_t speed = 0);
 void ShowUpgradeResult(std::string message);
 

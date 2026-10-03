@@ -19,6 +19,8 @@ namespace {
 constexpr char kTag[] = "ApplicationOta";
 constexpr EventBits_t kOtaConfirmStart = 1U << 13;
 constexpr EventBits_t kOtaConfirmSkip = 1U << 14;
+// OTA 下载会持续占用 CPU，但仍需低于音频实时任务（优先级 8）。
+constexpr UBaseType_t kOtaTaskPriority = 7;
 
 std::string FormatFirmwareSize(size_t size) {
     char text[32] = {};
@@ -62,7 +64,7 @@ void Application::StartOtaFlow() {
         app->OtaTask();
         app->ota_flow_.task_handle = nullptr;
         vTaskDelete(nullptr);
-    }, "ota_flow", 4096 * 3, this, 2, &ota_flow_.task_handle);
+    }, "ota_flow", 4096 * 3, this, kOtaTaskPriority, &ota_flow_.task_handle);
     if (result != pdPASS) {
         ota_flow_.task_handle = nullptr;
         ESP_LOGE(kTag, "Failed to create OTA flow task");
@@ -214,11 +216,12 @@ bool Application::CheckAssetsVersion() {
         ESP_LOGI(kTag, "Downloading %s resource from %s", item.label,
                  item.remote.url.c_str());
         SetDeviceState(kDeviceStateUpgrading);
+        // 先切到升级页，再播放提示音；用户能立即看到当前资源阶段。
+        Ui::ShowUpgradeProgress(item.updating_text, 0);
         if (!resource_tone_played) {
             PlayOtaTone(89);
             resource_tone_played = true;
         }
-        Ui::ShowUpgradeProgress(item.updating_text, 0);
         if (item.resource == Ota::Resource::WakeWord) {
             // The wake-word model points directly into its mapped ROMFS image.
             // Stop inference before the partition is unmapped and rewritten.
@@ -280,8 +283,9 @@ bool Application::CheckAssetsVersion() {
                 Ui::SetWakeWord(audio_service_.GetWakeWordName());
             }
         }
-        PlayOtaTone(90);
         Ui::ShowUpgradeResult(Lang::Strings::RESOURCE_UPDATE_SUCCESSFUL);
+        // 先显示结果，再播放提示音和等待重启，避免 UI 状态被音频阻塞。
+        PlayOtaTone(90);
         vTaskDelay(pdMS_TO_TICKS(3000));
         esp_restart();
         return true;
@@ -368,14 +372,15 @@ bool Application::UpgradeFirmware(const std::string& url, const std::string& ver
 
     ESP_LOGI(kTag, "Starting firmware upgrade from URL: %s", url.c_str());
 
+    SetDeviceState(kDeviceStateUpgrading);
     Ui::SetStatusText(Lang::Strings::OTA_UPGRADE);
     Ui::SetEmotion("download");
     Ui::SetChatMessage("system", Lang::Strings::UPGRADING);
-    PlayOtaTone(87);
-    SetDeviceState(kDeviceStateUpgrading);
 
     Ui::SetChatMessage("system", std::string(Lang::Strings::NEW_VERSION) + version_info);
+    // 提前显示升级页，避免等待提示音结束后用户才看到进度界面。
     Ui::ShowUpgradeProgress("APP", 0);
+    PlayOtaTone(87);
 
     board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
     audio_service_.Stop();
@@ -388,6 +393,7 @@ bool Application::UpgradeFirmware(const std::string& url, const std::string& ver
         ESP_LOGW(kTag, "Firmware download failed; keeping current firmware");
         audio_service_.Start();
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
+        Ui::ShowUpgradeResult(Lang::Strings::UPGRADE_FAILED);
         Ui::SetChatMessage("system", Lang::Strings::UPGRADE_FAILED);
         PlayOtaTone(92);
         Ui::SetEmotion("microchip_ai");
@@ -398,6 +404,7 @@ bool Application::UpgradeFirmware(const std::string& url, const std::string& ver
     ESP_LOGI(kTag, "Firmware upgrade successful, rebooting...");
     Settings ota_settings("ota", true);
     ota_settings.SetBool("app_update_pending_success", true);
+    Ui::ShowUpgradeResult(Lang::Strings::UPGRADE_SUCCESSFUL_REBOOTING);
     Ui::SetChatMessage("system", Lang::Strings::UPGRADE_SUCCESSFUL_REBOOTING);
     vTaskDelay(pdMS_TO_TICKS(1000));
     esp_restart();

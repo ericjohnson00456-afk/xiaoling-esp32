@@ -30,11 +30,14 @@ public:
     esp_err_t CheckResources();
     bool VerifyResource(Resource resource, size_t expected_size,
                         const std::array<uint8_t, 16>& expected_md5);
+    // Progress is reported in 0.1% units (0..1000); speed is bytes per second.
     bool UpgradeResource(Resource resource, const std::string& url, size_t expected_size,
                          const std::array<uint8_t, 16>& expected_md5,
                          std::function<void(int progress, size_t speed)> callback);
     bool HasNewVersion() { return has_new_version_; }
-    static bool Upgrade(const std::string& firmware_url, std::function<void(int progress, size_t speed)> callback);
+    // Progress is reported in 0.1% units (0..1000); speed is bytes per second.
+    static bool Upgrade(const std::string& firmware_url,
+                        std::function<void(int progress, size_t speed)> callback);
     void MarkCurrentVersionValid();
 
     const std::string& GetFirmwareVersion() const { return firmware_version_; }

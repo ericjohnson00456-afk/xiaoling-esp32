@@ -67,7 +67,7 @@ void UpgradePresenter::SetProgress(std::string target, int progress, size_t spee
 void UpgradePresenter::SetResult(std::string message) {
     result_visible_ = true;
     target_ = std::move(message);
-    progress_ = 100;
+    progress_ = 1000;
     speed_ = 0;
     if (view_ != nullptr) view_->SetResult(target_);
 }

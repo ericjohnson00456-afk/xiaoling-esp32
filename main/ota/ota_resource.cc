@@ -290,6 +290,7 @@ bool Ota::UpgradeResource(Resource resource, const std::string& url, size_t expe
     mbedtls_md5_starts(&md5);
     size_t written = 0;
     size_t recent_read = 0;
+    constexpr int64_t kProgressReportIntervalUs = 200000;
     int64_t last_report_time = esp_timer_get_time();
     while (written < content_length) {
         const int ret = http->Read(buffer.get(), std::min(kBufferSize, content_length - written));
@@ -305,8 +306,17 @@ bool Ota::UpgradeResource(Resource resource, const std::string& url, size_t expe
         written += static_cast<size_t>(ret);
         recent_read += static_cast<size_t>(ret);
         const int64_t now = esp_timer_get_time();
-        if (callback && (now - last_report_time >= 1000000 || written == content_length)) {
-            callback(static_cast<int>(written * 100 / content_length), recent_read);
+        const int64_t elapsed = now - last_report_time;
+        if (callback && (elapsed >= kProgressReportIntervalUs || written == content_length)) {
+            const int progress = static_cast<int>(
+                std::min<uint64_t>(1000U,
+                    static_cast<uint64_t>(written) * 1000U / content_length));
+            const size_t speed = elapsed > 0
+                                     ? static_cast<size_t>(
+                                           static_cast<uint64_t>(recent_read) * 1000000U /
+                                           static_cast<uint64_t>(elapsed))
+                                     : 0;
+            callback(progress, speed);
             last_report_time = now;
             recent_read = 0;
         }

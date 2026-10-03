@@ -47,7 +47,9 @@ bool UiManager::StartTask() {
     if (task_handle_ != nullptr) {
         return true;
     }
-    if (xTaskCreate(TaskEntry, "ui", 6144, this, tskIDLE_PRIORITY + 2,
+    // UI 命令处理需要及时跟上 OTA/业务状态，但保持在音频实时任务（8）之下。
+    constexpr UBaseType_t kUiTaskPriority = tskIDLE_PRIORITY + 7;
+    if (xTaskCreate(TaskEntry, "ui", 6144, this, kUiTaskPriority,
                     &task_handle_) != pdPASS) {
         ESP_LOGE(TAG, "Failed to create UI task");
         task_handle_ = nullptr;
@@ -55,7 +57,8 @@ bool UiManager::StartTask() {
     }
     // Dispatch() 允许在任务启动前入队，因此启动后主动通知一次，处理已有命令。
     xTaskNotifyGive(task_handle_);
-    ESP_LOGI(TAG, "UI task started");
+    ESP_LOGI(TAG, "UI task started: priority=%u",
+             static_cast<unsigned>(kUiTaskPriority));
     return true;
 }
 
