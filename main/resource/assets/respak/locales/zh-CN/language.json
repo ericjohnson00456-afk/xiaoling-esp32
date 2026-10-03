@@ -59,6 +59,7 @@
         "UPDATING_WAKE_WORD_RESOURCE": "正在更新唤醒词资源...",
         "RESOURCE_UPDATE_SUCCESSFUL": "资源更新成功",
         "RESOURCE_UPDATE_FAILED": "资源更新失败",
+        "RESOURCE_UPDATE_RESTARTING": "资源更新失败，3 秒后重启",
         "LOADING_ASSETS": "加载资源...",
         "PLEASE_WAIT": "请稍候...",
         "FOUND_NEW_ASSETS": "发现新资源: %s",

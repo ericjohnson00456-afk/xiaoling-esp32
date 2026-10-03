@@ -61,6 +61,7 @@
         "UPDATING_WAKE_WORD_RESOURCE": "Updating wake-word resources...",
         "RESOURCE_UPDATE_SUCCESSFUL": "Resources updated successfully",
         "RESOURCE_UPDATE_FAILED": "Resource update failed",
+        "RESOURCE_UPDATE_RESTARTING": "Resource update failed, restarting in 3 seconds",
         "LOADING_ASSETS": "Loading assets...",
         "HELLO_MY_FRIEND": "Hello, my friend!",
         "LANGUAGE_SWITCHED": "Switched to English",

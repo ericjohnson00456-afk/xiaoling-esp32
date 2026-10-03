@@ -190,9 +190,11 @@ private:
     struct OtaFlowState {
         std::unique_ptr<Ota> client;
         TaskHandle_t task_handle = nullptr;
+        bool startup_check_started = false;
         bool resources_checked = false;
         std::atomic_bool completed{false};
         std::atomic_bool succeeded{false};
+        std::atomic_bool resource_restart_pending{false};
         std::atomic_bool confirmation_pending{false};
         std::atomic_int confirmation_decision{0};
     } ota_flow_;

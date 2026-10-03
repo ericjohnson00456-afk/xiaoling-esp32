@@ -365,10 +365,19 @@ void Application::Initialize() {
     if (!WaitForOtaFlowCompletion()) {
         ESP_LOGE(TAG, "OTA 流程失败，停止设备激活和小聆连接");
         SetDeviceState(kDeviceStateIdle);
-        Ui::SetStatusText(Lang::Strings::ERROR);
+        const bool resource_restart_pending =
+            ota_flow_.resource_restart_pending.load();
+        Ui::SetStatusText(resource_restart_pending
+                              ? Lang::Strings::RESOURCE_UPDATE_FAILED
+                              : Lang::Strings::ERROR);
         Ui::SetEmotion("circle_xmark");
-        Ui::SetChatMessage("system", last_error_message_);
-        PlayTone(94);
+        Ui::SetChatMessage(
+            "system", resource_restart_pending
+                          ? Lang::Strings::RESOURCE_UPDATE_RESTARTING
+                          : last_error_message_);
+        if (!resource_restart_pending) {
+            PlayTone(94);
+        }
         return;
     }
 

@@ -37,6 +37,14 @@ std::string FormatFirmwareSize(size_t size) {
 }  // namespace
 
 void Application::StartOtaFlow() {
+    // 网络重连也会产生 NetworkConnected 事件，但 OTA 只属于本次上电的
+    // 启动流程，不能因为断线重连或重新配网重复检查。
+    if (ota_flow_.startup_check_started) {
+        ESP_LOGI(kTag, "启动 OTA 检查已执行，跳过本次网络连接事件");
+        return;
+    }
+    ota_flow_.startup_check_started = true;
+
     if (ota_flow_.task_handle != nullptr) {
         ESP_LOGW(kTag, "OTA flow is already running");
         return;
@@ -45,6 +53,7 @@ void Application::StartOtaFlow() {
     ota_flow_.resources_checked = false;
     ota_flow_.completed.store(false);
     ota_flow_.succeeded.store(false);
+    ota_flow_.resource_restart_pending.store(false);
     ota_flow_.confirmation_pending.store(false);
     ota_flow_.confirmation_decision.store(0);
     SetDeviceState(kDeviceStateActivating);
@@ -110,20 +119,33 @@ void Application::OtaTask() {
         return;
     }
 
-    const esp_err_t resource_check = ota_flow_.client->CheckResources();
+    esp_err_t resource_check = ESP_FAIL;
+    constexpr int kResourceCheckAttempts = 3;
+    for (int attempt = 1; attempt <= kResourceCheckAttempts; ++attempt) {
+        resource_check = ota_flow_.client->CheckResources();
+        if (resource_check == ESP_OK || resource_check == ESP_ERR_NOT_FOUND) {
+            break;
+        }
+        ESP_LOGW(kTag, "Resource OTA URL check failed (%s), retry %d/%d",
+                 esp_err_to_name(resource_check), attempt, kResourceCheckAttempts);
+        if (attempt < kResourceCheckAttempts) {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        }
+    }
     if (resource_check != ESP_OK && resource_check != ESP_ERR_NOT_FOUND) {
         // Resource metadata is optional during startup. No resource partition
         // has been modified at this point, so a transport/server failure is
         // safe to treat as "local resources are current" and startup can
-        // continue. Failures after a resource download starts still reboot in
-        // CheckAssetsVersion(), because those partitions are written in place.
+        // continue after the three attempts. Resource write failures are
+        // reported on the UI before restarting; precondition failures are
+        // retried and then skipped.
         ESP_LOGW(kTag,
-                 "Resource OTA metadata check failed (%s); treating local resources as latest and continuing",
-                 esp_err_to_name(resource_check));
+                 "Resource OTA URL check failed after %d attempts (%s); treating local resources as latest and continuing",
+                 kResourceCheckAttempts, esp_err_to_name(resource_check));
     }
     if (!CheckAssetsVersion()) {
         ESP_LOGE(kTag, "Resource OTA failed");
-        last_error_message_ = Lang::Strings::DOWNLOAD_ASSETS_FAILED;
+        last_error_message_ = Lang::Strings::RESOURCE_UPDATE_FAILED;
         CompleteOtaFlow(false);
         return;
     }
@@ -162,6 +184,15 @@ bool Application::CheckAssetsVersion() {
     bool resource_tone_played = false;
     bool emoji_downloaded = false;
     bool wake_word_downloaded = false;
+    const auto restartAfterResourceFailure = [this]() -> bool {
+        ota_flow_.resource_restart_pending.store(true);
+        // 资源下载期间 UI 已经切换到 OTA 升级页。直接更新升级页结果，
+        // 避免只更新后台 Home 页而导致用户看不到失败提示。
+        Ui::ShowUpgradeResult(Lang::Strings::RESOURCE_UPDATE_RESTARTING);
+        vTaskDelay(pdMS_TO_TICKS(3000));
+        esp_restart();
+        return false;
+    };
     for (const auto& item : pending) {
         if ((item.resource == Ota::Resource::WakeWord &&
              KvOta::IsDisabled(KvOta::UpdateType::WakeWord)) ||
@@ -195,15 +226,25 @@ bool Application::CheckAssetsVersion() {
         } else if (item.resource == Ota::Resource::Tone) {
             // Every indexed tone address points into the current mmap. Do not
             // unmap or rewrite the partition until all GMF readers have exited.
-            audio_player_.Stop(PlaybackEndReason::kCancelled);
-            const TickType_t stop_started = xTaskGetTickCount();
-            while (audio_player_.IsPlaying() &&
-                   xTaskGetTickCount() - stop_started < pdMS_TO_TICKS(3000)) {
-                vTaskDelay(pdMS_TO_TICKS(20));
+            bool tone_stopped = false;
+            for (int attempt = 1; attempt <= 3; ++attempt) {
+                audio_player_.Stop(PlaybackEndReason::kCancelled);
+                const TickType_t stop_started = xTaskGetTickCount();
+                while (audio_player_.IsPlaying() &&
+                       xTaskGetTickCount() - stop_started < pdMS_TO_TICKS(3000)) {
+                    vTaskDelay(pdMS_TO_TICKS(20));
+                }
+                if (!audio_player_.IsPlaying()) {
+                    tone_stopped = true;
+                    break;
+                }
+                ESP_LOGW(kTag, "Tone playback did not stop before resource update, retry %d/3",
+                         attempt);
             }
-            if (audio_player_.IsPlaying()) {
-                ESP_LOGE(kTag, "Tone playback did not stop before resource update");
-                return false;
+            if (!tone_stopped) {
+                // 播放器无法安全停止时只跳过 tone 更新，继续检查其他资源。
+                ESP_LOGW(kTag, "Skipping tone resource update after 3 stop retries");
+                continue;
             }
         }
         board.SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
@@ -214,9 +255,10 @@ bool Application::CheckAssetsVersion() {
             });
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
         if (!success) {
-            ESP_LOGE(kTag, "Failed to update %s resource; rebooting to retry", item.label);
-            esp_restart();
-            return false;
+            ESP_LOGE(kTag, "Failed to update %s resource; rebooting in 3 seconds", item.label);
+            // 资源更新失败不播放提示音，避免 tone 分区已被擦除时访问失效映射。
+            // UI 提示 3 秒后自动重启，下一次启动流程会重新尝试更新。
+            return restartAfterResourceFailure();
         }
         downloaded = true;
         if (item.resource == Ota::Resource::Emoji) {
@@ -343,10 +385,11 @@ bool Application::UpgradeFirmware(const std::string& url, const std::string& ver
         Ui::ShowUpgradeProgress("APP", progress, speed);
     });
     if (!upgrade_success) {
-        ESP_LOGW(kTag, "Firmware upgrade interrupted; treating the current firmware as latest and continuing");
+        ESP_LOGW(kTag, "Firmware download failed; keeping current firmware");
         audio_service_.Start();
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
-        Ui::SetChatMessage("system", "");
+        Ui::SetChatMessage("system", Lang::Strings::UPGRADE_FAILED);
+        PlayOtaTone(92);
         Ui::SetEmotion("microchip_ai");
         SetDeviceState(kDeviceStateActivating);
         return false;
