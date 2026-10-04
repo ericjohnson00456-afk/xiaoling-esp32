@@ -283,8 +283,8 @@ void HomeView::CreateUi() {
 
     music_title_label_ = lv_label_create(music_bar_);
     lv_obj_set_width(music_title_label_, LV_HOR_RES * 72 / 100);
-    // 只静态显示当前曲目；超长歌名末尾省略，避免产生列表轮询的观感。
-    lv_label_set_long_mode(music_title_label_, LV_LABEL_LONG_DOT);
+    // 始终只显示当前曲目；歌名超出可用宽度时循环滚动，确保完整可见。
+    lv_label_set_long_mode(music_title_label_, LV_LABEL_LONG_SCROLL_CIRCULAR);
     lv_obj_set_style_text_align(music_title_label_, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(music_title_label_, theme->text_color(), 0);
     if (text_font != nullptr) {

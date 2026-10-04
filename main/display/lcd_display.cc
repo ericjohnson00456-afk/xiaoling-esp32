@@ -116,11 +116,10 @@ SpiLcdDisplay::SpiLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_h
 
     ESP_LOGI(TAG, "Initialize LVGL port");
     lvgl_port_cfg_t port_cfg = ESP_LVGL_PORT_INIT_CONFIG();
-    // UI/OTA 使用优先级 7，音频实时任务使用优先级 8；保持界面及时刷新，
-    // 同时不抢占音频采集、AEC、编码和播放任务。
-    port_cfg.task_priority = 7;
+    // 与音频实时任务使用相同优先级，避免音乐解码启动时压住 LVGL 动画。
+    port_cfg.task_priority = 8;
 #if CONFIG_SPIRAM
-    // LVGL is a low-priority UI task and its 7 KiB stack does not participate
+    // LVGL task stack does not participate
     // in ISR/DMA work. Keep that stack out of scarce internal SRAM on boards
     // with PSRAM; boards built without PSRAM retain the component default.
     if (esp_psram_is_initialized()) {
@@ -192,7 +191,7 @@ RgbLcdDisplay::RgbLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_h
 
     ESP_LOGI(TAG, "Initialize LVGL port");
     lvgl_port_cfg_t port_cfg = ESP_LVGL_PORT_INIT_CONFIG();
-    port_cfg.task_priority = 7;
+    port_cfg.task_priority = 8;
     port_cfg.timer_period_ms = 50;
     lvgl_port_init(&port_cfg);
 
@@ -247,6 +246,7 @@ MipiLcdDisplay::MipiLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel
 
     ESP_LOGI(TAG, "Initialize LVGL port");
     lvgl_port_cfg_t port_cfg = ESP_LVGL_PORT_INIT_CONFIG();
+    port_cfg.task_priority = 8;
     lvgl_port_init(&port_cfg);
 
     ESP_LOGI(TAG, "Adding LCD display");

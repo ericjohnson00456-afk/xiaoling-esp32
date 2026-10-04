@@ -47,8 +47,8 @@ bool UiManager::StartTask() {
     if (task_handle_ != nullptr) {
         return true;
     }
-    // UI 命令处理需要及时跟上 OTA/业务状态，但保持在音频实时任务（8）之下。
-    constexpr UBaseType_t kUiTaskPriority = tskIDLE_PRIORITY + 7;
+    // 与 LVGL 和音频实时任务保持同级，及时处理界面命令。
+    constexpr UBaseType_t kUiTaskPriority = tskIDLE_PRIORITY + 8;
     if (xTaskCreate(TaskEntry, "ui", 6144, this, kUiTaskPriority,
                     &task_handle_) != pdPASS) {
         ESP_LOGE(TAG, "Failed to create UI task");
