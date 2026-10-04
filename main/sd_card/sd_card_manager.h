@@ -1,0 +1,62 @@
+#pragma once
+
+#include <atomic>
+#include <cstdint>
+#include <functional>
+#include <mutex>
+#include <optional>
+#include <string>
+#include <vector>
+
+#include <esp_err.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+
+#include "sd_card_config.h"
+
+struct SdCardFile {
+    std::string path;
+    uint64_t size = 0;
+};
+
+enum class SdCardEvent {
+    kInserted,
+    kRemoved,
+};
+
+class SdCardManager {
+public:
+    using EventCallback = std::function<void(SdCardEvent)>;
+
+    static SdCardManager& GetInstance();
+
+    SdCardManager(const SdCardManager&) = delete;
+    SdCardManager& operator=(const SdCardManager&) = delete;
+
+    esp_err_t Initialize();
+    esp_err_t Deinitialize();
+    esp_err_t StartMonitoring(const SdSpiCardConfig& config,
+                              EventCallback callback);
+    esp_err_t ScanFiles(std::vector<SdCardFile>& files) const;
+    bool IsConfigured() const;
+    bool IsMounted() const;
+    const char* MountPoint() const;
+
+private:
+    SdCardManager() = default;
+
+    esp_err_t Mount(bool log_details);
+    bool ProbeMountedCard() const;
+    void Notify(SdCardEvent event);
+    void MonitorLoop();
+    static void MonitorTaskEntry(void* arg);
+
+    mutable std::mutex mutex_;
+    std::optional<SdSpiCardConfig> config_;
+    void* card_ = nullptr;
+    bool mounted_ = false;
+    bool removal_pending_ = false;
+    EventCallback event_callback_;
+    std::atomic_bool monitoring_{false};
+    TaskHandle_t monitor_task_ = nullptr;
+};

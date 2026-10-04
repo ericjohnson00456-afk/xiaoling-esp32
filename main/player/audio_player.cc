@@ -9,6 +9,8 @@
 #include "event/app_event.h"
 
 #include <esp_log.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #include <utility>
 
@@ -210,6 +212,33 @@ uint32_t AudioPlayer::PlayMusicUrlInternal(const std::string& url) {
     return session_id;
 }
 
+uint32_t AudioPlayer::PlayMusicFile(const std::string& path) {
+    if (backend_ == nullptr || audio_service_ == nullptr || wakeup_in_progress_ ||
+        path.empty()) {
+        return 0;
+    }
+    if (music_backend_ == nullptr) {
+        auto backend = std::make_unique<EspSimplePlayerBackend>();
+        if (!backend->Initialize(audio_service_, [this](const PlaybackEvent& event) {
+                PublishBackendEvent(event);
+            })) {
+            return 0;
+        }
+        music_backend_ = std::move(backend);
+        music_channel_ = std::make_unique<MusicPlayer>(*music_backend_, [this]() {
+            return next_session_id_.fetch_add(1);
+        });
+    }
+    if (!StopNonMusic(PlaybackEndReason::kPreempted)) {
+        return 0;
+    }
+    // 串口文件播放是独立调试入口，清除网络列表，避免文件播完后误触发下一首。
+    music_playlist_->Clear();
+    const uint32_t session_id = music_channel_->PlayFile(path);
+    RememberSession(session_id, PlaybackChannel::kMusic);
+    return session_id;
+}
+
 uint32_t AudioPlayer::PlayTone(uint16_t tone_id) {
     if (backend_ == nullptr || tone_channel_ == nullptr || wakeup_in_progress_) {
         ESP_LOGW(TAG, "播放器不可用或唤醒提示音正在播放");
@@ -313,6 +342,27 @@ bool AudioPlayer::Stop(PlaybackEndReason reason) {
         audio_service_->ClearPlaybackQueue();
     }
     return main_stopped && music_stopped;
+}
+
+bool AudioPlayer::StopLocalFilePlayback(PlaybackEndReason reason) {
+    if (music_channel_ == nullptr || !music_channel_->IsLocalFilePlaying()) {
+        return true;
+    }
+    if (music_backend_ == nullptr || !music_backend_->Stop(reason)) {
+        return false;
+    }
+
+    // 拔卡流程必须等文件 IO 真正关闭后才能卸载 FATFS。
+    constexpr TickType_t kPollPeriod = pdMS_TO_TICKS(20);
+    constexpr int kMaxPolls = 100;
+    for (int i = 0; i < kMaxPolls; ++i) {
+        if (!music_backend_->IsPlaying()) {
+            return true;
+        }
+        vTaskDelay(kPollPeriod);
+    }
+    ESP_LOGE(TAG, "等待本地文件播放器停止超时");
+    return false;
 }
 
 bool AudioPlayer::StopNonMusic(PlaybackEndReason reason) {

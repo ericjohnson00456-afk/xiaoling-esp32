@@ -46,6 +46,7 @@ public:
     bool ReplayMusic(bool play_when_ready = true);
     void ClearMusicList();
     bool HasMusicList() const;
+    uint32_t PlayMusicFile(const std::string& path);
     uint32_t PlayTone(uint16_t tone_id);
     uint32_t PlayAlarmTone(uint16_t tone_id);
     uint32_t PlayAlarmTtsUrl(const std::string& url);
@@ -55,6 +56,8 @@ public:
     bool Pause();
     bool Resume();
     bool Stop(PlaybackEndReason reason = PlaybackEndReason::kCancelled);
+    bool StopLocalFilePlayback(
+        PlaybackEndReason reason = PlaybackEndReason::kCancelled);
     bool StopNonMusic(PlaybackEndReason reason = PlaybackEndReason::kPreempted);
     bool IsPlaying() const;
     bool IsMusicPlaying() const;

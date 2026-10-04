@@ -240,11 +240,14 @@ private:
     int64_t listening_started_at_us_ = 0;
 
 
-    // 主事件处理函数。
+    // 各模块初始化入口。
+    void InitializeSdCard();
     // 音频初始化按“订阅 -> 绑定发布回调 -> 启动任务”的顺序执行。
     void InitializeAudio();
     void RegisterAudioEventSubscribers();
     void BindAudioEventPublishers();
+
+    // 主事件处理函数。
     void HandleStateChangedEvent();
     void HandleToggleChatEvent();
     void HandleStartListeningEvent();

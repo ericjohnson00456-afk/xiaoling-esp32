@@ -39,5 +39,13 @@
 #define DISPLAY_BACKLIGHT_PIN GPIO_NUM_47
 #define DISPLAY_BACKLIGHT_OUTPUT_INVERT false
 
+// ESP32-S3-BOX-3-SENSOR 扩展板的 TF 卡接口，使用独立的 SPI2 总线。
+#define SD_CARD_SPI_HOST      SPI2_HOST
+#define SD_CARD_SPI_MOSI      GPIO_NUM_14
+#define SD_CARD_SPI_MISO      GPIO_NUM_9
+#define SD_CARD_SPI_SCLK      GPIO_NUM_11
+#define SD_CARD_SPI_CS        GPIO_NUM_12
+#define SD_CARD_POWER         GPIO_NUM_43
+#define SD_CARD_MOUNT_POINT   "/sdcard"
 
 #endif // _BOARD_CONFIG_H_

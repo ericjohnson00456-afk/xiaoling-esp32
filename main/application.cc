@@ -252,6 +252,9 @@ void Application::Initialize() {
     auto& board = Board::GetInstance();
     SetDeviceState(kDeviceStateStarting);
 
+    // 只有提供 SPI SD 卡配置的版型才会启动挂载和热插拔监测。
+    InitializeSdCard();
+
     // UI 模块自行创建任务并串行处理界面更新，Application 只发送状态。
     if (!Ui::Initialize()) {
         ESP_LOGE(TAG, "Home 页面初始化失败");

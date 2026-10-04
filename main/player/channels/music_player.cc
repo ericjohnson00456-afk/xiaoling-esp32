@@ -26,6 +26,28 @@ uint32_t MusicPlayer::PlayUrl(const std::string& url) {
     const auto session_id = Submit(request, *engine_);
     session_id_ = session_id;
     paused_ = false;
+    local_file_ = false;
+    return session_id;
+}
+
+uint32_t MusicPlayer::PlayFile(const std::string& path) {
+    if (path.empty()) {
+        return 0;
+    }
+    const std::string uri = path.rfind("file://", 0) == 0
+                                ? path
+                                : "file://" + (path.front() == '/' ? path.substr(1) : path);
+    PlaybackRequest request;
+    request.session_id = allocate_session_();
+    request.source_type = PlaybackSourceType::kFile;
+    request.channel = PlaybackChannel::kMusic;
+    request.source = uri;
+    request.priority = 20;
+    request.resumable = true;
+    const auto session_id = Submit(request, *engine_);
+    session_id_ = session_id;
+    paused_ = false;
+    local_file_ = session_id != 0;
     return session_id;
 }
 
@@ -65,9 +87,14 @@ bool MusicPlayer::IsAudible() const {
     return engine_->IsPlaying() && !paused_;
 }
 
+bool MusicPlayer::IsLocalFilePlaying() const {
+    return local_file_;
+}
+
 void MusicPlayer::Cancel(PlaybackBackend& engine) {
     engine.Stop(PlaybackEndReason::kCancelled);
     paused_ = false;
+    local_file_ = false;
     session_id_ = 0;
 }
 
@@ -83,6 +110,7 @@ void MusicPlayer::OnEvent(const PlaybackEvent& event) {
         event.state == PlaybackState::kCompleted ||
         event.state == PlaybackState::kFailed) {
         paused_ = false;
+        local_file_ = false;
         session_id_ = 0;
     }
 }

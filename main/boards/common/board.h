@@ -15,6 +15,7 @@
 #include "backlight.h"
 #include "camera.h"
 #include "image_fetcher.h"
+#include "sd_card/sd_card_config.h"
 
 /**
  * Network events for unified callback
@@ -74,6 +75,8 @@ public:
     virtual Backlight* GetBacklight() { return nullptr; }
     virtual Led* GetLed();
     virtual AudioCodec* GetAudioCodec() = 0;
+    // 未提供配置的版型不启用 SPI SD 卡服务。
+    virtual const SdSpiCardConfig* GetSdCardConfig() { return nullptr; }
     virtual bool GetTemperature(float& esp32temp);
     virtual Display* GetDisplay();
     virtual Camera* GetCamera();

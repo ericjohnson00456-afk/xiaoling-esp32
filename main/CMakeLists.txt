@@ -52,6 +52,7 @@ set(SOURCES "audio/codecs/audio_codec.cc"
             "application_audio.cc"
             "application_alarm.cc"
             "application_button.cc"
+            "application_sd_card.cc"
             "application_ota.cc"
             "ota/ota.cc"
             "ota/ota_firmware.cc"
@@ -61,6 +62,7 @@ set(SOURCES "audio/codecs/audio_codec.cc"
             "alarm/alarm_service.cc"
             "player/channels/alarm_player.cc"
             "shell/serial_shell.cc"
+            "sd_card/sd_card_manager.cc"
             "resource/resource.cc"
             "main.cc"
             "system/watchdog.cc"
@@ -768,7 +770,7 @@ include(${PROJECT_DIR}/main/audio/wake_words/micro_wake_word/models/models.cmake
 
 idf_component_register(SRCS ${SOURCES}
                     INCLUDE_DIRS ${INCLUDE_DIRS}
-                    REQUIRES espressif__adc_battery_estimation esp_adc efuse console spi_flash app_update esp_app_format esp_psram 78__esp-opus bt
+                    REQUIRES espressif__adc_battery_estimation esp_adc efuse console spi_flash app_update esp_app_format esp_psram 78__esp-opus bt fatfs
                     WHOLE_ARCHIVE
                     )
 

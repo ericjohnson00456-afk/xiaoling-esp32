@@ -3,6 +3,7 @@
 #include "cmd/kv/kv_user.h"
 #include "cmd/device.h"
 #include "cmd/reboot.h"
+#include "cmd/sd_card.h"
 #include "cmd/tasks.h"
 #include "cmd/wifi.h"
 
@@ -111,6 +112,9 @@ bool SerialShell::Initialize() {
     }
     if (ret == ESP_OK) {
         ret = RegisterWifiCommands();
+    }
+    if (ret == ESP_OK) {
+        ret = RegisterSdCardCommand();
     }
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to register shell commands: %s", esp_err_to_name(ret));

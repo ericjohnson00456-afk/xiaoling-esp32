@@ -193,6 +193,19 @@ public:
         return &audio_codec;
     }
 
+    virtual const SdSpiCardConfig* GetSdCardConfig() override {
+        static const SdSpiCardConfig config = {
+            .host = SD_CARD_SPI_HOST,
+            .mosi = SD_CARD_SPI_MOSI,
+            .miso = SD_CARD_SPI_MISO,
+            .sclk = SD_CARD_SPI_SCLK,
+            .cs = SD_CARD_SPI_CS,
+            .power = SD_CARD_POWER,
+            .power_on_level = 0,
+        };
+        return &config;
+    }
+
     virtual Display* GetDisplay() override {
         return display_;
     }

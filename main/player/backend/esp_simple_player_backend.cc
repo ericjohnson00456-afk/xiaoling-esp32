@@ -46,7 +46,7 @@ constexpr int kStreamingHttpBodyReadTimeoutMs = 50;
 constexpr size_t kPlayerCommandStackSize = 4096;
 // AudioPlayer 的控制、网络拉流和解码任务统一使用优先级 8。
 constexpr UBaseType_t kPlayerCommandPriority = 8;
-constexpr UBaseType_t kNetworkStreamPriority = 8;
+constexpr UBaseType_t kPlayerInputPriority = 8;
 constexpr UBaseType_t kPlayerDecodePriority = 8;
 // 首个 PCM 和播放中途的云端生成停顿使用相同的超时时间。
 // 首个 PCM 的计时从提交 HTTP 音频流时开始。
@@ -76,7 +76,7 @@ bool IsTtsPcmTimeout(PlaybackEndReason reason) {
 }  // namespace
 
 // 配置 esp_audio_simple_player 创建出的输入 IO。
-// HTTP 输入需要调整拉流任务和缓冲区；ROMFS 输入则绑定提示音资源表。
+// HTTP 和文件输入统一调整任务调度；ROMFS 输入绑定提示音资源表。
 int EspSimplePlayerBackend::ConfigureInputIo(esp_asp_handle_t handle, void* ctx) {
     auto* engine = static_cast<EspSimplePlayerBackend*>(ctx);
     if (engine == nullptr) {
@@ -94,6 +94,18 @@ int EspSimplePlayerBackend::ConfigureInputIo(esp_asp_handle_t handle, void* ctx)
 
     const char* input_tag = OBJ_GET_TAG(input);
     const bool is_http = input_tag != nullptr && strcasecmp(input_tag, "io_http") == 0;
+    const bool is_file = input_tag != nullptr && strcasecmp(input_tag, "io_file") == 0;
+
+    if (is_file) {
+        auto* io = static_cast<esp_gmf_io_t*>(input);
+        io->io_cfg.thread.prio = kPlayerInputPriority;
+        io->io_cfg.thread.core = kPlayerCommandCore;
+        io->io_cfg.thread.stack_in_ext = true;
+        ESP_LOGI(TAG, "文件输入任务已配置: priority=%u, core=%d",
+                 static_cast<unsigned>(kPlayerInputPriority),
+                 kPlayerCommandCore);
+        return ESP_GMF_ERR_OK;
+    }
 
     if (is_http) {
         // 在 esp_gmf_pipeline_run() 打开 IO 并创建任务、数据总线之前配置克隆出的
@@ -101,7 +113,7 @@ int EspSimplePlayerBackend::ConfigureInputIo(esp_asp_handle_t handle, void* ctx)
         auto* io = static_cast<esp_gmf_io_t*>(input);
         // 网络拉流任务需要先于解码和输出任务准备数据，同时避免 TTS 网络工作
         // 占用运行 AFE 的 0 号核心。
-        io->io_cfg.thread.prio = kNetworkStreamPriority;
+        io->io_cfg.thread.prio = kPlayerInputPriority;
         io->io_cfg.thread.core = kPlayerCommandCore;
         io->io_cfg.thread.stack_in_ext = true;
         io->io_cfg.buffer_cfg.io_size = kStreamingHttpReadSize;
@@ -125,7 +137,7 @@ int EspSimplePlayerBackend::ConfigureInputIo(esp_asp_handle_t handle, void* ctx)
                  "priority=%u, core=%d",
                  static_cast<unsigned>(kStreamingHttpReadSize),
                  static_cast<unsigned>(kStreamingHttpBufferSize),
-                 static_cast<unsigned>(kNetworkStreamPriority),
+                 static_cast<unsigned>(kPlayerInputPriority),
                  kPlayerCommandCore);
         // 保留组件原有的 acquire_read 实现。上面的回调只观察请求生命周期，
         // 这里保存的后端上下文与播放器句柄具有相同的生命周期。
@@ -268,7 +280,9 @@ bool EspSimplePlayerBackend::Initialize(AudioOutput* audio_output, EventCallback
 
 bool EspSimplePlayerBackend::Play(const PlaybackRequest& request) {
     if (!initialized_ || handle_ == nullptr ||
-        (request.source_type != PlaybackSourceType::kUrl && request.source_type != PlaybackSourceType::kRomfs)) {
+        (request.source_type != PlaybackSourceType::kUrl &&
+         request.source_type != PlaybackSourceType::kRomfs &&
+         request.source_type != PlaybackSourceType::kFile)) {
         return false;
     }
 
@@ -297,10 +311,17 @@ bool EspSimplePlayerBackend::DoPlay(const PlaybackRequest& request) {
                                         : kAudioPlayerInitialPrebufferBytes,
     });
     playback_started_ms_ = esp_log_timestamp();
-    ESP_LOGI(TAG, "开始流式播放: session=%lu, channel=%d, host=%s, url_bytes=%u",
-             static_cast<unsigned long>(request.session_id), static_cast<int>(request.channel),
-             UrlHostForLog(request.source).c_str(),
-             static_cast<unsigned>(request.source.size()));
+    if (request.source_type == PlaybackSourceType::kFile) {
+        ESP_LOGI(TAG, "开始文件播放: session=%lu, channel=%d, path=%s",
+                 static_cast<unsigned long>(request.session_id),
+                 static_cast<int>(request.channel), request.source.c_str());
+    } else {
+        ESP_LOGI(TAG, "开始流式播放: session=%lu, channel=%d, host=%s, url_bytes=%u",
+                 static_cast<unsigned long>(request.session_id),
+                 static_cast<int>(request.channel),
+                 UrlHostForLog(request.source).c_str(),
+                 static_cast<unsigned>(request.source.size()));
+    }
     const int64_t started_us = esp_timer_get_time();
     {
         std::lock_guard<std::mutex> lock(mutex_);
