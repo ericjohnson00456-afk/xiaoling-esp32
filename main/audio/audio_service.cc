@@ -51,7 +51,16 @@ constexpr UBaseType_t kAudioAfePriority = AfeAudioProcessor::kTaskPriority;
 #else
 constexpr UBaseType_t kAudioAfePriority = kAudioAlgorithmPriority;
 #endif
-constexpr uint32_t kAudioInputIdleYieldIntervalMs = 500;
+// 每次采集周期都主动阻塞一个 tick，给 CPU0 的 Idle、AppEvent 和网络任务
+// 留出调度机会。AFE/AEC 的 feed 计算可能长于一个采集周期，500ms 才让出
+// 一次会让看门狗在连续 DSP 负载下无法得到调度。
+constexpr TickType_t kAudioInputYieldTicks = 1;
+
+#if CONFIG_USE_MICRO_WAKE_WORD
+// 唤醒推理不能和 ADC/AFE feed 共同挤占 CPU0；移到 CPU1 后与 AFE fetch
+// 和播放器任务按同优先级时间片运行。
+constexpr BaseType_t kProcessedWakeTaskCore = 1;
+#endif
 
 #if CONFIG_USE_MICRO_WAKE_WORD
 bool HasSuffix(std::string_view value, std::string_view suffix) {
@@ -287,7 +296,8 @@ void AudioService::Start() {
         audio_service->ProcessedWakeTask();
         vTaskDeleteWithCaps(nullptr);
     }, "processed_wake", 2048 * 3, this, kAudioAlgorithmPriority,
-       &processed_wake_task_handle_, 0, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+       &processed_wake_task_handle_, kProcessedWakeTaskCore,
+       MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (wake_task_result != pdPASS) {
         ESP_LOGW(TAG, "PSRAM 唤醒任务栈分配失败，回退内部 SRAM");
         xTaskCreatePinnedToCore([](void* arg) {
@@ -295,7 +305,7 @@ void AudioService::Start() {
             audio_service->ProcessedWakeTask();
             vTaskDelete(nullptr);
         }, "processed_wake", 2048 * 3, this, kAudioAlgorithmPriority,
-           &processed_wake_task_handle_, 0);
+           &processed_wake_task_handle_, kProcessedWakeTaskCore);
     }
 #endif
 
@@ -404,18 +414,12 @@ void AudioService::AudioInputTask() {
     std::vector<int16_t> wake_pending;
     std::vector<int16_t> processor_pending;
     std::vector<int16_t> testing_pending;
-    TickType_t last_idle_yield_tick = xTaskGetTickCount();
     while (!service_stopped_.load()) {
         /* I2S input and synchronous AFE/AEC feed can form a continuously-ready
-         * loop while full-duplex upload is active. Periodically block for one
-         * scheduler tick so CPU0's Idle task can service the task watchdog.
-         * The codec DMA ring is substantially longer than this 10 ms tick. */
-        const TickType_t now_tick = xTaskGetTickCount();
-        if (now_tick - last_idle_yield_tick >=
-            pdMS_TO_TICKS(kAudioInputIdleYieldIntervalMs)) {
-            vTaskDelay(1);
-            last_idle_yield_tick = xTaskGetTickCount();
-        }
+         * loop while full-duplex upload is active. Block for one scheduler tick
+         * on every iteration so CPU0's Idle task and lower-priority application
+         * work continue to run even when DSP processing is saturated. */
+        vTaskDelay(kAudioInputYieldTicks);
 
         const bool testing_running = audio_testing_running_.load();
         if (testing_running) {
@@ -531,10 +535,8 @@ void AudioService::ProcessedWakeTask() {
         if (wake_uses_processor_output_.load() && IsWakeWordRunning()) {
             wake_word_->Feed(data);
         }
-        // The streaming model can remain continuously runnable while AEC is
-        // feeding it during TTS. Yield for one tick so the CPU0 application/UI
-        // task and idle watchdog are not starved by wake-word inference.
-        vTaskDelay(1);
+        // 队列为空时上面的条件变量会阻塞；队列不为空时直接连续消费，
+        // 避免人为增加 10 ms 延迟导致唤醒推理反而跟不上 AFE 输出。
     }
     ESP_LOGW(TAG, "Processed wake task stopped");
 }

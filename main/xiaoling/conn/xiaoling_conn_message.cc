@@ -76,14 +76,11 @@ std::string ReadErrorDetail(const cJSON* root) {
 }
 
 void LogTextFrame(const char* direction, const std::string& text) {
-    constexpr size_t kLogChunkBytes = 512;
-    for (size_t offset = 0, chunk = 0; offset < text.size();
-         offset += kLogChunkBytes, ++chunk) {
-        const size_t length = std::min(kLogChunkBytes, text.size() - offset);
-        ESP_LOGI(TAG, "WS %s text[%u]: %.*s", direction,
-                 static_cast<unsigned>(chunk), static_cast<int>(length),
-                 text.data() + offset);
-    }
+    // 完整打印 tools/list 等大 JSON 会占满 115200 波特率串口，阻塞日志输出，
+    // 还会让 monitor 把连续内容误判为乱码。默认只保留帧方向和长度，详细内容
+    // 需要调试时再通过提高 XiaolingConn 日志级别单独补充。
+    ESP_LOGD(TAG, "WS %s text: bytes=%u", direction,
+             static_cast<unsigned>(text.size()));
 }
 
 }  // 匿名命名空间

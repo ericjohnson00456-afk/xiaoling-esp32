@@ -81,10 +81,10 @@ void Dispatch(const QueuedEvent& queued) {
         const int64_t elapsed_us = esp_timer_get_time() - started_us;
         if (elapsed_us >= kSlowHandlerUs) {
             ESP_LOGW(kTag,
-                     "事件回调耗时过长: event=%u, subscription=%lu, elapsed=%lld us",
+                     "事件回调耗时过长: event=%u, subscription=%lu, elapsed=%lu us",
                      static_cast<unsigned>(queued.id),
                      static_cast<unsigned long>(matching[i].id),
-                     static_cast<long long>(elapsed_us));
+                     static_cast<unsigned long>(elapsed_us));
         }
     }
 }

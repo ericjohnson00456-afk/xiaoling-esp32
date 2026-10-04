@@ -55,8 +55,10 @@
 /* AudioService 始终生产 Opus，只保留最近 2.4 秒，业务未上报时覆盖旧包。 */
 #define MAX_OPUS_PACKETS_IN_QUEUE (2400 / OPUS_FRAME_DURATION_MS)
 // Wake inference must never build a stale backlog while AEC/TTS are active.
-// Keep only the newest couple of frames; overflow drops the oldest one.
-#define MAX_PROCESSED_WAKE_FRAMES_IN_QUEUE 2
+// Keep a short scheduling buffer; overflow drops the oldest frame.
+// AFE 输出和唤醒推理运行在同一核心，允许短时调度抖动积累约 160 ms
+// 音频，避免一次 AEC/播放器抢占就立即丢弃唤醒帧。
+#define MAX_PROCESSED_WAKE_FRAMES_IN_QUEUE 8
 #define AUDIO_TESTING_MAX_DURATION_MS 10000
 
 #define AUDIO_POWER_TIMEOUT_MS 15000
