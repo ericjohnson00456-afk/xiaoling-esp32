@@ -29,14 +29,17 @@ void MusicIntent::Initialize(PlaybackIntentManager &intent_manager,
                              Application &app) {
   app_ = &app;
   intent_manager_ = &intent_manager;
+  app_->audio_player_.SetMusicTrackCallback([](MusicTrack track) {
+    Ui::SetMusicTrack(std::move(track));
+  });
 }
 
-bool MusicIntent::SubmitKuwoList(std::vector<std::string> item_ids) {
-  if (!Ready() || item_ids.empty()) {
+bool MusicIntent::SubmitKuwoList(std::vector<MusicTrack> tracks) {
+  if (!Ready() || tracks.empty()) {
     return false;
   }
   user_paused_ = false;
-  SetPendingList(PendingListType::kKuwoItemIds, std::move(item_ids));
+  SetPendingKuwoList(std::move(tracks));
   if (!intent_manager_->Reenter(PlaybackIntentId::kMusic)) {
     ClearPendingList();
     return false;
@@ -96,22 +99,31 @@ void MusicIntent::SetPendingList(PendingListType type,
                                  std::vector<std::string> items) {
   pending_list_type_ = type;
   pending_list_ = std::move(items);
+  pending_kuwo_tracks_.clear();
+}
+
+void MusicIntent::SetPendingKuwoList(std::vector<MusicTrack> tracks) {
+  pending_list_type_ = PendingListType::kKuwoItemIds;
+  pending_list_.clear();
+  pending_kuwo_tracks_ = std::move(tracks);
 }
 
 void MusicIntent::ClearPendingList() {
   pending_list_type_ = PendingListType::kNone;
   pending_list_.clear();
+  pending_kuwo_tracks_.clear();
 }
 
 bool MusicIntent::StartPendingList() {
   const PendingListType type = pending_list_type_;
   std::vector<std::string> items = std::move(pending_list_);
+  std::vector<MusicTrack> tracks = std::move(pending_kuwo_tracks_);
   ClearPendingList();
 
   if (type == PendingListType::kKuwoItemIds) {
     return app_->audio_player_.PlayMusicItemList(
-        items, [this](const std::string &item_id,
-                      AudioPlayer::MusicUrlResolveCallback callback) {
+        tracks, [this](const std::string &item_id,
+                       AudioPlayer::MusicUrlResolveCallback callback) {
           return QueueKuwoUrlResolve(item_id, std::move(callback));
         });
   }

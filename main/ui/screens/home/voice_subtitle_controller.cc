@@ -299,7 +299,7 @@ void VoiceSubtitleController::OnTtsStopped() {
     ResetSubtitles(true);
     const auto state = DeviceStatus::GetState();
     if (state == kDeviceStateIdle) {
-        presenter_.SetStatus(Lang::Strings::STANDBY);
+        presenter_.SetStatus(Lang::Strings::STANDBY, true);
         presenter_.SetEmotion("待机");
     } else if (state == kDeviceStateListening) {
         presenter_.SetStatus(Lang::Strings::LISTENING);

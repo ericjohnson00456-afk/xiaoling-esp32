@@ -13,6 +13,7 @@
 #include "audio/audio_output.h"
 #include "playlist/music_playlist.h"
 #include "types/playback_event.h"
+#include "types/music_track.h"
 
 class AudioService;
 class PlaybackBackend;
@@ -26,6 +27,7 @@ public:
     using TtsUrlCallback = std::function<void()>;
     using MusicUrlResolveCallback = MusicPlaylist::MusicUrlResolveCallback;
     using MusicUrlResolver = MusicPlaylist::MusicUrlResolver;
+    using MusicTrackCallback = std::function<void(MusicTrack)>;
 
     AudioPlayer();
     ~AudioPlayer();
@@ -37,7 +39,7 @@ public:
     uint32_t PlayTtsUrl(const std::string& url);
     uint32_t PlayMusicUrl(const std::string& url);
     uint32_t PlayMusicList(const std::vector<std::string>& urls);
-    bool PlayMusicItemList(const std::vector<std::string>& item_ids,
+    bool PlayMusicItemList(const std::vector<MusicTrack>& tracks,
                            MusicUrlResolver resolver);
     bool PlayPreviousMusic(bool play_when_ready = true);
     bool PlayNextMusic(bool play_when_ready = true);
@@ -62,6 +64,7 @@ public:
     void PlaySound(std::string_view sound);
     void ResetPlayback();
     void SetTtsUrlCallback(TtsUrlCallback callback);
+    void SetMusicTrackCallback(MusicTrackCallback callback);
 
     // 返回并清除最近一次合并后的实际扬声器输出进度。
     PlaybackOutputEvent TakeLatestOutputProgress();
@@ -90,6 +93,7 @@ private:
     uint32_t backend_event_subscription_id_ = 0;
     mutable std::mutex callback_mutex_;
     TtsUrlCallback tts_url_callback_;
+    MusicTrackCallback music_track_callback_;
     mutable std::mutex output_progress_mutex_;
     PlaybackOutputEvent latest_output_progress_;
     std::atomic_bool output_progress_event_pending_{false};

@@ -82,7 +82,7 @@ int HomePresenter::Show(const UiNavScreen* screen, void* data) {
     presenter->SetWifiIcon(presenter->wifi_icon_);
     presenter->SetAlarmActive(presenter->alarm_active_);
     presenter->UpdateBattery();
-    presenter->SetStatus(presenter->status_text_);
+    presenter->SetStatus(presenter->status_text_, presenter->standby_);
     presenter->SetTime(presenter->time_text_);
     presenter->SetDuplexVisible(presenter->duplex_visible_);
 #ifdef CONFIG_LSPLATFORM
@@ -189,10 +189,23 @@ void HomePresenter::UpdateBattery() {
     }
 }
 
-void HomePresenter::SetStatus(std::string status) {
+void HomePresenter::SetStatus(std::string status, bool standby) {
     status_text_ = std::move(status);
+    standby_ = standby;
     if (view_ != nullptr) {
         view_->SetStatus(status_text_);
+        RenderMusicTrack();
+    }
+}
+
+void HomePresenter::SetMusicTrack(MusicTrack track) {
+    music_track_ = std::move(track);
+    RenderMusicTrack();
+}
+
+void HomePresenter::RenderMusicTrack() {
+    if (view_ != nullptr) {
+        view_->SetMusicTrack(music_track_, standby_ && !music_track_.name.empty());
     }
 }
 
@@ -295,7 +308,8 @@ void HomePresenter::SetBanners(std::vector<std::string> texts, uint32_t interval
         banner_texts_ = std::move(texts);
         banner_index_ = 0;
         has_banners = !banner_texts_.empty();
-        if (has_banners && DeviceStatus::GetState() == kDeviceStateIdle) {
+        if (has_banners && music_track_.name.empty() &&
+            DeviceStatus::GetState() == kDeviceStateIdle) {
             first_text = banner_texts_[banner_index_];
             banner_index_ = (banner_index_ + 1) % banner_texts_.size();
         }
@@ -339,20 +353,25 @@ void HomePresenter::BannerTimerCallback(void* arg) {
 }
 
 void HomePresenter::OnBannerTick() {
-    std::string text;
-    {
-        std::lock_guard<std::mutex> lock(banner_mutex_);
-        if (banner_texts_.empty() ||
+    UiManager::GetInstance().Dispatch([]() {
+        auto& home = HomePresenter::GetInstance();
+        // 歌曲名称占用待命内容区域时暂停 Banner。这里在 UI 队列中再次
+        // 判断，避免定时器投递后、命令执行前恰好发生曲目切换。
+        if (home.view_ == nullptr || !home.standby_ ||
+            !home.music_track_.name.empty() ||
             DeviceStatus::GetState() != kDeviceStateIdle) {
             return;
         }
-        text = banner_texts_[banner_index_];
-        banner_index_ = (banner_index_ + 1) % banner_texts_.size();
-    }
-    UiManager::GetInstance().Dispatch([text]() {
-        auto& home = HomePresenter::GetInstance();
-        if (home.view_ != nullptr) {
-            home.view_->SetText(text);
+        std::string text;
+        {
+            std::lock_guard<std::mutex> lock(home.banner_mutex_);
+            if (home.banner_texts_.empty()) {
+                return;
+            }
+            text = home.banner_texts_[home.banner_index_];
+            home.banner_index_ =
+                (home.banner_index_ + 1) % home.banner_texts_.size();
         }
+        home.view_->SetText(text);
     });
 }

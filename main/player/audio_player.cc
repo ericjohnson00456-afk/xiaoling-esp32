@@ -39,6 +39,15 @@ AppEvent::Id ToAppEventId(PlaybackState state) {
 AudioPlayer::AudioPlayer()
     : music_playlist_(std::make_unique<MusicPlaylist>([this](const std::string& url) {
           return PlayMusicUrlInternal(url);
+      }, [this](MusicTrack track) {
+          MusicTrackCallback callback;
+          {
+              std::lock_guard<std::mutex> lock(callback_mutex_);
+              callback = music_track_callback_;
+          }
+          if (callback) {
+              callback(std::move(track));
+          }
       })) {}
 AudioPlayer::~AudioPlayer() {
     AppEvent::Unsubscribe(backend_event_subscription_id_);
@@ -129,9 +138,9 @@ uint32_t AudioPlayer::PlayMusicList(const std::vector<std::string>& urls) {
     return music_playlist_->PlayUrlList(urls);
 }
 
-bool AudioPlayer::PlayMusicItemList(const std::vector<std::string>& item_ids,
+bool AudioPlayer::PlayMusicItemList(const std::vector<MusicTrack>& tracks,
                                     MusicUrlResolver resolver) {
-    return music_playlist_->PlayItemList(item_ids, std::move(resolver));
+    return music_playlist_->PlayItemList(tracks, std::move(resolver));
 }
 
 bool AudioPlayer::PlayPreviousMusic(bool play_when_ready) {
@@ -390,6 +399,11 @@ void AudioPlayer::ResetPlayback() {
 void AudioPlayer::SetTtsUrlCallback(TtsUrlCallback callback) {
     std::lock_guard<std::mutex> lock(callback_mutex_);
     tts_url_callback_ = std::move(callback);
+}
+
+void AudioPlayer::SetMusicTrackCallback(MusicTrackCallback callback) {
+    std::lock_guard<std::mutex> lock(callback_mutex_);
+    music_track_callback_ = std::move(callback);
 }
 
 void AudioPlayer::PublishPlayerOutputStarted(const AudioOutputEvent& event) {

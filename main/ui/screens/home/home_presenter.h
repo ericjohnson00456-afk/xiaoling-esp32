@@ -3,6 +3,7 @@
 #include "ui/nav_stack.h"
 #include "voice_subtitle_controller.h"
 #include "xiaoling/session/session_core.h"
+#include "player/types/music_track.h"
 
 #include <cstdint>
 #include <memory>
@@ -33,7 +34,8 @@ public:
     void SetWifiIcon(std::string icon);
     void SetAlarmActive(bool active);
     void UpdateBattery();
-    void SetStatus(std::string status);
+    void SetStatus(std::string status, bool standby = false);
+    void SetMusicTrack(MusicTrack track);
     void SetTime(std::string time);
     void SetDuplexMode(DuplexMode mode);
     void SetDuplexVisible(bool visible);
@@ -57,6 +59,7 @@ private:
     std::string SubstituteWakeWord(const std::string& text) const;
     void StopBannerTimer();
     void OnBannerTick();
+    void RenderMusicTrack();
     static void BannerTimerCallback(void* arg);
 
     std::unique_ptr<HomeView> view_;
@@ -76,6 +79,8 @@ private:
     int battery_level_ = 0;
     bool battery_charging_ = false;
     std::string status_text_;
+    MusicTrack music_track_;
+    bool standby_ = false;
     std::string time_text_;
     DuplexMode duplex_mode_ = DuplexMode::kHalfDuplex;
     bool duplex_visible_ = false;

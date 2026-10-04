@@ -2,6 +2,7 @@
 
 #include "ui/utils/image/lvgl_image.h"
 #include "ui/utils/emoji/png_animation_player.h"
+#include "player/types/music_track.h"
 
 #include <lvgl.h>
 
@@ -36,6 +37,7 @@ public:
     void SetAlarmActive(bool active);
     void SetBattery(int level, bool charging);
     void SetStatus(const std::string& status);
+    void SetMusicTrack(const MusicTrack& track, bool visible);
     void SetTime(const std::string& time);
     void SetDuplexMode(DuplexMode mode);
 
@@ -61,6 +63,9 @@ private:
     lv_obj_t* status_label_ = nullptr;
     lv_obj_t* notification_label_ = nullptr;
     lv_obj_t* chat_message_label_ = nullptr;
+    lv_obj_t* music_bar_ = nullptr;
+    lv_obj_t* music_icon_label_ = nullptr;
+    lv_obj_t* music_title_label_ = nullptr;
 #ifdef CONFIG_LSPLATFORM
     lv_obj_t* image_container_ = nullptr;
     lv_obj_t* image_ = nullptr;

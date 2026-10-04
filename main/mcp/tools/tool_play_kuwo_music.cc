@@ -7,11 +7,34 @@
 
 #include "application.h"
 #include "mcp_server.h"
+#include "player/types/music_track.h"
 #include <cJSON.h>
 
 namespace {
 constexpr const char *kItemsSchema =
     R"({"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"name":{"type":"string"},"playable":{"type":"integer"},"itemid":{"oneOf":[{"type":"string"},{"type":"integer"}]}},"required":["itemid"]}}},"required":["items"]})";
+
+std::string ParseDisplayName(const cJSON *name) {
+  if (!cJSON_IsString(name) || name->valuestring == nullptr) {
+    return {};
+  }
+  const std::string raw_name = name->valuestring;
+  cJSON *parsed = cJSON_ParseWithLength(raw_name.data(), raw_name.size());
+  if (parsed == nullptr) {
+    return raw_name;
+  }
+
+  std::string display_name;
+  const cJSON *value = parsed;
+  if (cJSON_IsArray(parsed)) {
+    value = cJSON_GetArrayItem(parsed, 0);
+  }
+  if (cJSON_IsString(value) && value->valuestring != nullptr) {
+    display_name = value->valuestring;
+  }
+  cJSON_Delete(parsed);
+  return display_name.empty() ? raw_name : display_name;
+}
 
 MCP_REGISTER_TOOL(RegisterPlayKuwoMusic, McpToolGroup::kCommon, 20) {
   server.AddTool(
@@ -35,29 +58,40 @@ MCP_REGISTER_TOOL(RegisterPlayKuwoMusic, McpToolGroup::kCommon, 20) {
           cJSON_Delete(root);
           throw std::runtime_error("没有可播放的酷我音乐");
         }
-        std::vector<std::string> item_ids;
+        std::vector<MusicTrack> tracks;
         for (int i = 0; i < cJSON_GetArraySize(items); ++i) {
           cJSON *item = cJSON_GetArrayItem(items, i);
           cJSON *id = cJSON_IsObject(item) ? cJSON_GetObjectItem(item, "itemid")
                                            : nullptr;
+          std::string item_id;
           if (cJSON_IsString(id) && id->valuestring != nullptr &&
               id->valuestring[0] != '\0') {
-            item_ids.emplace_back(id->valuestring);
+            item_id = id->valuestring;
           } else if (cJSON_IsNumber(id) && std::isfinite(id->valuedouble) &&
                      id->valuedouble >= 0 &&
                      std::floor(id->valuedouble) == id->valuedouble) {
             char text[32] = {};
             std::snprintf(text, sizeof(text), "%.0f", id->valuedouble);
-            item_ids.emplace_back(text);
+            item_id = text;
+          }
+          if (!item_id.empty()) {
+            cJSON *name = cJSON_IsObject(item)
+                              ? cJSON_GetObjectItem(item, "name")
+                              : nullptr;
+            tracks.push_back(MusicTrack{
+                .id = std::move(item_id),
+                .name = ParseDisplayName(name),
+                .source = MusicSource::kKuwoOnline,
+            });
           }
         }
         cJSON_Delete(root);
-        if (item_ids.empty())
+        if (tracks.empty())
           throw std::runtime_error("没有可播放的酷我音乐");
         if (!Application::GetInstance()
                  .GetIntentManager()
                  .Music()
-                 .SubmitKuwoList(std::move(item_ids)))
+                 .SubmitKuwoList(std::move(tracks)))
           throw std::runtime_error("提交酷我播放列表失败");
         return std::string("播放成功");
       });

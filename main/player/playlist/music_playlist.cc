@@ -8,8 +8,10 @@
 
 #define TAG "MusicPlaylist"
 
-MusicPlaylist::MusicPlaylist(StartPlaybackCallback start_playback)
-    : start_playback_(std::move(start_playback)) {}
+MusicPlaylist::MusicPlaylist(StartPlaybackCallback start_playback,
+                             TrackChangedCallback track_changed)
+    : start_playback_(std::move(start_playback)),
+      track_changed_(std::move(track_changed)) {}
 
 uint32_t MusicPlaylist::PlayUrl(const std::string& url) {
     if (!TtsPlayer::IsHttpUrl(url)) {
@@ -18,7 +20,10 @@ uint32_t MusicPlaylist::PlayUrl(const std::string& url) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         items_.clear();
-        items_.push_back(MusicListItem{.url = url});
+        items_.push_back(MusicListItem{
+            .track = MusicTrack{.id = url},
+            .url = url,
+        });
         current_index_ = 0;
         active_index_ = static_cast<std::size_t>(-1);
         ++generation_;
@@ -38,7 +43,10 @@ uint32_t MusicPlaylist::PlayUrlList(const std::vector<std::string>& urls) {
     valid_urls.reserve(urls.size());
     for (const auto& url : urls) {
         if (TtsPlayer::IsHttpUrl(url)) {
-            valid_urls.push_back(MusicListItem{.url = url});
+            valid_urls.push_back(MusicListItem{
+                .track = MusicTrack{.id = url},
+                .url = url,
+            });
         }
     }
     if (valid_urls.empty()) {
@@ -64,16 +72,16 @@ uint32_t MusicPlaylist::PlayUrlList(const std::vector<std::string>& urls) {
     return CurrentSessionId();
 }
 
-bool MusicPlaylist::PlayItemList(const std::vector<std::string>& item_ids,
+bool MusicPlaylist::PlayItemList(const std::vector<MusicTrack>& tracks,
                                  MusicUrlResolver resolver) {
     if (!resolver) {
         return false;
     }
     std::vector<MusicListItem> items;
-    items.reserve(item_ids.size());
-    for (const auto& item_id : item_ids) {
-        if (!item_id.empty()) {
-            items.push_back(MusicListItem{.item_id = item_id});
+    items.reserve(tracks.size());
+    for (const auto& track : tracks) {
+        if (!track.id.empty()) {
+            items.push_back(MusicListItem{.track = track});
         }
     }
     if (items.empty()) {
@@ -162,14 +170,19 @@ bool MusicPlaylist::Replay(bool play_when_ready) {
 }
 
 void MusicPlaylist::Clear() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    items_.clear();
-    current_index_ = 0;
-    active_index_ = static_cast<std::size_t>(-1);
-    ++generation_;
-    current_session_id_ = 0;
-    current_retry_used_ = false;
-    resolver_ = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        items_.clear();
+        current_index_ = 0;
+        active_index_ = static_cast<std::size_t>(-1);
+        ++generation_;
+        current_session_id_ = 0;
+        current_retry_used_ = false;
+        resolver_ = nullptr;
+    }
+    if (track_changed_) {
+        track_changed_({});
+    }
 }
 
 bool MusicPlaylist::HasList() const {
@@ -196,7 +209,7 @@ bool MusicPlaylist::RequestAtIndex(std::size_t index, bool play_when_ready) {
         if (!item.url.empty()) {
             cached_url = item.url;
         } else {
-            if (!resolver_ || item.item_id.empty()) {
+            if (!resolver_ || item.track.id.empty()) {
                 return false;
             }
             item.play_when_resolved = item.play_when_resolved || play_when_ready;
@@ -205,7 +218,7 @@ bool MusicPlaylist::RequestAtIndex(std::size_t index, bool play_when_ready) {
             }
             item.resolving = true;
             resolver = resolver_;
-            item_id = item.item_id;
+            item_id = item.track.id;
             generation = generation_;
         }
     }
@@ -262,6 +275,7 @@ bool MusicPlaylist::StartResolved(std::size_t index, const std::string& url) {
     if (session_id == 0) {
         return false;
     }
+    MusicTrack track;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (index >= items_.size() || current_index_ != index) {
@@ -269,6 +283,10 @@ bool MusicPlaylist::StartResolved(std::size_t index, const std::string& url) {
         }
         current_session_id_ = session_id;
         active_index_ = index;
+        track = items_[index].track;
+    }
+    if (track_changed_) {
+        track_changed_(std::move(track));
     }
     PrefetchNext(index);
     return true;
@@ -294,7 +312,7 @@ void MusicPlaylist::HandlePlaybackEvent(const PlaybackEvent& event) {
             std::lock_guard<std::mutex> lock(mutex_);
             if (event.session_id == current_session_id_ &&
                 current_index_ < items_.size() &&
-                !items_[current_index_].item_id.empty() && !current_retry_used_) {
+                !items_[current_index_].track.id.empty() && !current_retry_used_) {
                 retry_index = current_index_;
                 auto& item = items_[retry_index];
                 item.url.clear();

@@ -263,6 +263,35 @@ void HomeView::CreateUi() {
     lv_obj_add_flag(subtitle_label_, LV_OBJ_FLAG_HIDDEN);
 #endif
 
+    music_bar_ = lv_obj_create(root_);
+    lv_obj_set_size(music_bar_, LV_HOR_RES * 90 / 100, LV_SIZE_CONTENT);
+    SetTransparent(music_bar_);
+    lv_obj_set_style_pad_column(music_bar_, theme->spacing(2), 0);
+    lv_obj_set_flex_flow(music_bar_, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(music_bar_, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_add_flag(music_bar_, LV_OBJ_FLAG_FLOATING);
+    lv_obj_add_flag(music_bar_, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_align(music_bar_, LV_ALIGN_BOTTOM_MID, 0, -theme->spacing(4));
+
+    music_icon_label_ = lv_label_create(music_bar_);
+    lv_label_set_text(music_icon_label_, FONT_AWESOME_MUSIC);
+    if (icon_font != nullptr) {
+        lv_obj_set_style_text_font(music_icon_label_, icon_font, 0);
+    }
+    lv_obj_set_style_text_color(music_icon_label_, theme->text_color(), 0);
+
+    music_title_label_ = lv_label_create(music_bar_);
+    lv_obj_set_width(music_title_label_, LV_HOR_RES * 72 / 100);
+    // 只静态显示当前曲目；超长歌名末尾省略，避免产生列表轮询的观感。
+    lv_label_set_long_mode(music_title_label_, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(music_title_label_, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(music_title_label_, theme->text_color(), 0);
+    if (text_font != nullptr) {
+        lv_obj_set_style_text_font(music_title_label_, text_font, 0);
+    }
+    lv_label_set_text(music_title_label_, "");
+
 #ifdef CONFIG_LSPLATFORM
     image_container_ = lv_obj_create(root_);
     lv_obj_set_size(image_container_, LV_HOR_RES, LV_PCT(85));
@@ -310,6 +339,9 @@ void HomeView::DestroyUi() {
     status_label_ = nullptr;
     notification_label_ = nullptr;
     chat_message_label_ = nullptr;
+    music_bar_ = nullptr;
+    music_icon_label_ = nullptr;
+    music_title_label_ = nullptr;
 #ifdef CONFIG_LSPLATFORM
     image_container_ = nullptr;
     image_ = nullptr;
@@ -677,6 +709,29 @@ void HomeView::SetStatus(const std::string& status) {
     } else if (display_ != nullptr) {
         display_->SetStatus(status.c_str());
     }
+}
+
+void HomeView::SetMusicTrack(const MusicTrack& track, bool visible) {
+    if (lvgl_ == nullptr || music_bar_ == nullptr || music_title_label_ == nullptr) {
+        if (display_ != nullptr && visible) {
+            display_->SetChatMessage("system", track.name.c_str());
+        }
+        return;
+    }
+    DisplayLockGuard lock(display_);
+    if (!lock.locked()) {
+        return;
+    }
+    if (!visible || track.name.empty()) {
+        lv_obj_add_flag(music_bar_, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    lv_label_set_text(music_title_label_, track.name.c_str());
+    lv_obj_remove_flag(music_bar_, LV_OBJ_FLAG_HIDDEN);
+    if (chat_message_label_ != nullptr) {
+        lv_obj_add_flag(chat_message_label_, LV_OBJ_FLAG_HIDDEN);
+    }
+    lv_obj_move_foreground(music_bar_);
 }
 
 void HomeView::SetTime(const std::string& time) {

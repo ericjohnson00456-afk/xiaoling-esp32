@@ -167,14 +167,15 @@ void SetStatus(Status status) {
     // 这里只把操作放入队列，不在调用者（网络、音频或 Application）任务中直接改 UI。
     UiManager::GetInstance().Dispatch([status]() {
         current_localized_status = status;
-        HomePresenter::GetInstance().SetStatus(LocalizeStatus(status));
+        HomePresenter::GetInstance().SetStatus(LocalizeStatus(status),
+                                               status == Status::Standby);
     });
 }
 
 void SetStatusText(std::string text) {
     UiManager::GetInstance().Dispatch([text = std::move(text)]() mutable {
         current_localized_status.reset();
-        HomePresenter::GetInstance().SetStatus(std::move(text));
+        HomePresenter::GetInstance().SetStatus(std::move(text), false);
     });
 }
 
@@ -270,6 +271,12 @@ void ShowEmotionOnce(std::string emotion) {
     });
 }
 
+void SetMusicTrack(MusicTrack track) {
+    UiManager::GetInstance().Dispatch([track = std::move(track)]() mutable {
+        HomePresenter::GetInstance().SetMusicTrack(std::move(track));
+    });
+}
+
 void SetAlarmActive(bool active) {
     UiManager::GetInstance().Dispatch([active]() {
         HomePresenter::GetInstance().SetAlarmActive(active);
@@ -360,7 +367,9 @@ void ToggleLanguage() {
             settings.SetString(kLanguageSettingsKey, Lang::GetLanguageCode());
         }
         if (current_localized_status.has_value()) {
-            HomePresenter::GetInstance().SetStatus(LocalizeStatus(*current_localized_status));
+            HomePresenter::GetInstance().SetStatus(
+                LocalizeStatus(*current_localized_status),
+                *current_localized_status == Status::Standby);
         }
         UpdateStatusBarOnUi(true);
         ShowNotificationOnDisplay(Lang::Strings::LANGUAGE_SWITCHED, 3000);
@@ -379,7 +388,9 @@ void SetLanguageMode(int32_t mode) {
         Settings settings(kUiSettingsNamespace, true);
         settings.SetString(kLanguageSettingsKey, Lang::GetLanguageCode());
         if (current_localized_status.has_value()) {
-            HomePresenter::GetInstance().SetStatus(LocalizeStatus(*current_localized_status));
+            HomePresenter::GetInstance().SetStatus(
+                LocalizeStatus(*current_localized_status),
+                *current_localized_status == Status::Standby);
         }
         UpdateStatusBarOnUi(true);
         ShowNotificationOnDisplay(Lang::Strings::LANGUAGE_SWITCHED, 3000);

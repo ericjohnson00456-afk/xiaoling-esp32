@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "types/playback_event.h"
+#include "types/music_track.h"
 
 // 管理音乐播放列表和条目 URL 解析，不负责创建或控制具体播放后端。
 class MusicPlaylist {
@@ -15,12 +16,14 @@ public:
     using MusicUrlResolver =
         std::function<bool(const std::string&, MusicUrlResolveCallback)>;
     using StartPlaybackCallback = std::function<uint32_t(const std::string&)>;
+    using TrackChangedCallback = std::function<void(MusicTrack)>;
 
-    explicit MusicPlaylist(StartPlaybackCallback start_playback);
+    MusicPlaylist(StartPlaybackCallback start_playback,
+                  TrackChangedCallback track_changed);
 
     uint32_t PlayUrl(const std::string& url);
     uint32_t PlayUrlList(const std::vector<std::string>& urls);
-    bool PlayItemList(const std::vector<std::string>& item_ids,
+    bool PlayItemList(const std::vector<MusicTrack>& tracks,
                       MusicUrlResolver resolver);
     bool PlayPrevious(bool play_when_ready = true);
     bool PlayNext(bool play_when_ready = true);
@@ -44,7 +47,7 @@ private:
     };
 
     struct MusicListItem {
-        std::string item_id;
+        MusicTrack track;
         std::string url;
         bool resolving = false;
         bool play_when_resolved = false;
@@ -58,6 +61,7 @@ private:
     NaturalEndResult PlayNextAfterNaturalEnd(uint32_t session_id);
 
     StartPlaybackCallback start_playback_;
+    TrackChangedCallback track_changed_;
     mutable std::mutex mutex_;
     std::vector<MusicListItem> items_;
     std::size_t current_index_ = 0;
