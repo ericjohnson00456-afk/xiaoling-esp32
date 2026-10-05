@@ -677,6 +677,7 @@ void Application::InitializeXiaolingConn() {
 
     xiaoling_conn_->OnDisconnected([this, &board]() {
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
+        SdMusicService::GetInstance().OnCloudDisconnected();
         Ui::SetDuplexVisible(false);
         Schedule([this]() {
             if (GetDeviceState() == kDeviceStateWifiConfiguring) {

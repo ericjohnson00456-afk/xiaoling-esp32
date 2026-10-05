@@ -134,7 +134,8 @@ void SdMusicService::OnCardInserted() {
     cancelled_.store(false);
     card_ready_.store(true);
     generation_.fetch_add(1);
-    Ui::SetTfCardPresent(true);
+    // TF 图标还要等待小聆长连接就绪；连接已经建立时，热插卡立即显示。
+    Ui::SetTfCardPresent(cloud_ready_.load());
     TryStartSync();
 }
 
@@ -169,6 +170,9 @@ void SdMusicService::OnUnsupportedFileSystem() {
 }
 
 void SdMusicService::OnCloudReady() {
+    cloud_ready_.store(true);
+    Ui::SetTfCardPresent(card_ready_.load());
+
     AuthorizationProvider provider;
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -179,6 +183,11 @@ void SdMusicService::OnCloudReady() {
         ReconcileBootRemoval(authorization);
     }
     TryStartSync();
+}
+
+void SdMusicService::OnCloudDisconnected() {
+    cloud_ready_.store(false);
+    Ui::SetTfCardPresent(false);
 }
 
 bool SdMusicService::ClearFingerprint() {

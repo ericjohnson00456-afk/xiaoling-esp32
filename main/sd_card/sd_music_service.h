@@ -21,6 +21,7 @@ public:
     void OnCardRemoved();
     void OnUnsupportedFileSystem();
     void OnCloudReady();
+    void OnCloudDisconnected();
 
     // 清除本地保存的 TF 卡同步指纹。卡仍在位时会立即重新同步。
     bool ClearFingerprint();
@@ -57,4 +58,5 @@ private:
     std::atomic_bool file_access_active_{false};
     std::atomic_bool busy_{false};
     std::atomic_bool card_ready_{false};
+    std::atomic_bool cloud_ready_{false};
 };
