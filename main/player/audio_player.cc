@@ -39,8 +39,11 @@ AppEvent::Id ToAppEventId(PlaybackState state) {
 }  // namespace
 
 AudioPlayer::AudioPlayer()
-    : music_playlist_(std::make_unique<MusicPlaylist>([this](const std::string& url) {
-          return PlayMusicUrlInternal(url);
+    : music_playlist_(std::make_unique<MusicPlaylist>([this](const MusicTrack& track,
+                                                              const std::string& location) {
+          return track.source == MusicSource::kTfCard
+                     ? PlayMusicFileInternal(location)
+                     : PlayMusicUrlInternal(location);
       }, [this](MusicTrack track) {
           MusicTrackCallback callback;
           {
@@ -141,8 +144,9 @@ uint32_t AudioPlayer::PlayMusicList(const std::vector<std::string>& urls) {
 }
 
 bool AudioPlayer::PlayMusicItemList(const std::vector<MusicTrack>& tracks,
-                                    MusicUrlResolver resolver) {
-    return music_playlist_->PlayItemList(tracks, std::move(resolver));
+                                    MusicUrlResolver resolver,
+                                    std::size_t start_index) {
+    return music_playlist_->PlayItemList(tracks, std::move(resolver), start_index);
 }
 
 bool AudioPlayer::PlayPreviousMusic(bool play_when_ready) {
@@ -213,6 +217,12 @@ uint32_t AudioPlayer::PlayMusicUrlInternal(const std::string& url) {
 }
 
 uint32_t AudioPlayer::PlayMusicFile(const std::string& path) {
+    // 串口文件播放是独立调试入口，清除列表，避免播完后触发下一首。
+    music_playlist_->Clear();
+    return PlayMusicFileInternal(path);
+}
+
+uint32_t AudioPlayer::PlayMusicFileInternal(const std::string& path) {
     if (backend_ == nullptr || audio_service_ == nullptr || wakeup_in_progress_ ||
         path.empty()) {
         return 0;
@@ -232,8 +242,6 @@ uint32_t AudioPlayer::PlayMusicFile(const std::string& path) {
     if (!StopNonMusic(PlaybackEndReason::kPreempted)) {
         return 0;
     }
-    // 串口文件播放是独立调试入口，清除网络列表，避免文件播完后误触发下一首。
-    music_playlist_->Clear();
     const uint32_t session_id = music_channel_->PlayFile(path);
     RememberSession(session_id, PlaybackChannel::kMusic);
     return session_id;

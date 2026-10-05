@@ -40,7 +40,8 @@ public:
     uint32_t PlayMusicUrl(const std::string& url);
     uint32_t PlayMusicList(const std::vector<std::string>& urls);
     bool PlayMusicItemList(const std::vector<MusicTrack>& tracks,
-                           MusicUrlResolver resolver);
+                           MusicUrlResolver resolver,
+                           std::size_t start_index = 0);
     bool PlayPreviousMusic(bool play_when_ready = true);
     bool PlayNextMusic(bool play_when_ready = true);
     bool ReplayMusic(bool play_when_ready = true);
@@ -82,6 +83,7 @@ private:
     void HandleBackendEvent(const PlaybackEvent& event);
     void DispatchPlaybackEvent(const PlaybackEvent& event);
     uint32_t PlayMusicUrlInternal(const std::string& url);
+    uint32_t PlayMusicFileInternal(const std::string& path);
 
     AudioService* audio_service_ = nullptr;
     std::unique_ptr<PlaybackBackend> backend_;

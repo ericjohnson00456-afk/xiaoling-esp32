@@ -347,6 +347,10 @@ std::string XiaolingConn::LoadAccessToken() const {
     return access_token_;
 }
 
+std::string XiaolingConn::GetHttpAuthorization() const {
+    return NormalizeBearerToken(LoadAccessToken());
+}
+
 std::string XiaolingConn::NormalizeBearerToken(const std::string& token) {
     auto normalized = Trim(token);
     if (normalized.empty()) {

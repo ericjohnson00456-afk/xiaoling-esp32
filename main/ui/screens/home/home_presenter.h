@@ -32,6 +32,7 @@ public:
     void SetChatMessage(std::string role, std::string text);
     void ShowNotification(std::string text, int duration_ms = 3000);
     void SetWifiIcon(std::string icon);
+    void SetTfCardPresent(bool present);
     void SetAlarmActive(bool active);
     void UpdateBattery();
     void SetStatus(std::string status, bool standby = false);
@@ -75,6 +76,7 @@ private:
     std::string last_chat_text_;
     std::string last_text_;
     std::string wifi_icon_;
+    bool tf_card_present_ = false;
     bool alarm_active_ = false;
     int battery_level_ = 0;
     bool battery_charging_ = false;

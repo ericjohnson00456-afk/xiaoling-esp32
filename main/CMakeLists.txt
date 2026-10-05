@@ -63,6 +63,9 @@ set(SOURCES "audio/codecs/audio_codec.cc"
             "player/channels/alarm_player.cc"
             "shell/serial_shell.cc"
             "sd_card/sd_card_manager.cc"
+            "sd_card/sd_music_scanner.cc"
+            "sd_card/sd_music_http.cc"
+            "sd_card/sd_music_service.cc"
             "resource/resource.cc"
             "main.cc"
             "system/watchdog.cc"
@@ -84,7 +87,10 @@ file(GLOB UI_SOURCES
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/screens/alarm/*.cc"
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/screens/qrcode/*.cc"
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/screens/upgrade/*.cc")
+file(GLOB SD_MUSIC_UI_SOURCES
+     "${CMAKE_CURRENT_SOURCE_DIR}/ui/screens/sd_music_sync/*.cc")
 list(APPEND SOURCES ${UI_SOURCES})
+list(APPEND SOURCES ${SD_MUSIC_UI_SOURCES})
 
 # Shell commands are split by function under shell/cmd.
 file(GLOB_RECURSE SHELL_CMD_SOURCES
@@ -95,7 +101,7 @@ set(INCLUDE_DIRS "."
                  "ui/themes" "ui/utils/font" "ui/utils/image" "ui/utils/emoji" "audio"
                  "player" "player/types" "player/backend" "player/channels" "xiaoling" "xiaoling/session" "xiaoling/conn" "mcp"
                  "player/intents" "ui" "ui/compat" "ui/widgets" "ui/screens" "ui/screens/home" "ui/screens/alarm" "ui/screens/qrcode" "ui/screens/upgrade"
-                 "alarm"
+                 "alarm" "sd_card" "ui/screens/sd_music_sync"
                   "system" "resource" "shell" "ota" "event")
 
 # Add board common files

@@ -34,6 +34,7 @@ public:
     void SetChatMessage(const std::string& role, const std::string& text);
     void ShowNotification(const std::string& text, int duration_ms);
     void SetWifiIcon(const std::string& icon);
+    void SetTfCardPresent(bool present);
     void SetAlarmActive(bool active);
     void SetBattery(int level, bool charging);
     void SetStatus(const std::string& status);
@@ -58,6 +59,7 @@ private:
     lv_obj_t* emoji_label_ = nullptr;
     lv_obj_t* emoji_image_ = nullptr;
     lv_obj_t* network_label_ = nullptr;
+    lv_obj_t* tf_card_label_ = nullptr;
     lv_obj_t* duplex_image_ = nullptr;
     lv_obj_t* clock_label_ = nullptr;
     lv_obj_t* status_label_ = nullptr;

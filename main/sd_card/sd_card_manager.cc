@@ -287,6 +287,42 @@ esp_err_t SdCardManager::ScanFiles(std::vector<SdCardFile>& files) const {
     return result;
 }
 
+esp_err_t SdCardManager::GetCardInfo(SdCardInfo& info) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    info = {};
+    if (!mounted_ || card_ == nullptr) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    const auto* card = static_cast<const sdmmc_card_t*>(card_);
+    const auto& cid = card->cid;
+    // ESP-IDF 对 SD 卡保存的是解码后的 CID。按 CID 字段顺序生成固定的
+    // 32 位十六进制标识，供云端稳定识别同一张卡。
+    char card_id[33] = {};
+    std::snprintf(card_id, sizeof(card_id),
+                  "%02x%04x%02x%02x%02x%02x%02x%02x%08x%04x01",
+                  static_cast<unsigned>(cid.mfg_id) & 0xff,
+                  static_cast<unsigned>(cid.oem_id) & 0xffff,
+                  static_cast<unsigned char>(cid.name[0]),
+                  static_cast<unsigned char>(cid.name[1]),
+                  static_cast<unsigned char>(cid.name[2]),
+                  static_cast<unsigned char>(cid.name[3]),
+                  static_cast<unsigned char>(cid.name[4]),
+                  static_cast<unsigned>(cid.revision) & 0xff,
+                  static_cast<unsigned>(cid.serial),
+                  static_cast<unsigned>(cid.date) & 0xffff);
+    info.card_id = card_id;
+    info.capacity_bytes = static_cast<uint64_t>(card->csd.capacity) *
+                          card->csd.sector_size;
+
+    const esp_err_t usage_ret = esp_vfs_fat_info(
+        kMountPoint, &info.filesystem_bytes, &info.free_bytes);
+    if (usage_ret != ESP_OK) {
+        ESP_LOGW(TAG, "读取 SD 卡容量失败: %s", esp_err_to_name(usage_ret));
+    }
+    return usage_ret;
+}
+
 esp_err_t SdCardManager::StartMonitoring(const SdSpiCardConfig& config,
                                          EventCallback callback) {
     if (!IsValidConfig(config)) {
@@ -331,9 +367,28 @@ void SdCardManager::MonitorLoop() {
             removal_pending = removal_pending_;
         }
         if (!mounted) {
-            if (Mount(false) == ESP_OK) {
+            const esp_err_t mount_result = Mount(false);
+            if (mount_result == ESP_OK) {
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    filesystem_error_notified_ = false;
+                }
                 ESP_LOGI(TAG, "检测到 SD 卡插入，已挂载到 %s", MountPoint());
                 Notify(SdCardEvent::kInserted);
+            } else if (mount_result == ESP_FAIL) {
+                bool should_notify = false;
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    should_notify = !filesystem_error_notified_;
+                    filesystem_error_notified_ = true;
+                }
+                if (should_notify) {
+                    ESP_LOGW(TAG, "检测到无法挂载的 SD 卡文件系统");
+                    Notify(SdCardEvent::kUnsupportedFileSystem);
+                }
+            } else {
+                std::lock_guard<std::mutex> lock(mutex_);
+                filesystem_error_notified_ = false;
             }
             continue;
         }

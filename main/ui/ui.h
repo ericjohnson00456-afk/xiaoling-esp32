@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "player/types/music_track.h"
+#include "sd_card/sd_music_types.h"
 
 enum class DuplexMode;
 class LvglImage;
@@ -66,6 +67,8 @@ void SetChatMessage(std::string role, std::string content);
 void SetVoicePrompt(std::string text);
 void SetWakeWord(std::string wake_word);
 void SetWifiIcon(std::string icon);
+// 在首页状态栏显示 TF 卡在位图标。
+void SetTfCardPresent(bool present);
 void SetClockText(std::string text);
 void SetEmotion(std::string emotion);
 void ShowEmotionOnce(std::string emotion);
@@ -93,6 +96,8 @@ void SetDuplexVisible(bool visible);
 // progress 使用千分之一百分比：0 表示 0%，1000 表示 100%。
 void ShowUpgradeProgress(std::string target, int progress, size_t speed = 0);
 void ShowUpgradeResult(std::string message);
+void ShowSdMusicSync(SdMusicSyncState state);
+void DismissSdMusicSync();
 
 // 将服务端 UI 配置中的 Banner 和角色二维码更新交给 UI 模块处理。
 void HandleSettingMessage(const cJSON* data);

@@ -19,9 +19,17 @@ struct SdCardFile {
     uint64_t size = 0;
 };
 
+struct SdCardInfo {
+    std::string card_id;
+    uint64_t capacity_bytes = 0;
+    uint64_t filesystem_bytes = 0;
+    uint64_t free_bytes = 0;
+};
+
 enum class SdCardEvent {
     kInserted,
     kRemoved,
+    kUnsupportedFileSystem,
 };
 
 class SdCardManager {
@@ -38,6 +46,7 @@ public:
     esp_err_t StartMonitoring(const SdSpiCardConfig& config,
                               EventCallback callback);
     esp_err_t ScanFiles(std::vector<SdCardFile>& files) const;
+    esp_err_t GetCardInfo(SdCardInfo& info) const;
     bool IsConfigured() const;
     bool IsMounted() const;
     const char* MountPoint() const;
@@ -56,6 +65,7 @@ private:
     void* card_ = nullptr;
     bool mounted_ = false;
     bool removal_pending_ = false;
+    bool filesystem_error_notified_ = false;
     EventCallback event_callback_;
     std::atomic_bool monitoring_{false};
     TaskHandle_t monitor_task_ = nullptr;

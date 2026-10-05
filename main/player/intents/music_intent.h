@@ -21,6 +21,7 @@ public:
   void OnExit();
 
   bool SubmitKuwoList(std::vector<MusicTrack> tracks);
+  bool SubmitTfCardList(std::vector<MusicTrack> tracks, std::size_t start_index);
   bool SubmitUrlList(std::vector<std::string> urls);
   // 音乐工具执行后停止录音并回到待命；TTS 和语音 Intent 自然收尾。
   void ReturnToStandby();
@@ -32,12 +33,15 @@ private:
   enum class PendingListType : uint8_t {
     kNone,
     kKuwoItemIds,
+    kTfCardFiles,
     kUrls,
   };
 
   bool Ready() const;
   void SetPendingList(PendingListType type, std::vector<std::string> items);
   void SetPendingKuwoList(std::vector<MusicTrack> tracks);
+  void SetPendingTfCardList(std::vector<MusicTrack> tracks,
+                            std::size_t start_index);
   void ClearPendingList();
   bool StartPendingList();
   bool QueueKuwoUrlResolve(const std::string &item_id,
@@ -48,6 +52,7 @@ private:
   PlaybackIntentManager *intent_manager_ = nullptr;
   PendingListType pending_list_type_ = PendingListType::kNone;
   std::vector<std::string> pending_list_;
-  std::vector<MusicTrack> pending_kuwo_tracks_;
+  std::vector<MusicTrack> pending_tracks_;
+  std::size_t pending_start_index_ = 0;
   bool user_paused_ = false;
 };

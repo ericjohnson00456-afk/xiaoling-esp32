@@ -36,6 +36,8 @@ CONFIG_ESP_WIFI_DYNAMIC_RX_MGMT_BUFFER=y
 # SD 卡音乐文件名使用 UTF-8，支持中文和最多 255 字符的 FAT 长文件名。
 CONFIG_FATFS_LFN_HEAP=y
 CONFIG_FATFS_MAX_LFN=255
+# 中文短文件名和旧式 ID3 标签使用简体中文 OEM 码页。
+CONFIG_FATFS_CODEPAGE_936=y
 CONFIG_FATFS_API_ENCODING_UTF_8=y
 
 # These entries are copied from ESP-HI (ESP32C3) to reduce memory usage

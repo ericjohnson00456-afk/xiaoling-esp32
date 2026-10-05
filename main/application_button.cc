@@ -3,6 +3,7 @@
 #include "alarm/alarm_service.h"
 #include "boards/common/board.h"
 #include "system/system_reset.h"
+#include "sd_card/sd_music_service.h"
 #include "ui/ui.h"
 
 #include <esp_log.h>
@@ -58,6 +59,10 @@ void Application::ProcessButtonClick(uint8_t click_count) {
     }
     // 固件 OTA 等待用户选择时，单击表示确认升级。
     if (click_count == 1 && HandleOtaConfirmation(true)) {
+        return;
+    }
+    if (SdMusicService::GetInstance().IsBusy()) {
+        ESP_LOGI(kTag, "TF 卡文件同步期间忽略普通按键");
         return;
     }
 

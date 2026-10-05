@@ -13,6 +13,7 @@
 #include "ui/ui.h"
 #include "shell/cmd/kv/kv_user.h"
 #include "event/app_event.h"
+#include "sd_card/sd_music_service.h"
 
 #ifdef CONFIG_LSPLATFORM
 #include "image_fetcher.h"
@@ -612,6 +613,7 @@ void Application::InitializeXiaolingConn() {
     xiaoling_conn_ = std::make_unique<XiaolingConn>();
 
     xiaoling_conn_->OnConnected([this, codec, &board]() {
+        SdMusicService::GetInstance().OnCloudReady();
         if (GetDeviceState() == kDeviceStateIdle) {
             Ui::SetStatus(Ui::Status::Standby);
             Ui::SetEmotion("neutral");
@@ -804,6 +806,10 @@ void Application::StopListening() {
 }
 
 void Application::HandleToggleChatEvent() {
+    if (SdMusicService::GetInstance().IsBusy()) {
+        ESP_LOGI(TAG, "TF 卡文件同步期间忽略语音交互按键");
+        return;
+    }
     if (audio_player_.IsWakeupPending()) {
         CancelWakeup();
         return;
@@ -911,6 +917,10 @@ void Application::HandleStopListeningEvent() {
 void Application::HandleWakeWordDetectedEvent() {
     if (alarm_flow_.on_wake_word) {
         alarm_flow_.on_wake_word();
+    }
+    if (SdMusicService::GetInstance().IsBusy()) {
+        ESP_LOGI(TAG, "TF 卡文件同步期间忽略唤醒词");
+        return;
     }
     if (exit_requested_.load() &&
         (tts_waiting_for_playback_.load() || audio_player_.IsPlaying())) {
@@ -1297,6 +1307,10 @@ void Application::ScheduleUrgent(std::function<void()>&& callback) {
     xEventGroupSetBits(event_group_, MAIN_EVENT_SCHEDULE);
 }
 void Application::WakeWordInvoke(const std::string& wake_word) {
+    if (SdMusicService::GetInstance().IsBusy()) {
+        ESP_LOGI(TAG, "TF 卡文件同步期间忽略外部唤醒词：%s", wake_word.c_str());
+        return;
+    }
     if (exit_requested_.load() &&
         (tts_waiting_for_playback_.load() || audio_player_.IsPlaying())) {
         ESP_LOGI(TAG, "忽略退出期间的唤醒词：%s", wake_word.c_str());

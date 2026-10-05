@@ -73,7 +73,8 @@ uint32_t MusicPlaylist::PlayUrlList(const std::vector<std::string>& urls) {
 }
 
 bool MusicPlaylist::PlayItemList(const std::vector<MusicTrack>& tracks,
-                                 MusicUrlResolver resolver) {
+                                 MusicUrlResolver resolver,
+                                 std::size_t start_index) {
     if (!resolver) {
         return false;
     }
@@ -87,17 +88,20 @@ bool MusicPlaylist::PlayItemList(const std::vector<MusicTrack>& tracks,
     if (items.empty()) {
         return false;
     }
+    if (start_index >= items.size()) {
+        start_index = 0;
+    }
     {
         std::lock_guard<std::mutex> lock(mutex_);
         items_ = std::move(items);
-        current_index_ = 0;
+        current_index_ = start_index;
         active_index_ = static_cast<std::size_t>(-1);
         ++generation_;
         current_session_id_ = 0;
         current_retry_used_ = false;
         resolver_ = std::move(resolver);
     }
-    if (!RequestAtIndex(0, true)) {
+    if (!RequestAtIndex(start_index, true)) {
         Clear();
         return false;
     }
@@ -209,7 +213,10 @@ bool MusicPlaylist::RequestAtIndex(std::size_t index, bool play_when_ready) {
         if (!item.url.empty()) {
             cached_url = item.url;
         } else {
-            if (!resolver_ || item.track.id.empty()) {
+            const std::string& resolve_key = item.track.location.empty()
+                                                 ? item.track.id
+                                                 : item.track.location;
+            if (!resolver_ || resolve_key.empty()) {
                 return false;
             }
             item.play_when_resolved = item.play_when_resolved || play_when_ready;
@@ -218,7 +225,7 @@ bool MusicPlaylist::RequestAtIndex(std::size_t index, bool play_when_ready) {
             }
             item.resolving = true;
             resolver = resolver_;
-            item_id = item.track.id;
+            item_id = resolve_key;
             generation = generation_;
         }
     }
@@ -243,7 +250,7 @@ bool MusicPlaylist::RequestAtIndex(std::size_t index, bool play_when_ready) {
 
 void MusicPlaylist::HandleUrlResolved(uint32_t generation, std::size_t index,
                                       bool success, std::string url) {
-    const bool valid_url = success && TtsPlayer::IsHttpUrl(url);
+    bool valid_url = false;
     bool should_play = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -251,6 +258,10 @@ void MusicPlaylist::HandleUrlResolved(uint32_t generation, std::size_t index,
             return;
         }
         auto& item = items_[index];
+        valid_url = success &&
+                    (TtsPlayer::IsHttpUrl(url) ||
+                     (item.track.source == MusicSource::kTfCard &&
+                      url.rfind("/sdcard/", 0) == 0));
         item.resolving = false;
         if (valid_url) {
             item.url = url;
@@ -271,11 +282,18 @@ bool MusicPlaylist::StartResolved(std::size_t index, const std::string& url) {
     if (!start_playback_) {
         return false;
     }
-    const uint32_t session_id = start_playback_(url);
+    MusicTrack track;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (index >= items_.size() || current_index_ != index) {
+            return false;
+        }
+        track = items_[index].track;
+    }
+    const uint32_t session_id = start_playback_(track, url);
     if (session_id == 0) {
         return false;
     }
-    MusicTrack track;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (index >= items_.size() || current_index_ != index) {
@@ -283,7 +301,6 @@ bool MusicPlaylist::StartResolved(std::size_t index, const std::string& url) {
         }
         current_session_id_ = session_id;
         active_index_ = index;
-        track = items_[index].track;
     }
     if (track_changed_) {
         track_changed_(std::move(track));

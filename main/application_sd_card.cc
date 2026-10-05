@@ -2,6 +2,8 @@
 
 #include "board.h"
 #include "sd_card/sd_card_manager.h"
+#include "sd_card/sd_music_service.h"
+#include "xiaoling/conn/xiaoling_conn.h"
 
 #include <esp_log.h>
 
@@ -14,10 +16,26 @@ void Application::InitializeSdCard() {
     }
 
     auto& manager = SdCardManager::GetInstance();
+    auto& music_service = SdMusicService::GetInstance();
+    music_service.Initialize([this]() {
+        std::lock_guard<std::mutex> lock(xiaoling_conn_mutex_);
+        return xiaoling_conn_ != nullptr
+                   ? xiaoling_conn_->GetHttpAuthorization()
+                   : std::string{};
+    });
     const esp_err_t ret = manager.StartMonitoring(
-        *config, [&manager](SdCardEvent event) {
+        *config, [&manager, &music_service](SdCardEvent event) {
             if (event == SdCardEvent::kInserted) {
+                music_service.OnCardInserted();
                 return;
+            }
+            if (event == SdCardEvent::kUnsupportedFileSystem) {
+                music_service.OnUnsupportedFileSystem();
+                return;
+            }
+            music_service.OnCardRemoved();
+            if (!music_service.WaitForFileAccessToStop(12000)) {
+                ESP_LOGW(TAG, "拔卡后等待 TF 卡扫描停止超时");
             }
             const bool stopped = Application::GetInstance()
                                      .GetAudioPlayer()

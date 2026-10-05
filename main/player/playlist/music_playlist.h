@@ -15,7 +15,8 @@ public:
     using MusicUrlResolveCallback = std::function<void(bool, std::string)>;
     using MusicUrlResolver =
         std::function<bool(const std::string&, MusicUrlResolveCallback)>;
-    using StartPlaybackCallback = std::function<uint32_t(const std::string&)>;
+    using StartPlaybackCallback =
+        std::function<uint32_t(const MusicTrack&, const std::string&)>;
     using TrackChangedCallback = std::function<void(MusicTrack)>;
 
     MusicPlaylist(StartPlaybackCallback start_playback,
@@ -24,7 +25,8 @@ public:
     uint32_t PlayUrl(const std::string& url);
     uint32_t PlayUrlList(const std::vector<std::string>& urls);
     bool PlayItemList(const std::vector<MusicTrack>& tracks,
-                      MusicUrlResolver resolver);
+                      MusicUrlResolver resolver,
+                      std::size_t start_index = 0);
     bool PlayPrevious(bool play_when_ready = true);
     bool PlayNext(bool play_when_ready = true);
     bool PlayCurrent(bool play_when_ready = true);

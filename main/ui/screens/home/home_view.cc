@@ -183,6 +183,13 @@ void HomeView::CreateUi() {
         lv_obj_set_style_text_font(network_label_, icon_font, 0);
     }
     lv_obj_set_style_text_color(network_label_, theme->text_color(), 0);
+    tf_card_label_ = lv_label_create(left_icons);
+    lv_label_set_text(tf_card_label_, FONT_AWESOME_SD_CARD);
+    if (icon_font != nullptr) {
+        lv_obj_set_style_text_font(tf_card_label_, icon_font, 0);
+    }
+    lv_obj_set_style_text_color(tf_card_label_, theme->text_color(), 0);
+    lv_obj_add_flag(tf_card_label_, LV_OBJ_FLAG_HIDDEN);
     duplex_image_ = lv_image_create(left_icons);
     lv_obj_set_size(duplex_image_, 18, 18);
     lv_obj_add_flag(duplex_image_, LV_OBJ_FLAG_HIDDEN);
@@ -327,6 +334,7 @@ void HomeView::DestroyUi() {
     emoji_label_ = nullptr;
     emoji_image_ = nullptr;
     network_label_ = nullptr;
+    tf_card_label_ = nullptr;
     duplex_image_ = nullptr;
     clock_label_ = nullptr;
 #ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
@@ -726,12 +734,29 @@ void HomeView::SetMusicTrack(const MusicTrack& track, bool visible) {
         lv_obj_add_flag(music_bar_, LV_OBJ_FLAG_HIDDEN);
         return;
     }
+    if (music_icon_label_ != nullptr) {
+        lv_label_set_text(music_icon_label_,
+                          track.source == MusicSource::kTfCard
+                              ? FONT_AWESOME_SD_CARD
+                              : FONT_AWESOME_MUSIC);
+    }
     lv_label_set_text(music_title_label_, track.name.c_str());
     lv_obj_remove_flag(music_bar_, LV_OBJ_FLAG_HIDDEN);
     if (chat_message_label_ != nullptr) {
         lv_obj_add_flag(chat_message_label_, LV_OBJ_FLAG_HIDDEN);
     }
     lv_obj_move_foreground(music_bar_);
+}
+
+void HomeView::SetTfCardPresent(bool present) {
+    if (lvgl_ == nullptr || tf_card_label_ == nullptr) return;
+    DisplayLockGuard lock(display_);
+    if (!lock.locked()) return;
+    if (present) {
+        lv_obj_remove_flag(tf_card_label_, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(tf_card_label_, LV_OBJ_FLAG_HIDDEN);
+    }
 }
 
 void HomeView::SetTime(const std::string& time) {

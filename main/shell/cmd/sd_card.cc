@@ -2,6 +2,7 @@
 
 #include "application.h"
 #include "sd_card/sd_card_manager.h"
+#include "sd_card/sd_music_service.h"
 
 #include <cstdio>
 #include <cstring>
@@ -22,6 +23,7 @@ void PrintUsage() {
         "  sd scan          Mount the card and print every file recursively\n"
         "  sd play PATH     Play an audio file, for example: sd play music/test.mp3\n"
         "  sd stop          Stop SD card audio playback\n"
+        "  sd clear-fingerprint  Clear saved TF card sync fingerprint\n"
         "  sd help          Show this help\n"
         "Paths containing spaces must be enclosed in quotes.\n");
 }
@@ -136,6 +138,13 @@ int HandleSdCardCommand(int argc, char** argv) {
         return stopped ? 0 : 1;
     }
 
+    if (std::strcmp(argv[1], "clear-fingerprint") == 0 && argc == 2) {
+        const bool cleared = SdMusicService::GetInstance().ClearFingerprint();
+        std::printf("SD card sync fingerprint clear: %s\n",
+                    cleared ? "ok" : "failed");
+        return cleared ? 0 : 1;
+    }
+
     PrintUsage();
     return 1;
 }
@@ -150,7 +159,7 @@ esp_err_t RegisterSdCardCommand() {
     const esp_console_cmd_t command = {
         .command = "sd",
         .help = "Scan and play audio files from the SD card",
-        .hint = "<scan|play|stop|help> [path]",
+        .hint = "<scan|play|stop|clear-fingerprint|help> [path]",
         .func = HandleSdCardCommand,
         .argtable = nullptr,
         .func_w_context = nullptr,

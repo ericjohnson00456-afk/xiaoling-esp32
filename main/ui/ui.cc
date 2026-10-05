@@ -12,6 +12,7 @@
 #include "ui/screens/alarm/alarm_success_presenter.h"
 #include "ui/screens/qrcode/qrcode_presenter.h"
 #include "ui/screens/upgrade/upgrade_presenter.h"
+#include "ui/screens/sd_music_sync/sd_music_sync_presenter.h"
 #include "ui/themes/lvgl_theme.h"
 #include "ui/ui_manager.h"
 #include "ui/ui_page_ids.h"
@@ -154,6 +155,7 @@ bool Initialize() {
         ui.RegisterScreen(&AlarmRingPresenter::Screen()) != 0 ||
         ui.RegisterScreen(&QrCodePresenter::Screen()) != 0 ||
         ui.RegisterScreen(&UpgradePresenter::Screen()) != 0 ||
+        ui.RegisterScreen(&SdMusicSyncPresenter::Screen()) != 0 ||
         ui.SetDefaultScreen(UI_PAGE_HOME) != 0) {
         return false;
     }
@@ -240,6 +242,12 @@ void SetWakeWord(std::string wake_word) {
 void SetWifiIcon(std::string icon) {
     UiManager::GetInstance().Dispatch([icon = std::move(icon)]() mutable {
         HomePresenter::GetInstance().SetWifiIcon(std::move(icon));
+    });
+}
+
+void SetTfCardPresent(bool present) {
+    UiManager::GetInstance().Dispatch([present]() {
+        HomePresenter::GetInstance().SetTfCardPresent(present);
     });
 }
 
@@ -480,6 +488,37 @@ void ShowUpgradeResult(std::string message) {
         } else if (auto* display = manager.display(); display != nullptr) {
             display->SetChatMessage("system", message.c_str());
         }
+    });
+}
+
+void ShowSdMusicSync(SdMusicSyncState state) {
+    UiManager::GetInstance().Dispatch([state]() {
+        auto& manager = UiManager::GetInstance();
+        if (manager.lvgl_display() != nullptr) {
+            SdMusicSyncPresenter::GetInstance().SetState(state);
+            return;
+        }
+        if (auto* display = manager.display(); display != nullptr) {
+            char text[96] = {};
+            if (state.phase == SdMusicSyncPhase::kScanning) {
+                std::snprintf(text, sizeof(text), "TF卡扫描中");
+            } else if (state.phase == SdMusicSyncPhase::kUploading) {
+                std::snprintf(text, sizeof(text), "TF卡文件 %lu/%lu",
+                              static_cast<unsigned long>(state.uploaded_count),
+                              static_cast<unsigned long>(state.total_count));
+            } else if (state.phase == SdMusicSyncPhase::kSucceeded) {
+                std::snprintf(text, sizeof(text), "TF卡处理完成");
+            } else if (state.phase == SdMusicSyncPhase::kFailed) {
+                std::snprintf(text, sizeof(text), "TF卡文件列表上报失败");
+            }
+            display->SetChatMessage("system", text);
+        }
+    });
+}
+
+void DismissSdMusicSync() {
+    UiManager::GetInstance().Dispatch([]() {
+        SdMusicSyncPresenter::GetInstance().Dismiss();
     });
 }
 

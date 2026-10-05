@@ -73,6 +73,8 @@ public:
     void HandleIatBargeIn();
     void SendMcpMessage(const std::string& message);
     bool ResolveKuwoMusicUrl(const std::string& item_id, std::string& url);
+    // 返回可直接用于普通 HTTP 请求的 Authorization 请求头值。
+    std::string GetHttpAuthorization() const;
     bool RequestAlarmTtsUrl(const std::string& text, AlarmTtsCallback callback);
     void CancelAlarmTtsRequest();
     bool FetchAlarmList(std::string& response_body);
