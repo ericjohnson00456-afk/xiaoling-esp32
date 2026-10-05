@@ -130,7 +130,6 @@ void SdMusicService::OnCardInserted() {
         std::lock_guard<std::mutex> lock(mutex_);
         current_card_id_ = info.card_id;
         pending_sync_ = true;
-        local_tracks_.clear();
     }
     cancelled_.store(false);
     card_ready_.store(true);
@@ -145,7 +144,6 @@ void SdMusicService::OnCardRemoved() {
         std::lock_guard<std::mutex> lock(mutex_);
         card_id = current_card_id_;
         current_card_id_.clear();
-        local_tracks_.clear();
         pending_sync_ = false;
     }
     cancelled_.store(true);
@@ -304,38 +302,6 @@ void SdMusicService::RunSync(uint32_t generation,
         });
     }
 
-    std::vector<SdMusicTrack> local_tracks;
-    local_tracks.reserve(SdMusicScanner::kLocalListLimit);
-    SdMusicScanStats local_stats;
-    esp_err_t scan_result = ESP_OK;
-    {
-        FileAccessGuard guard(file_access_active_);
-        scan_result = SdMusicScanner::Scan(
-            {}, SdMusicScanner::kLocalListLimit, true,
-            [&local_tracks](const std::vector<SdMusicTrack>& tracks, bool) {
-                local_tracks.insert(local_tracks.end(), tracks.begin(), tracks.end());
-                return ESP_OK;
-            },
-            &local_stats, &cancelled_);
-    }
-    if (!IsCurrent(generation)) {
-        busy_.store(false);
-        return;
-    }
-    if (scan_result != ESP_OK) {
-        PublishState(SdMusicSyncState{
-            .phase = SdMusicSyncPhase::kFailed,
-            .result = SdMusicSyncResult::kFailed,
-            .http_error_code = scan_result,
-        });
-        busy_.store(false);
-        return;
-    }
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        local_tracks_ = std::move(local_tracks);
-    }
-
     bool unchanged = false;
     {
         const std::string card_id = info.card_id;
@@ -351,7 +317,6 @@ void SdMusicService::RunSync(uint32_t generation,
                  storage_stamp.c_str());
         PublishState(SdMusicSyncState{
             .phase = SdMusicSyncPhase::kSucceeded,
-            .total_count = local_stats.reported_count,
             .result = SdMusicSyncResult::kDataUnchanged,
         });
         busy_.store(false);
@@ -359,12 +324,10 @@ void SdMusicService::RunSync(uint32_t generation,
     }
 
     SdMusicScanStats count_stats;
+    esp_err_t scan_result = ESP_OK;
     {
         FileAccessGuard guard(file_access_active_);
-        scan_result = SdMusicScanner::Scan(
-            {}, 0, false,
-            [](const std::vector<SdMusicTrack>&, bool) { return ESP_OK; },
-            &count_stats, &cancelled_);
+        scan_result = SdMusicScanner::Count({}, &count_stats, &cancelled_);
     }
     if (!IsCurrent(generation)) {
         busy_.store(false);

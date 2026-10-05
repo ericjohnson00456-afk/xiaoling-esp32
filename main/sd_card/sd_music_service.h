@@ -4,7 +4,6 @@
 #include <functional>
 #include <mutex>
 #include <string>
-#include <vector>
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -48,7 +47,6 @@ private:
 
     mutable std::mutex mutex_;
     AuthorizationProvider authorization_provider_;
-    std::vector<SdMusicTrack> local_tracks_;
     std::string current_card_id_;
     TaskHandle_t worker_task_ = nullptr;
     bool initialized_ = false;

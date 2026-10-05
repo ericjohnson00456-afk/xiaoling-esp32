@@ -24,4 +24,9 @@ public:
                           bool read_metadata, BatchCallback callback,
                           SdMusicScanStats* stats = nullptr,
                           const std::atomic_bool* cancelled = nullptr);
+
+    // 只统计数量和跳过项，不创建曲目对象，供同步前的进度统计使用。
+    static esp_err_t Count(const std::string& path,
+                           SdMusicScanStats* stats = nullptr,
+                           const std::atomic_bool* cancelled = nullptr);
 };

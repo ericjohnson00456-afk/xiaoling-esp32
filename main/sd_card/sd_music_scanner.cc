@@ -356,7 +356,10 @@ void ReadMetadata(SdMusicTrack& track) {
         return;
     }
     ReadId3v2(file, track);
-    ReadId3v1(file, track);
+    // ID3v2 已经包含完整信息时，不再为 ID3v1 额外执行一次文件尾部寻址。
+    if (track.title.empty() || track.artist.empty() || track.album.empty()) {
+        ReadId3v1(file, track);
+    }
     std::fclose(file);
 }
 
@@ -370,6 +373,7 @@ std::string TitleFromFileName(const std::string& file_name) {
 struct ScanContext {
     size_t max_total = 0;
     bool read_metadata = false;
+    bool collect_tracks = true;
     SdMusicScanner::BatchCallback callback;
     const std::atomic_bool* cancelled = nullptr;
     SdMusicScanStats stats;
@@ -380,6 +384,24 @@ struct ScanContext {
 
 bool IsCancelled(const ScanContext& context) {
     return context.cancelled != nullptr && context.cancelled->load();
+}
+
+enum class EntryKind : uint8_t {
+    kDirectory,
+    kRegular,
+    kOther,
+    kInvalid,
+};
+
+EntryKind ClassifyEntry(const dirent* entry, const std::string& path) {
+    if (entry->d_type == DT_DIR) return EntryKind::kDirectory;
+    if (entry->d_type == DT_REG) return EntryKind::kRegular;
+
+    struct stat info = {};
+    if (stat(path.c_str(), &info) != 0) return EntryKind::kInvalid;
+    if (S_ISDIR(info.st_mode)) return EntryKind::kDirectory;
+    if (S_ISREG(info.st_mode)) return EntryKind::kRegular;
+    return EntryKind::kOther;
 }
 
 esp_err_t Flush(ScanContext& context, bool is_last) {
@@ -402,11 +424,12 @@ uint32_t CountMp3Under(const std::string& path, const std::atomic_bool* cancelle
         const std::string name(entry->d_name);
         if (name == "." || name == "..") continue;
         const std::string child = path + "/" + name;
-        struct stat info = {};
-        if (stat(child.c_str(), &info) != 0) continue;
-        if (S_ISDIR(info.st_mode) && !ShouldIgnoreDirectory(name)) {
+        const EntryKind kind = ClassifyEntry(entry, child);
+        if (kind == EntryKind::kInvalid) continue;
+        if (kind == EntryKind::kDirectory && !ShouldIgnoreDirectory(name)) {
             count += CountMp3Under(child, cancelled);
-        } else if (S_ISREG(info.st_mode) && !ShouldIgnoreFile(name) && IsMp3(name)) {
+        } else if (kind == EntryKind::kRegular && !ShouldIgnoreFile(name) &&
+                   IsMp3(name)) {
             ++count;
         }
     }
@@ -426,15 +449,15 @@ uint32_t CountMp3OutsideAudio(const std::string& path,
         const std::string name(entry->d_name);
         if (name == "." || name == "..") continue;
         const std::string child = path + "/" + name;
-        struct stat info = {};
-        if (stat(child.c_str(), &info) != 0) continue;
-        if (S_ISDIR(info.st_mode)) {
+        const EntryKind kind = ClassifyEntry(entry, child);
+        if (kind == EntryKind::kInvalid) continue;
+        if (kind == EntryKind::kDirectory) {
             if (ShouldIgnoreDirectory(name) ||
                 (path == "/sdcard" && name == "audio")) {
                 continue;
             }
             count += CountMp3OutsideAudio(child, cancelled);
-        } else if (S_ISREG(info.st_mode) && !ShouldIgnoreFile(name) &&
+        } else if (kind == EntryKind::kRegular && !ShouldIgnoreFile(name) &&
                    IsMp3(name)) {
             ++count;
         }
@@ -468,14 +491,14 @@ bool ScanDirectory(ScanContext& context, const std::string& path, int depth) {
             continue;
         }
         const std::string child = path + "/" + name;
-        struct stat info = {};
-        if (stat(child.c_str(), &info) != 0) {
+        const EntryKind kind = ClassifyEntry(entry, child);
+        if (kind == EntryKind::kInvalid) {
             ESP_LOGW(kTag, "无法读取文件信息: %s, errno=%d", child.c_str(), errno);
             context.result = ESP_FAIL;
             context.stopped = true;
             break;
         }
-        if (S_ISDIR(info.st_mode)) {
+        if (kind == EntryKind::kDirectory) {
             if (depth >= kMaxDirectoryDepth || name.size() > kMaxDirectoryNameBytes) {
                 const uint32_t skipped = CountMp3Under(child, context.cancelled);
                 context.stats.skipped_count += skipped;
@@ -492,24 +515,26 @@ bool ScanDirectory(ScanContext& context, const std::string& path, int depth) {
             }
             continue;
         }
-        if (!S_ISREG(info.st_mode) || !IsMp3(name)) continue;
+        if (kind != EntryKind::kRegular || !IsMp3(name)) continue;
         if (name.size() > kMaxFileNameBytes) {
             ++context.stats.skipped_count;
             ESP_LOGW(kTag, "跳过文件名过长的 MP3: %s", child.c_str());
             continue;
         }
-        SdMusicTrack track{
-            .path = child,
-            .file_name = name,
-        };
-        if (context.read_metadata) ReadMetadata(track);
-        if (track.title.empty()) track.title = TitleFromFileName(name);
-        context.batch.push_back(std::move(track));
         ++context.stats.reported_count;
         const bool at_limit = context.max_total != 0 &&
                               context.stats.reported_count >= context.max_total;
-        if (context.batch.size() >= SdMusicScanner::kBatchSize || at_limit) {
-            Flush(context, at_limit);
+        if (context.collect_tracks) {
+            SdMusicTrack track{
+                .path = child,
+                .file_name = name,
+            };
+            if (context.read_metadata) ReadMetadata(track);
+            if (track.title.empty()) track.title = TitleFromFileName(name);
+            context.batch.push_back(std::move(track));
+            if (context.batch.size() >= SdMusicScanner::kBatchSize || at_limit) {
+                Flush(context, at_limit);
+            }
         }
         if (at_limit) context.stopped = true;
     }
@@ -525,24 +550,26 @@ bool ScanDirectory(ScanContext& context, const std::string& path, int depth) {
 
 }  // namespace
 
-esp_err_t SdMusicScanner::Scan(const std::string& path, size_t max_total,
-                               bool read_metadata, BatchCallback callback,
-                               SdMusicScanStats* stats,
-                               const std::atomic_bool* cancelled) {
+static esp_err_t ScanInternal(const std::string& path, size_t max_total,
+                              bool read_metadata, bool collect_tracks,
+                              SdMusicScanner::BatchCallback callback,
+                              SdMusicScanStats* stats,
+                              const std::atomic_bool* cancelled) {
     if (!callback) return ESP_ERR_INVALID_ARG;
     ScanContext context{
         .max_total = max_total,
         .read_metadata = read_metadata,
+        .collect_tracks = collect_tracks,
         .callback = std::move(callback),
         .cancelled = cancelled,
     };
-    context.batch.reserve(kBatchSize);
+    if (collect_tracks) context.batch.reserve(SdMusicScanner::kBatchSize);
     const bool use_default = path.empty();
     const std::string first_path = use_default ? kDefaultMusicDirectory : path;
     const bool first_opened = ScanDirectory(context, first_path, 0);
     // 服务会先做一遍不读取元数据的计数扫描。只在这一遍统计 audio
     // 目录之外的文件，避免本地预览和实际上传扫描重复遍历整张卡。
-    if (use_default && !read_metadata && !IsCancelled(context)) {
+    if (use_default && !collect_tracks && !IsCancelled(context)) {
         const uint32_t outside_audio_count =
             CountMp3OutsideAudio("/sdcard", cancelled);
         context.stats.skipped_count += outside_audio_count;
@@ -575,4 +602,22 @@ esp_err_t SdMusicScanner::Scan(const std::string& path, size_t max_total,
              static_cast<unsigned long>(context.stats.skipped_count),
              static_cast<unsigned long>(context.stats.unknown_skip_count));
     return context.result;
+}
+
+esp_err_t SdMusicScanner::Scan(const std::string& path, size_t max_total,
+                               bool read_metadata, BatchCallback callback,
+                               SdMusicScanStats* stats,
+                               const std::atomic_bool* cancelled) {
+    return ScanInternal(path, max_total, read_metadata, true,
+                        std::move(callback), stats, cancelled);
+}
+
+esp_err_t SdMusicScanner::Count(const std::string& path,
+                                SdMusicScanStats* stats,
+                                const std::atomic_bool* cancelled) {
+    return ScanInternal(path, 0, false, false,
+                        [](const std::vector<SdMusicTrack>&, bool) {
+                            return ESP_OK;
+                        },
+                        stats, cancelled);
 }
