@@ -35,9 +35,12 @@ The `assets` partition stores:
 - `nvs`: 16KB (non-volatile storage)
 - `otadata`: 8KB (OTA data)
 - `phy_init`: 4KB (PHY initialization data)
-- `ota_0`: 4MB (application partition 0)
-- `ota_1`: 4MB (application partition 1)
-- `assets`: 8MB (network-loadable assets)
+- `ota_0`: 4544KB (application partition 0)
+- `ota_1`: 4544KB (application partition 1)
+- `tone`: 1MB (prompt tones)
+- `emoji`: 1MB (emoji resources)
+- `wake_word`: 1MB (wake-word models)
+- `respak`: 4MB (ROMFS resources)
 
 ## Available Configurations
 
@@ -53,9 +56,12 @@ The `assets` partition stores:
 - `nvs`: 16KB
 - `otadata`: 8KB
 - `phy_init`: 4KB
-- `ota_0`: 4MB
-- `ota_1`: 4MB
-- `assets`: 8MB
+- `ota_0`: 4544KB (`0x470000`)
+- `ota_1`: 4544KB (`0x470000`)
+- `tone`: 1MB
+- `emoji`: 1MB
+- `wake_word`: 1MB
+- `respak`: 4MB
 
 ### 16MB Flash Devices (`16m_c3.csv`) - ESP32-C3 Optimized
 - `nvs`: 16KB
@@ -104,4 +110,4 @@ When upgrading from v1 to v2:
 - The `assets` partition size varies by configuration to optimize for different flash sizes
 - ESP32-C3 devices use a smaller assets partition (4MB) due to limited available mmap pages in the system
 - 32MB devices get the largest assets partition (16MB) for maximum content storage
-- All partition tables maintain proper alignment for optimal flash performance 
+- All partition tables maintain proper alignment for optimal flash performance
