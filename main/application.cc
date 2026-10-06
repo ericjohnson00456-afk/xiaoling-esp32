@@ -14,7 +14,7 @@
 #include "shell/cmd/kv/kv_user.h"
 #include "event/app_event.h"
 #include "sd_card/sd_music_service.h"
-#include "ui/screens/camera_preview/camera_preview_controller.h"
+#include "camera/camera_service.h"
 
 #ifdef CONFIG_LSPLATFORM
 #include "image_fetcher.h"
@@ -159,10 +159,10 @@ void Application::HandlePlaybackEvent(const PlaybackEvent& event) {
     if (active_session) {
         session_controller_.EndTts(event.session_id);
     }
-    if (CameraPreviewController::GetInstance().IsActive()) {
-        // 按键拍照 TTS 是一次性事务，由相机控制器负责收尾；若此处按普通
+    if (CameraService::GetInstance().IsActive()) {
+        // 拍照 TTS 是一次性事务，由拍照控制器负责收尾；若此处按普通
         // 半双工会话重启上行，会遗留语音会话并吞掉下一次照片识别结果。
-        ESP_LOGI(TAG, "按键拍照 TTS 已结束，跳过半双工上行重启");
+        ESP_LOGI(TAG, "拍照 TTS 已结束，跳过半双工上行重启");
         return;
     }
     if (exit_requested_.load()) {
@@ -286,7 +286,7 @@ void Application::Initialize() {
     // 闹钟的恢复、播放、时钟及云端同步钩子统一在 application_alarm.cc 安装。
     InitializeAlarm();
 
-    CameraPreviewController::GetInstance().Initialize(*this);
+    CameraService::GetInstance().Initialize(*this);
 
     // 注册设备状态变化监听器。
     DeviceStatus::AddStateChangeListener([this](DeviceState old_state, DeviceState new_state) {
@@ -928,7 +928,7 @@ void Application::HandleWakeWordDetectedEvent() {
     if (alarm_flow_.on_wake_word) {
         alarm_flow_.on_wake_word();
     }
-    if (CameraPreviewController::GetInstance().IsActive()) {
+    if (CameraService::GetInstance().IsActive()) {
         ESP_LOGI(TAG, "拍照流程期间忽略唤醒词");
         return;
     }

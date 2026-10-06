@@ -2,7 +2,7 @@
 
 #include "alarm/alarm_service.h"
 #include "boards/common/board.h"
-#include "ui/screens/camera_preview/camera_preview_controller.h"
+#include "camera/camera_service.h"
 #include "system/system_reset.h"
 #include "sd_card/sd_music_service.h"
 #include "ui/ui.h"
@@ -42,7 +42,7 @@ void Application::ProcessButtonLongPress() {
         AlarmService::GetInstance().Stop(true);
         return;
     }
-    if (CameraPreviewController::GetInstance().Exit()) {
+    if (CameraService::GetInstance().Exit()) {
         ESP_LOGI(kTag, "Long press: exit camera preview");
         return;
     }
@@ -62,10 +62,10 @@ void Application::ProcessButtonClick(uint8_t click_count) {
         }
         return;
     }
-    auto& camera_preview = CameraPreviewController::GetInstance();
-    if (camera_preview.IsActive()) {
+    auto& camera_service = CameraService::GetInstance();
+    if (camera_service.IsActive()) {
         if (click_count == 1) {
-            camera_preview.Capture();
+            camera_service.Capture();
         } else {
             ESP_LOGI(kTag, "相机预览期间忽略 %u 击",
                      static_cast<unsigned>(click_count));
@@ -97,8 +97,8 @@ void Application::ProcessButtonClick(uint8_t click_count) {
             break;
         case 2:
             // 双击始终是拍照入口；无摄像头板型或硬件初始化失败
-            // 由 CameraPreviewController 统一提示“未检测到摄像头”。
-            camera_preview.Enter();
+            // 由 CameraService 统一提示“未检测到摄像头”。
+            camera_service.StartButtonCapture();
             break;
         case 3: {
             // 三击：打开角色配置二维码；尚无角色配置时展示通用配网入口。

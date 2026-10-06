@@ -1,9 +1,9 @@
-#include "camera_preview_controller.h"
+#include "camera_service.h"
 
 #include "application.h"
 #include "boards/common/board.h"
 #include "boards/common/camera.h"
-#include "player/intents/playback_intent.h"
+#include "player/intents/camera_capture_intent.h"
 #include "system/device_status.h"
 #include "system/psram_task.h"
 #include "ui/ui.h"
@@ -18,7 +18,7 @@
 
 namespace {
 
-constexpr char kTag[] = "CameraPreview";
+constexpr char kTag[] = "CameraService";
 constexpr uint16_t kCaptureToneId = 73;
 constexpr uint16_t kPreviewWidth = 160;
 constexpr uint16_t kPreviewHeight = 120;
@@ -33,22 +33,24 @@ constexpr char kVisionPrompt[] =
 
 }  // 匿名命名空间
 
-CameraPreviewController& CameraPreviewController::GetInstance() {
-    static CameraPreviewController controller;
-    return controller;
+CameraService& CameraService::GetInstance() {
+    static CameraService service;
+    return service;
 }
 
-CameraPreviewController::~CameraPreviewController() {
+CameraService::~CameraService() {
     for (const auto subscription : subscriptions_) {
         AppEvent::Unsubscribe(subscription);
     }
 }
 
-void CameraPreviewController::Initialize(Application& application) {
+void CameraService::Initialize(Application& application) {
     if (application_ != nullptr) {
         return;
     }
     application_ = &application;
+    application.GetIntentManager().CameraCapture().SetCancelCallback(
+        [this]() { HandleIntentPreempted(); });
     const std::array<AppEvent::Id, 6> playback_events = {
         AppEvent::Id::PlaybackStreamReady,
         AppEvent::Id::PlaybackStarted,
@@ -74,11 +76,16 @@ void CameraPreviewController::Initialize(Application& application) {
     }
 }
 
-bool CameraPreviewController::IsActive() const {
+bool CameraService::IsActive() const {
     return phase_.load() != Phase::Inactive;
 }
 
-bool CameraPreviewController::Enter() {
+bool CameraService::StartButtonCapture() {
+    return Start(Origin::Button, 0);
+}
+
+bool CameraService::Start(Origin origin,
+                          uint32_t auto_capture_delay_ms) {
     auto* camera = Board::GetInstance().GetCamera();
     if (application_ == nullptr || camera == nullptr || !camera->IsAvailable()) {
         ESP_LOGW(kTag, "双击拍照失败：未检测到摄像头");
@@ -104,51 +111,49 @@ bool CameraPreviewController::Enter() {
         return false;
     }
 
-    if (state == kDeviceStateListening || state == kDeviceStateSpeaking ||
-        state == kDeviceStateConnecting) {
-        application_->AbortSpeaking(kAbortReasonWakeWordDetected);
-        application_->GetIntentManager().Pop(PlaybackIntentId::kVoiceSession);
-        application_->SetDeviceState(kDeviceStateIdle);
+    // 先标记为活动态，再让 Intent 停止旧 TTS，避免旧播放器终态被应用层
+    // 误判为普通语音会话结束并重新开启上行。
+    phase_ = Phase::Starting;
+    if (!application_->GetIntentManager().CameraCapture().Enter()) {
+        phase_ = Phase::Inactive;
+        ESP_LOGW(kTag, "拍照事件无法取得播放优先级");
+        Ui::ShowToast("当前状态暂时不能拍照");
+        return false;
     }
-
-    resume_music_ = application_->GetAudioPlayer().IsMusicPlaying();
-    if (resume_music_) {
-        application_->GetAudioPlayer().PauseMusic();
-    }
-    application_->GetAudioPlayer().StopNonMusic(PlaybackEndReason::kPreempted);
 
     capture_requested_ = false;
     exit_requested_ = false;
+    preempted_exit_ = false;
     capture_tone_finished_ = false;
     capture_tone_session_id_ = 0;
     tts_session_id_ = 0;
+    origin_ = origin;
+    auto_capture_delay_ms_ = auto_capture_delay_ms;
     const uint32_t generation = generation_.fetch_add(1) + 1;
     phase_ = Phase::Preview;
     Ui::ShowCameraPreview();
 
     auto context = std::make_unique<TaskContext>();
-    context->controller = this;
+    context->service = this;
     context->generation = generation;
-    if (PsramTask::Create(TaskEntry, "camera_preview", kWorkerStackSize,
+    if (PsramTask::Create(TaskEntry, "camera_service", kWorkerStackSize,
                           context.get(), kWorkerPriority, &task_handle_,
                           &context->stack_in_psram) != pdPASS) {
         task_handle_ = nullptr;
         phase_ = Phase::Inactive;
         Ui::DismissCameraPreview();
-        if (resume_music_) {
-            application_->GetAudioPlayer().ResumeMusic();
-            resume_music_ = false;
-        }
+        application_->GetIntentManager().CameraCapture().Exit();
         ESP_LOGE(kTag, "创建相机预览任务失败");
         return false;
     }
     context.release();
-    ESP_LOGI(kTag, "进入按键拍照预览: generation=%lu",
+    ESP_LOGI(kTag, "进入%s拍照预览: generation=%lu",
+             origin_ == Origin::Button ? "按键" : "语音/MCP",
              static_cast<unsigned long>(generation));
     return true;
 }
 
-bool CameraPreviewController::Capture() {
+bool CameraService::Capture() {
     if (phase_.load() != Phase::Preview) {
         return IsActive();
     }
@@ -158,7 +163,7 @@ bool CameraPreviewController::Capture() {
     return true;
 }
 
-bool CameraPreviewController::Exit() {
+bool CameraService::Exit() {
     const Phase phase = phase_.load();
     if (phase == Phase::Inactive) {
         return false;
@@ -168,26 +173,26 @@ bool CameraPreviewController::Exit() {
         phase_ = Phase::Exiting;
         ESP_LOGI(kTag, "等待当前预览帧结束后退出");
     } else {
-        FinishExit(true);
+        FinishExit(!preempted_exit_.load());
     }
     return true;
 }
 
-void CameraPreviewController::TaskEntry(void* arg) {
+void CameraService::TaskEntry(void* arg) {
     std::unique_ptr<TaskContext> context(static_cast<TaskContext*>(arg));
-    auto* controller = context->controller;
+    auto* service = context->service;
     const uint32_t generation = context->generation;
     const bool stack_in_psram = context->stack_in_psram;
-    controller->TaskLoop(generation);
+    service->TaskLoop(generation);
     {
-        std::lock_guard<std::mutex> lock(controller->mutex_);
-        controller->task_handle_ = nullptr;
+        std::lock_guard<std::mutex> lock(service->mutex_);
+        service->task_handle_ = nullptr;
     }
     context.reset();
     PsramTask::Delete(stack_in_psram);
 }
 
-void CameraPreviewController::TaskLoop(uint32_t generation) {
+void CameraService::TaskLoop(uint32_t generation) {
     auto* camera = Board::GetInstance().GetCamera();
     if (camera == nullptr || !camera->IsAvailable()) {
         Fail(generation, "未检测到摄像头");
@@ -195,13 +200,22 @@ void CameraPreviewController::TaskLoop(uint32_t generation) {
     }
 
     bool preview_frame_ready = false;
+    const TickType_t preview_started_at = xTaskGetTickCount();
     while (IsCurrent(generation)) {
         if (phase_.load() == Phase::Exiting || exit_requested_.load()) {
-            FinishExit(true);
+            FinishExit(!preempted_exit_.load());
             return;
         }
         if (phase_.load() != Phase::Preview) {
             return;
+        }
+        if (auto_capture_delay_ms_ > 0 &&
+            xTaskGetTickCount() - preview_started_at >=
+                pdMS_TO_TICKS(auto_capture_delay_ms_)) {
+            // 语音/MCP 拍照可配置为预览三秒后自动触发；按键模式延迟为 0，
+            // 仍由单击设置 capture_requested_。
+            capture_requested_ = true;
+            auto_capture_delay_ms_ = 0;
         }
         if (preview_frame_ready && capture_requested_.exchange(false)) {
             phase_ = Phase::Processing;
@@ -265,8 +279,8 @@ void CameraPreviewController::TaskLoop(uint32_t generation) {
     }
 }
 
-void CameraPreviewController::RequestCloudDescription(uint32_t generation,
-                                                      Camera& camera) {
+void CameraService::RequestCloudDescription(uint32_t generation,
+                                            Camera& camera) {
     if (!IsCurrent(generation) || exit_requested_.load()) {
         FinishExit(true);
         return;
@@ -285,7 +299,7 @@ void CameraPreviewController::RequestCloudDescription(uint32_t generation,
     ESP_LOGI(kTag, "按键照片 Base64 已通过 WS 上报，等待识图 TTS");
 }
 
-void CameraPreviewController::HandlePlaybackEvent(const PlaybackEvent& event) {
+void CameraService::HandlePlaybackEvent(const PlaybackEvent& event) {
     if (!IsActive()) {
         return;
     }
@@ -370,7 +384,14 @@ void CameraPreviewController::HandlePlaybackEvent(const PlaybackEvent& event) {
     }
 }
 
-void CameraPreviewController::Fail(uint32_t generation, const char* message) {
+void CameraService::HandleIntentPreempted() {
+    // 更高优先级事件已经接管播放器，退出拍照时不能再停止非音乐通道，
+    // 否则会误停刚开始播放的闹钟等音频。
+    preempted_exit_ = true;
+    Exit();
+}
+
+void CameraService::Fail(uint32_t generation, const char* message) {
     if (!IsCurrent(generation)) {
         return;
     }
@@ -380,8 +401,7 @@ void CameraPreviewController::Fail(uint32_t generation, const char* message) {
     FinishExit(true);
 }
 
-void CameraPreviewController::FinishExit(bool stop_audio) {
-    bool resume_music = false;
+void CameraService::FinishExit(bool stop_audio) {
     TaskHandle_t worker = nullptr;
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -392,11 +412,10 @@ void CameraPreviewController::FinishExit(bool stop_audio) {
         generation_.fetch_add(1);
         capture_requested_ = false;
         exit_requested_ = false;
+        preempted_exit_ = false;
         capture_tone_finished_ = false;
         capture_tone_session_id_ = 0;
         tts_session_id_ = 0;
-        resume_music = resume_music_;
-        resume_music_ = false;
         worker = task_handle_;
     }
 
@@ -418,13 +437,11 @@ void CameraPreviewController::FinishExit(bool stop_audio) {
     // 先切到待命状态，再恢复待机表情，避免 UI 把监听状态下的待机表情
     // 判定为无效更新而忽略。
     Ui::SetEmotion("待机");
-    if (resume_music) {
-        application_->GetAudioPlayer().ResumeMusic();
-    }
-    ESP_LOGI(kTag, "退出按键拍照流程");
+    application_->GetIntentManager().CameraCapture().Exit();
+    ESP_LOGI(kTag, "退出拍照流程");
 }
 
-bool CameraPreviewController::IsCurrent(uint32_t generation) const {
+bool CameraService::IsCurrent(uint32_t generation) const {
     return generation != 0 && generation_.load() == generation &&
            phase_.load() != Phase::Inactive;
 }

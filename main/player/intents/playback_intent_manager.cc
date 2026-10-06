@@ -5,10 +5,12 @@
 void PlaybackIntentManager::Initialize(Application &app) {
   music_.Initialize(*this, app);
   voice_session_.Initialize(app);
+  camera_capture_.Initialize(*this, app);
   alarm_.Initialize(*this);
 
   Bind(PlaybackIntentId::kMusic, music_);
   Bind(PlaybackIntentId::kVoiceSession, voice_session_);
+  Bind(PlaybackIntentId::kCameraCapture, camera_capture_);
   Bind(PlaybackIntentId::kAlarm, alarm_);
 }
 

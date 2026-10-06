@@ -1,6 +1,7 @@
 #pragma once
 
 #include "alarm_intent.h"
+#include "camera_capture_intent.h"
 #include "music_intent.h"
 #include "playback_intent.h"
 #include "voice_session_intent.h"
@@ -25,6 +26,7 @@ public:
 
   MusicIntent &Music() { return music_; }
   AlarmIntent &Alarm() { return alarm_; }
+  CameraCaptureIntent &CameraCapture() { return camera_capture_; }
 
 private:
   struct Callbacks {
@@ -53,6 +55,7 @@ private:
 
   MusicIntent music_;
   VoiceSessionIntent voice_session_;
+  CameraCaptureIntent camera_capture_;
   AlarmIntent alarm_;
 
   std::array<PlaybackIntentId, kCount> stack_{};
