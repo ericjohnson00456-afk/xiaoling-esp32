@@ -37,7 +37,8 @@ private:
     SdMusicService() = default;
 
     void TryStartSync();
-    void RunSync(uint32_t generation, const std::string& authorization);
+    void RunSync(uint32_t generation, const std::string& authorization,
+                 bool boot_initial_card);
     void FinishWorker(uint32_t generation);
     void PublishState(const SdMusicSyncState& state) const;
     void ReportRemovedAsync(std::string card_id);
@@ -52,6 +53,7 @@ private:
     TaskHandle_t worker_task_ = nullptr;
     bool initialized_ = false;
     bool pending_sync_ = false;
+    bool boot_initial_card_pending_ = false;
     bool boot_state_reconciled_ = false;
     std::atomic_uint32_t generation_{0};
     std::atomic_bool cancelled_{false};

@@ -99,6 +99,7 @@ struct SdMusicService::WorkerContext {
     SdMusicService* service = nullptr;
     uint32_t generation = 0;
     std::string authorization;
+    bool boot_initial_card = false;
     bool external_stack = false;
 };
 
@@ -126,10 +127,16 @@ void SdMusicService::OnCardInserted() {
         ESP_LOGW(kTag, "TF 卡已挂载，但无法读取卡信息");
         return;
     }
+    bool boot_initial_card = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         current_card_id_ = info.card_id;
         pending_sync_ = true;
+        // 监测器启动时完成的第一次挂载代表上电初始状态。后续插卡
+        // 都属于运行时插拔，保持原有的同步 UI 行为。
+        boot_initial_card = !boot_state_reconciled_;
+        boot_state_reconciled_ = true;
+        boot_initial_card_pending_ = boot_initial_card;
     }
     cancelled_.store(false);
     card_ready_.store(true);
@@ -162,6 +169,12 @@ void SdMusicService::OnCardRemoved() {
 }
 
 void SdMusicService::OnUnsupportedFileSystem() {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        // 初始探测已经得到明确结果（卡在位但文件系统不支持），不要再被
+        // OnCloudReady 误判为“上电无卡”并补报 removed 事件。
+        boot_state_reconciled_ = true;
+    }
     Ui::SetTfCardPresent(false);
     PublishState(SdMusicSyncState{
         .phase = SdMusicSyncPhase::kFailed,
@@ -179,7 +192,7 @@ void SdMusicService::OnCloudReady() {
         provider = authorization_provider_;
     }
     const std::string authorization = provider ? provider() : std::string{};
-    if (!authorization.empty()) {
+    if (!SdCardManager::GetInstance().IsMounted()) {
         ReconcileBootRemoval(authorization);
     }
     TryStartSync();
@@ -247,6 +260,7 @@ void SdMusicService::TryStartSync() {
             !card_ready_.load()) {
             return;
         }
+        context->boot_initial_card = boot_initial_card_pending_;
         // 持锁创建并登记句柄，避免新任务先运行完毕后留下失效句柄。
         if (PsramTask::Create(SyncTaskEntry, "sd_music_sync", kTaskStackSize,
                               context.get(), kTaskPriority, &task,
@@ -254,6 +268,7 @@ void SdMusicService::TryStartSync() {
             ESP_LOGE(kTag, "创建 TF 卡同步任务失败");
             return;
         }
+        boot_initial_card_pending_ = false;
         worker_task_ = task;
         pending_sync_ = false;
     }
@@ -263,7 +278,8 @@ void SdMusicService::TryStartSync() {
 void SdMusicService::SyncTaskEntry(void* arg) {
     std::unique_ptr<WorkerContext> context(static_cast<WorkerContext*>(arg));
     const bool external_stack = context->external_stack;
-    context->service->RunSync(context->generation, context->authorization);
+    context->service->RunSync(context->generation, context->authorization,
+                              context->boot_initial_card);
     context->service->FinishWorker(context->generation);
     context.reset();
     PsramTask::Delete(external_stack);
@@ -275,9 +291,14 @@ bool SdMusicService::IsCurrent(uint32_t generation) const {
 }
 
 void SdMusicService::RunSync(uint32_t generation,
-                             const std::string& authorization) {
+                             const std::string& authorization,
+                             bool boot_initial_card) {
     busy_.store(true);
-    PublishState(SdMusicSyncState{.phase = SdMusicSyncPhase::kScanning});
+    // 上电已有卡时先完成指纹判断；只有确实需要同步时才显示扫描页。
+    // 运行时插卡保持原有行为，立即显示扫描页。
+    if (!boot_initial_card) {
+        PublishState(SdMusicSyncState{.phase = SdMusicSyncPhase::kScanning});
+    }
 
     SdCardInfo info;
     if (!IsCurrent(generation) ||
@@ -286,6 +307,26 @@ void SdMusicService::RunSync(uint32_t generation,
         return;
     }
     const std::string storage_stamp = BuildStorageStamp(info);
+    bool unchanged = false;
+    {
+        const std::string card_id = info.card_id;
+        const std::string stamp = storage_stamp;
+        RunOnInternalNvsStack([&unchanged, card_id, stamp]() {
+            Settings settings(kSettingsNamespace);
+            unchanged = settings.GetString(kCardIdKey) == card_id &&
+                        settings.GetString(kStorageStampKey) == stamp;
+        });
+    }
+    if (unchanged) {
+        ESP_LOGI(kTag, "TF 卡存储指纹未变化，跳过文件列表上报: %s",
+                 storage_stamp.c_str());
+        if (boot_initial_card) {
+            // 上电时卡片和本地指纹都没有变化，不发送 inserted，也不显示同步 UI。
+            busy_.store(false);
+            return;
+        }
+    }
+
     SdMusicHttp http(authorization);
     const SdMusicHttpResult inserted =
         http.ReportCardEvent(info.card_id, "inserted", info.capacity_bytes);
@@ -311,25 +352,20 @@ void SdMusicService::RunSync(uint32_t generation,
         });
     }
 
-    bool unchanged = false;
-    {
-        const std::string card_id = info.card_id;
-        const std::string stamp = storage_stamp;
-        RunOnInternalNvsStack([&unchanged, card_id, stamp]() {
-            Settings settings(kSettingsNamespace);
-            unchanged = settings.GetString(kCardIdKey) == card_id &&
-                        settings.GetString(kStorageStampKey) == stamp;
-        });
-    }
     if (unchanged) {
-        ESP_LOGI(kTag, "TF 卡存储指纹未变化，跳过文件列表上报: %s",
-                 storage_stamp.c_str());
-        PublishState(SdMusicSyncState{
-            .phase = SdMusicSyncPhase::kSucceeded,
-            .result = SdMusicSyncResult::kDataUnchanged,
-        });
+        // 运行时插卡保留原逻辑：插卡事件已上报，但不重复上传文件列表。
+        if (!boot_initial_card) {
+            PublishState(SdMusicSyncState{
+                .phase = SdMusicSyncPhase::kSucceeded,
+                .result = SdMusicSyncResult::kDataUnchanged,
+            });
+        }
         busy_.store(false);
         return;
+    }
+
+    if (boot_initial_card) {
+        PublishState(SdMusicSyncState{.phase = SdMusicSyncPhase::kScanning});
     }
 
     SdMusicScanStats count_stats;
@@ -490,13 +526,26 @@ void SdMusicService::ReconcileBootRemoval(const std::string& authorization) {
         boot_state_reconciled_ = true;
     }
     if (SdCardManager::GetInstance().IsMounted()) return;
-    {
+    const bool cleared = RunOnInternalNvsStack([&previous_card_id]() {
         Settings settings(kSettingsNamespace, true);
         previous_card_id = settings.GetString(kPresentCardKey);
-        if (!previous_card_id.empty()) settings.EraseKey(kPresentCardKey);
+        if (previous_card_id.empty()) {
+            previous_card_id = settings.GetString(kCardIdKey);
+        }
+        settings.EraseKey(kCardIdKey);
+        settings.EraseKey(kStorageStampKey);
+        settings.EraseKey(kPresentCardKey);
+    });
+    if (!cleared) {
+        ESP_LOGW(kTag, "上电未检测到 TF 卡，但清除同步指纹失败");
+        return;
     }
     if (previous_card_id.empty()) return;
     ESP_LOGI(kTag, "上电未检测到上次在位的 TF 卡，补报 removed 事件");
+    if (authorization.empty()) {
+        ESP_LOGW(kTag, "没有可用鉴权信息，跳过上电 removed 事件上报");
+        return;
+    }
     auto context = std::make_unique<RemovedContext>();
     context->card_id = std::move(previous_card_id);
     context->authorization = authorization;

@@ -56,6 +56,8 @@ void SdMusicSyncView::CreateUi() {
     lv_obj_clear_flag(root_, LV_OBJ_FLAG_SCROLLABLE);
 
     title_ = CreateLabel(root_, font, theme->text_color(), 42);
+    // 标题文本较长时使用整行宽度，避免“数据无变化”的最后一个字单独换行。
+    lv_obj_set_width(title_, LV_PCT(100));
     detail_ = CreateLabel(root_, font, theme->text_color(), 82);
     lv_obj_set_style_text_opa(detail_, LV_OPA_70, 0);
 

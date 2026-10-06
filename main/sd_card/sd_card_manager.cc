@@ -328,20 +328,47 @@ esp_err_t SdCardManager::StartMonitoring(const SdSpiCardConfig& config,
     if (!IsValidConfig(config)) {
         return ESP_ERR_INVALID_ARG;
     }
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (mounted_) {
-        return ESP_ERR_INVALID_STATE;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (mounted_) {
+            return ESP_ERR_INVALID_STATE;
+        }
+        config_ = config;
+        event_callback_ = std::move(callback);
+        monitoring_ = true;
     }
-    config_ = config;
-    event_callback_ = std::move(callback);
-    monitoring_ = true;
-    if (monitor_task_ != nullptr) {
-        return ESP_OK;
+
+    // 启动监测前先完成一次同步探测，确保上电已有卡能被标记为初始状态，
+    // 也让上层在云连接建立前就知道当前是否有卡。后续插拔仍由轮询任务处理。
+    const esp_err_t initial_mount = Mount(false);
+    if (initial_mount == ESP_OK) {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            filesystem_error_notified_ = false;
+        }
+        ESP_LOGI(TAG, "检测到 SD 卡插入，已挂载到 %s", MountPoint());
+        Notify(SdCardEvent::kInserted);
+    } else if (initial_mount == ESP_FAIL) {
+        bool should_notify = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            should_notify = !filesystem_error_notified_;
+            filesystem_error_notified_ = true;
+        }
+        if (should_notify) {
+            ESP_LOGW(TAG, "检测到无法挂载的 SD 卡文件系统");
+            Notify(SdCardEvent::kUnsupportedFileSystem);
+        }
     }
-    if (xTaskCreate(MonitorTaskEntry, "sd_hotplug", 4096, this,
-                    tskIDLE_PRIORITY + 2, &monitor_task_) != pdPASS) {
-        monitoring_ = false;
-        return ESP_ERR_NO_MEM;
+
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (monitor_task_ == nullptr &&
+            xTaskCreate(MonitorTaskEntry, "sd_hotplug", 4096, this,
+                        tskIDLE_PRIORITY + 2, &monitor_task_) != pdPASS) {
+            monitoring_ = false;
+            return ESP_ERR_NO_MEM;
+        }
     }
     ESP_LOGI(TAG, "SD 卡轮询监测已启动: 周期=%lu ms",
              static_cast<unsigned long>(kMonitorPeriodMs));
