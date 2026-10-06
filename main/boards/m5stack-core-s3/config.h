@@ -4,6 +4,7 @@
 // M5Stack CoreS3 Board configuration
 
 #include <driver/gpio.h>
+#include <driver/spi_common.h>
 
 #define AUDIO_INPUT_REFERENCE    true
 #define AUDIO_INPUT_SAMPLE_RATE  16000
@@ -38,6 +39,15 @@
 
 #define DISPLAY_BACKLIGHT_PIN GPIO_NUM_NC
 #define DISPLAY_BACKLIGHT_OUTPUT_INVERT true
+
+// CoreS3 内置 MicroSD 卡与 LCD 共用 SPI3 总线。GPIO35 在 LCD
+// 事务中作为 D/C，在 SD 事务中作为 MISO，两个设备由独立 CS 分时访问。
+#define SD_CARD_SPI_HOST      SPI3_HOST
+#define SD_CARD_SPI_MOSI      GPIO_NUM_37
+#define SD_CARD_SPI_MISO      GPIO_NUM_35
+#define SD_CARD_SPI_SCLK      GPIO_NUM_36
+#define SD_CARD_SPI_CS        GPIO_NUM_4
+#define SD_CARD_POWER         GPIO_NUM_NC
 
 
 

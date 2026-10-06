@@ -11,6 +11,7 @@
 #include <esp_err.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <sd_protocol_types.h>
 
 #include "sd_card_config.h"
 
@@ -59,6 +60,8 @@ private:
     void Notify(SdCardEvent event);
     void MonitorLoop();
     static void MonitorTaskEntry(void* arg);
+    static esp_err_t DoSharedSpiTransaction(int slot,
+                                            sdmmc_command_t* command);
 
     mutable std::mutex mutex_;
     std::optional<SdSpiCardConfig> config_;

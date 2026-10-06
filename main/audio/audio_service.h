@@ -47,10 +47,6 @@
  * multi-second gaps between network reads; the queue is allocated in PSRAM
  * on this board. Short clips bypass the gate when the stream finishes. */
 #define MAX_PLAYER_PLAYBACK_TASKS_IN_QUEUE 192
-/* Two seconds of 16 kHz, mono, 16-bit PCM is 64 KiB. Start TTS as soon as
- * that amount is decoded; short streams are released at EOF. */
-/* After a mid-stream underrun, resume as soon as any PCM block arrives. */
-#define PLAYER_RECOVERY_PREBUFFER_BYTES 1
 #define MAX_DECODE_PACKETS_IN_QUEUE (2400 / OPUS_FRAME_DURATION_MS)
 /* AudioService 始终生产 Opus，只保留最近 2.4 秒，业务未上报时覆盖旧包。 */
 #define MAX_OPUS_PACKETS_IN_QUEUE (2400 / OPUS_FRAME_DURATION_MS)

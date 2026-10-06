@@ -13,6 +13,7 @@
 #include <esp_lcd_panel_ops.h>
 #include <esp_lcd_ili9341.h>
 #include <esp_timer.h>
+#include <freertos/semphr.h>
 #include "esp32_camera.h"
 
 #define TAG "M5StackCoreS3Board"
@@ -159,6 +160,8 @@ private:
     PowerSaveTimer* power_save_timer_;
     uint8_t pending_power_key_clicks_ = 0;
     int64_t last_power_key_click_time_us_ = 0;
+    StaticSemaphore_t spi_bus_lock_storage_ = {};
+    SemaphoreHandle_t spi_bus_lock_ = nullptr;
 
     void InitializePowerSaveTimer() {
         power_save_timer_ = new PowerSaveTimer(-1, 60, 300);
@@ -322,9 +325,15 @@ private:
     }
 
     void InitializeSpi() {
+        spi_bus_lock_ = xSemaphoreCreateBinaryStatic(&spi_bus_lock_storage_);
+        configASSERT(spi_bus_lock_ != nullptr);
+        const BaseType_t released = xSemaphoreGive(spi_bus_lock_);
+        configASSERT(released == pdTRUE);
+        (void)released;
+
         spi_bus_config_t buscfg = {};
         buscfg.mosi_io_num = GPIO_NUM_37;
-        buscfg.miso_io_num = GPIO_NUM_NC;
+        buscfg.miso_io_num = GPIO_NUM_35;
         buscfg.sclk_io_num = GPIO_NUM_36;
         buscfg.quadwp_io_num = GPIO_NUM_NC;
         buscfg.quadhd_io_num = GPIO_NUM_NC;
@@ -365,7 +374,8 @@ private:
         esp_lcd_panel_mirror(panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
 
         display_ = new SpiLcdDisplay(panel_io, panel,
-                                    DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
+                                    DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY,
+                                    spi_bus_lock_);
     }
 
      void InitializeCamera() {
@@ -437,6 +447,21 @@ public:
             AUDIO_CODEC_ES7210_ADDR,
             AUDIO_INPUT_REFERENCE);
         return &audio_codec;
+    }
+
+    virtual const SdSpiCardConfig* GetSdCardConfig() override {
+        static const SdSpiCardConfig config = {
+            .host = SD_CARD_SPI_HOST,
+            .mosi = SD_CARD_SPI_MOSI,
+            .miso = SD_CARD_SPI_MISO,
+            .sclk = SD_CARD_SPI_SCLK,
+            .cs = SD_CARD_SPI_CS,
+            .power = SD_CARD_POWER,
+            .power_on_level = 0,
+            .bus_ownership = SdSpiBusOwnership::kExternallyOwned,
+            .shared_bus_lock = spi_bus_lock_,
+        };
+        return &config;
     }
 
     virtual Display* GetDisplay() override {

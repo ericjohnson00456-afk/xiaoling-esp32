@@ -93,6 +93,10 @@ bool IsValidConfig(const SdSpiCardConfig& config) {
            config.power_on_level <= 1;
 }
 
+bool OwnsSpiBus(const SdSpiCardConfig& config) {
+    return config.bus_ownership == SdSpiBusOwnership::kManagerOwned;
+}
+
 }  // namespace
 
 SdCardManager& SdCardManager::GetInstance() {
@@ -141,27 +145,33 @@ esp_err_t SdCardManager::Mount(bool log_details) {
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 
-    spi_bus_config_t bus_config = {};
-    bus_config.mosi_io_num = config.mosi;
-    bus_config.miso_io_num = config.miso;
-    bus_config.sclk_io_num = config.sclk;
-    bus_config.quadwp_io_num = GPIO_NUM_NC;
-    bus_config.quadhd_io_num = GPIO_NUM_NC;
-    bus_config.max_transfer_sz = 16 * 1024;
+    if (OwnsSpiBus(config)) {
+        spi_bus_config_t bus_config = {};
+        bus_config.mosi_io_num = config.mosi;
+        bus_config.miso_io_num = config.miso;
+        bus_config.sclk_io_num = config.sclk;
+        bus_config.quadwp_io_num = GPIO_NUM_NC;
+        bus_config.quadhd_io_num = GPIO_NUM_NC;
+        bus_config.max_transfer_sz = 16 * 1024;
 
-    ret = spi_bus_initialize(config.host, &bus_config, SPI_DMA_CH_AUTO);
-    if (ret != ESP_OK) {
-        if (log_details) {
-            ESP_LOGE(TAG, "初始化 SD 卡 SPI 总线失败: %s", esp_err_to_name(ret));
+        ret = spi_bus_initialize(config.host, &bus_config, SPI_DMA_CH_AUTO);
+        if (ret != ESP_OK) {
+            if (log_details) {
+                ESP_LOGE(TAG, "初始化 SD 卡 SPI 总线失败: %s",
+                         esp_err_to_name(ret));
+            }
+            if (config.power != GPIO_NUM_NC) {
+                gpio_set_level(config.power, !config.power_on_level);
+                gpio_reset_pin(config.power);
+            }
+            return ret;
         }
-        if (config.power != GPIO_NUM_NC) {
-            gpio_set_level(config.power, !config.power_on_level);
-            gpio_reset_pin(config.power);
-        }
-        return ret;
     }
 
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
+    if (config.shared_bus_lock != nullptr) {
+        host.do_transaction = &SdCardManager::DoSharedSpiTransaction;
+    }
     sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
     slot_config.gpio_cs = config.cs;
     slot_config.host_id = config.host;
@@ -180,7 +190,9 @@ esp_err_t SdCardManager::Mount(bool log_details) {
         if (log_details) {
             ESP_LOGW(TAG, "挂载 SD 卡失败: %s", esp_err_to_name(ret));
         }
-        spi_bus_free(config.host);
+        if (OwnsSpiBus(config)) {
+            spi_bus_free(config.host);
+        }
         if (config.power != GPIO_NUM_NC) {
             gpio_set_level(config.power, !config.power_on_level);
             gpio_reset_pin(config.power);
@@ -196,6 +208,25 @@ esp_err_t SdCardManager::Mount(bool log_details) {
         sdmmc_card_print_info(stdout, card);
     }
     return ESP_OK;
+}
+
+esp_err_t SdCardManager::DoSharedSpiTransaction(
+    int slot, sdmmc_command_t* command) {
+    auto& manager = GetInstance();
+    if (!manager.config_.has_value() ||
+        manager.config_->shared_bus_lock == nullptr) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    SemaphoreHandle_t lock = manager.config_->shared_bus_lock;
+    if (xSemaphoreTake(lock, portMAX_DELAY) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    const esp_err_t ret = sdspi_host_do_transaction(slot, command);
+    const BaseType_t released = xSemaphoreGive(lock);
+    configASSERT(released == pdTRUE);
+    (void)released;
+    return ret;
 }
 
 esp_err_t SdCardManager::Deinitialize() {
@@ -215,7 +246,9 @@ esp_err_t SdCardManager::Deinitialize() {
     card_ = nullptr;
     mounted_ = false;
     removal_pending_ = false;
-    const esp_err_t bus_ret = spi_bus_free(config.host);
+    const esp_err_t bus_ret = OwnsSpiBus(config)
+                                  ? spi_bus_free(config.host)
+                                  : ESP_OK;
     esp_err_t power_ret = ESP_OK;
     if (config.power != GPIO_NUM_NC) {
         power_ret = gpio_set_level(config.power, !config.power_on_level);

@@ -576,15 +576,16 @@ void AudioService::AudioOutputTask() {
             break;
         }
 
-        /* TTS starts with two seconds of actual PCM; other player sources use
-           a small 4 KiB gate. After an underrun, resume on the first new PCM
-           block. A completed stream always releases a tail below the target. */
+        /* TTS starts with two seconds of actual PCM. Other player sources use
+           about 0.5 seconds both initially and after an underrun, which absorbs
+           SD/LCD shared-SPI stalls. A completed stream always releases a tail
+           below the target. */
         const bool is_player =
             audio_playback_queue_.front()->type == kAudioTaskTypePlayerToPlaybackQueue;
         const bool initial_prebuffer = player_output_chunks_.load() == 0;
         const size_t prebuffer_target = initial_prebuffer
                                             ? player_initial_prebuffer_bytes_
-                                            : PLAYER_RECOVERY_PREBUFFER_BYTES;
+                                            : kAudioPlayerInitialPrebufferBytes;
         const auto queued_player_pcm_bytes = [this]() {
             size_t bytes = 0;
             for (const auto& queued_task : audio_playback_queue_) {

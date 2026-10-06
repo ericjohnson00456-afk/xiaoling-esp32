@@ -9,6 +9,7 @@
 #include <sdkconfig.h>
 #include <esp_audio_simple_player_advance.h>
 #include <esp_gmf_io_embed_flash.h>
+#include <esp_gmf_io_file.h>
 #include <esp_gmf_io_http.h>
 #include <esp_gmf_pipeline.h>
 #include <esp_heap_caps.h>
@@ -39,6 +40,15 @@ namespace {
 // 50 ms 正文超时也能在数据不足时及时返回部分内容。
 constexpr size_t kStreamingHttpReadSize = 1024;
 constexpr size_t kStreamingHttpBufferSize = 32 * 1024;
+// Local files must be read ahead independently of MP3 decoding. This is
+// especially important when an SD card shares its SPI bus with the LCD: a
+// synchronous fread/decode chain cannot sustain high-bitrate tracks while
+// display flushes are active.
+constexpr size_t kFileReadSize = 4 * 1024;
+constexpr size_t kFileBufferSize = 32 * 1024;
+constexpr size_t kFileInputStackSize = 4 * 1024;
+constexpr uint32_t kFileDecodeYieldChunkInterval = 32;
+constexpr char kBufferedFileIoName[] = "io_file_buffered";
 // esp_http_client_read() 默认会等待完整的请求长度。较短的正文读取超时可以让
 // 稀疏的实时 TTS 数据一到达就返回部分正文，同时保留 GMF 对请求头和连接阶段
 // 的默认超时设置。
@@ -73,6 +83,20 @@ bool IsTtsPcmTimeout(PlaybackEndReason reason) {
            reason == PlaybackEndReason::kPcmStallTimeout;
 }
 
+esp_gmf_err_t ScoreBufferedFileIo(esp_gmf_io_handle_t, const char* url,
+                                  int* score) {
+    if (url == nullptr || score == nullptr) {
+        return ESP_GMF_ERR_INVALID_ARG;
+    }
+    *score = ESP_GMF_IO_SCORE_NONE;
+    if (url[0] == '/' || strncasecmp(url, "file://", 7) == 0) {
+        // Beat the synchronous file IO's STANDARD score so the pool clones
+        // this already-BLOCK prototype while constructing the pipeline.
+        *score = ESP_GMF_IO_SCORE_PERFECT;
+    }
+    return ESP_GMF_ERR_OK;
+}
+
 }  // namespace
 
 // 配置 esp_audio_simple_player 创建出的输入 IO。
@@ -94,14 +118,15 @@ int EspSimplePlayerBackend::ConfigureInputIo(esp_asp_handle_t handle, void* ctx)
 
     const char* input_tag = OBJ_GET_TAG(input);
     const bool is_http = input_tag != nullptr && strcasecmp(input_tag, "io_http") == 0;
-    const bool is_file = input_tag != nullptr && strcasecmp(input_tag, "io_file") == 0;
+    const bool is_file = input_tag != nullptr &&
+                         strcasecmp(input_tag, kBufferedFileIoName) == 0;
 
     if (is_file) {
-        auto* io = static_cast<esp_gmf_io_t*>(input);
-        io->io_cfg.thread.prio = kPlayerInputPriority;
-        io->io_cfg.thread.core = kPlayerCommandCore;
-        io->io_cfg.thread.stack_in_ext = true;
-        ESP_LOGI(TAG, "文件输入任务已配置: priority=%u, core=%d",
+        ESP_LOGI(TAG,
+                 "文件输入任务已配置: read=%u, buffer=%u bytes, "
+                 "priority=%u, core=%d",
+                 static_cast<unsigned>(kFileReadSize),
+                 static_cast<unsigned>(kFileBufferSize),
                  static_cast<unsigned>(kPlayerInputPriority),
                  kPlayerCommandCore);
         return ESP_GMF_ERR_OK;
@@ -220,6 +245,36 @@ bool EspSimplePlayerBackend::Initialize(AudioOutput* audio_output, EventCallback
     const auto result = esp_audio_simple_player_new(&config, &handle_);
     if (result != ESP_GMF_ERR_OK || handle_ == nullptr) {
         ESP_LOGE(TAG, "创建 GMF 播放器失败: 0x%x", result);
+        handle_ = nullptr;
+        return false;
+    }
+
+    // The file IO must be asynchronous before GMF clones it into a pipeline.
+    // Configuring the cloned default BYTE IO in ConfigureInputIo() is too late:
+    // its BYTE port has already allocated a payload, which is then lost when
+    // the asynchronous data bus supplies another buffer.
+    file_io_cfg_t file_cfg = FILE_IO_CFG_DEFAULT();
+    file_cfg.dir = ESP_GMF_IO_DIR_READER;
+    file_cfg.name = kBufferedFileIoName;
+    file_cfg.io_cfg.thread.stack = kFileInputStackSize;
+    file_cfg.io_cfg.thread.prio = kPlayerInputPriority;
+    file_cfg.io_cfg.thread.core = kPlayerCommandCore;
+    file_cfg.io_cfg.thread.stack_in_ext = true;
+    file_cfg.io_cfg.buffer_cfg.io_size = kFileReadSize;
+    file_cfg.io_cfg.buffer_cfg.buffer_size = kFileBufferSize;
+
+    esp_gmf_io_handle_t file_io = nullptr;
+    auto file_result = esp_gmf_io_file_init(&file_cfg, &file_io);
+    if (file_result == ESP_GMF_ERR_OK && file_io != nullptr) {
+        static_cast<esp_gmf_io_t*>(file_io)->get_score = ScoreBufferedFileIo;
+        file_result = esp_audio_simple_player_register_io(handle_, file_io);
+    }
+    if (file_result != ESP_GMF_ERR_OK || file_io == nullptr) {
+        ESP_LOGE(TAG, "注册异步文件输入失败: 0x%x", file_result);
+        if (file_io != nullptr) {
+            esp_gmf_obj_delete(file_io);
+        }
+        esp_audio_simple_player_destroy(handle_);
         handle_ = nullptr;
         return false;
     }
@@ -864,10 +919,12 @@ int EspSimplePlayerBackend::HandleOutput(uint8_t* data, int data_size) {
     // 解码器每次输出 PCM 都经过这里，再进入 AudioOutput 的播放队列。
     AudioOutputEvent output;
     uint32_t chunk_index = 0;
+    bool is_file = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         output.session_id = current_request_.session_id;
         chunk_index = ++output_chunks_;
+        is_file = current_request_.source_type == PlaybackSourceType::kFile;
         if (playing_ && current_request_.channel == PlaybackChannel::kTts &&
             current_request_.session_id == tts_timeout_session_id_ &&
             !tts_timeout_stop_pending_) {
@@ -884,11 +941,17 @@ int EspSimplePlayerBackend::HandleOutput(uint8_t* data, int data_size) {
     }
     /* 播放器固定输出 CONFIG_AUDIO_SIMPLE_PLAYER_RESAMPLE_DEST_RATE，
        AudioService 会在放入播放队列前将其重采样到 codec 的实际输出采样率。 */
-    return audio_output_->PushPcm(
-               data, static_cast<size_t>(data_size),
-               CONFIG_AUDIO_SIMPLE_PLAYER_RESAMPLE_DEST_RATE, output, true)
-               ? ESP_OK
-               : ESP_FAIL;
+    const bool queued = audio_output_->PushPcm(
+        data, static_cast<size_t>(data_size),
+        CONFIG_AUDIO_SIMPLE_PLAYER_RESAMPLE_DEST_RATE, output, true);
+    // Buffered file IO can keep every GMF stage continuously runnable. Give
+    // CPU1's Idle task a bounded scheduling opportunity without throttling
+    // HTTP TTS, whose reads already block while waiting for network data.
+    if (queued && is_file &&
+        chunk_index % kFileDecodeYieldChunkInterval == 0) {
+        vTaskDelay(1);
+    }
+    return queued ? ESP_OK : ESP_FAIL;
 }
 
 int EspSimplePlayerBackend::HandleEvent(esp_asp_event_pkt_t* event) {

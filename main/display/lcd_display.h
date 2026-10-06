@@ -7,6 +7,8 @@
 #include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>
 #include <font_emoji.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 #include <atomic>
 #include <memory>
@@ -89,10 +91,19 @@ public:
 
 // SPI LCD display
 class SpiLcdDisplay : public LcdDisplay {
+private:
+    SemaphoreHandle_t shared_bus_lock_ = nullptr;
+
+    static void SharedBusFlushStart(lv_event_t* event);
+    static bool SharedBusFlushDone(esp_lcd_panel_io_handle_t panel_io,
+                                   esp_lcd_panel_io_event_data_t* event_data,
+                                   void* user_context);
+
 public:
     SpiLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_t panel,
                   int width, int height, int offset_x, int offset_y,
-                  bool mirror_x, bool mirror_y, bool swap_xy);
+                  bool mirror_x, bool mirror_y, bool swap_xy,
+                  SemaphoreHandle_t shared_bus_lock = nullptr);
 };
 
 // RGB LCD display

@@ -79,8 +79,10 @@ LcdDisplay::LcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_
 }
 
 SpiLcdDisplay::SpiLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_t panel,
-                           int width, int height, int offset_x, int offset_y, bool mirror_x, bool mirror_y, bool swap_xy)
-    : LcdDisplay(panel_io, panel, width, height) {
+                           int width, int height, int offset_x, int offset_y, bool mirror_x, bool mirror_y, bool swap_xy,
+                           SemaphoreHandle_t shared_bus_lock)
+    : LcdDisplay(panel_io, panel, width, height),
+      shared_bus_lock_(shared_bus_lock) {
 
     // draw white
     std::vector<uint16_t> buffer(width_, 0xFFFF);
@@ -166,11 +168,50 @@ SpiLcdDisplay::SpiLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_h
         return;
     }
 
+    if (shared_bus_lock_ != nullptr) {
+        const esp_lcd_panel_io_callbacks_t callbacks = {
+            .on_color_trans_done = SharedBusFlushDone,
+        };
+        ESP_ERROR_CHECK(esp_lcd_panel_io_register_event_callbacks(
+            panel_io_, &callbacks, this));
+        lv_display_add_event_cb(display_, SharedBusFlushStart,
+                                LV_EVENT_FLUSH_START, this);
+        ESP_LOGI(TAG, "Shared SPI transaction lock enabled");
+    }
+
     if (offset_x != 0 || offset_y != 0) {
         lv_display_set_offset(display_, offset_x, offset_y);
     }
 
     SetupUI();
+}
+
+void SpiLcdDisplay::SharedBusFlushStart(lv_event_t* event) {
+    auto* display = static_cast<SpiLcdDisplay*>(lv_event_get_user_data(event));
+    configASSERT(display != nullptr);
+    configASSERT(display->shared_bus_lock_ != nullptr);
+    const BaseType_t taken =
+        xSemaphoreTake(display->shared_bus_lock_, portMAX_DELAY);
+    configASSERT(taken == pdTRUE);
+    (void)taken;
+}
+
+bool SpiLcdDisplay::SharedBusFlushDone(
+    esp_lcd_panel_io_handle_t panel_io,
+    esp_lcd_panel_io_event_data_t* event_data,
+    void* user_context) {
+    (void)panel_io;
+    (void)event_data;
+    auto* display = static_cast<SpiLcdDisplay*>(user_context);
+    configASSERT(display != nullptr);
+
+    BaseType_t task_woken = pdFALSE;
+    const BaseType_t released =
+        xSemaphoreGiveFromISR(display->shared_bus_lock_, &task_woken);
+    configASSERT(released == pdTRUE);
+    (void)released;
+    lv_display_flush_ready(display->display_);
+    return task_woken == pdTRUE;
 }
 
 

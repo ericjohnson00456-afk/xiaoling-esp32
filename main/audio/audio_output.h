@@ -16,7 +16,9 @@ struct AudioPlaybackConfig {
     size_t initial_prebuffer_bytes = 0;
 };
 
-constexpr size_t kAudioPlayerInitialPrebufferBytes = 4 * 1024;
+// About 0.5 seconds of 16 kHz, mono, 16-bit PCM. SD and LCD may share an SPI
+// bus, so local playback needs enough queued audio to absorb display traffic.
+constexpr size_t kAudioPlayerInitialPrebufferBytes = 16 * 1024;
 constexpr size_t kAudioTtsInitialPrebufferBytes = 64 * 1024;
 
 class AudioOutput {
