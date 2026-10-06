@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <map>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -34,6 +35,71 @@ void SetTransparent(lv_obj_t* object) {
     lv_obj_set_style_bg_opa(object, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(object, 0, 0);
     lv_obj_set_style_pad_all(object, 0, 0);
+}
+
+size_t NextUtf8Offset(const std::string& text, size_t offset) {
+    if (offset >= text.size()) {
+        return text.size();
+    }
+    ++offset;
+    while (offset < text.size() &&
+           (static_cast<uint8_t>(text[offset]) & 0xc0) == 0x80) {
+        ++offset;
+    }
+    return offset;
+}
+
+std::string LatestWrappedLines(lv_obj_t* label, const std::string& text,
+                               uint8_t max_lines) {
+    if (label == nullptr || text.empty() || max_lines == 0) {
+        return {};
+    }
+    const auto* font = lv_obj_get_style_text_font(label, LV_PART_MAIN);
+    const int32_t max_width = lv_obj_get_content_width(label);
+    if (font == nullptr || max_width <= 0) {
+        return text;
+    }
+    const int32_t letter_space =
+        lv_obj_get_style_text_letter_space(label, LV_PART_MAIN);
+    const int32_t line_space =
+        lv_obj_get_style_text_line_space(label, LV_PART_MAIN);
+    const int32_t max_height = lv_font_get_line_height(font) * max_lines +
+                               line_space * (max_lines - 1);
+    auto fits = [&](const char* value) {
+        lv_point_t size{};
+        lv_text_get_size(&size, value, font, letter_space, line_space,
+                         max_width, LV_TEXT_FLAG_NONE);
+        return size.y <= max_height;
+    };
+    if (fits(text.c_str())) {
+        return text;
+    }
+
+    // 查找能放入指定行数的最长 UTF-8 后缀。移除开头字符后行数单调不增，
+    // 因此使用二分查找，避免每次字幕更新都做完整扫描。
+    std::vector<size_t> offsets{0};
+    size_t offset = 0;
+    while (offset < text.size()) {
+        offset = NextUtf8Offset(text, offset);
+        offsets.push_back(offset);
+    }
+    size_t low = 1;
+    size_t high = offsets.size() - 1;
+    while (low < high) {
+        const size_t mid = low + (high - low) / 2;
+        if (fits(text.c_str() + offsets[mid])) {
+            high = mid;
+        } else {
+            low = mid + 1;
+        }
+    }
+    size_t visible_offset = offsets[low];
+    while (visible_offset < text.size() &&
+           (text[visible_offset] == '\n' || text[visible_offset] == '\r' ||
+            text[visible_offset] == ' ' || text[visible_offset] == '\t')) {
+        ++visible_offset;
+    }
+    return text.substr(visible_offset);
 }
 
 }  // namespace
@@ -127,8 +193,11 @@ void HomeView::CreateUi() {
     lv_label_set_long_mode(subtitle_label_, LV_LABEL_LONG_WRAP);
     if (text_font != nullptr) {
         lv_obj_set_style_text_font(subtitle_label_, text_font, 0);
-        lv_obj_set_height(subtitle_label_, text_font->line_height * 3);
     }
+    // 单行字幕贴住区域底部；换行时标签按内容高度向上增长，最多三行。
+    lv_obj_set_height(subtitle_label_, LV_SIZE_CONTENT);
+    lv_obj_set_style_max_height(
+        subtitle_label_, text_font != nullptr ? text_font->line_height * 3 : 60, 0);
     lv_obj_set_style_text_align(subtitle_label_, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(subtitle_label_, theme->text_color(), 0);
     lv_obj_align(subtitle_label_, LV_ALIGN_BOTTOM_MID, 0, -theme->spacing(4));
@@ -256,9 +325,11 @@ void HomeView::CreateUi() {
 
     subtitle_label_ = lv_label_create(root_);
     lv_obj_set_width(subtitle_label_, LV_HOR_RES * 90 / 100);
-    lv_obj_set_height(subtitle_label_, text_font != nullptr ? text_font->line_height * 3 : 60);
-    // The presenter advances sentence pieces itself. Wrap the current piece
-    // inside the fixed three-line box instead of replacing its tail with dots.
+    // Presenter 负责推进句段；当前句段在内容高度自适应的标签内换行，
+    // 不用省略号替换尾部。标签底部对齐，新增行向上扩展，最多三行。
+    lv_obj_set_height(subtitle_label_, LV_SIZE_CONTENT);
+    lv_obj_set_style_max_height(
+        subtitle_label_, text_font != nullptr ? text_font->line_height * 3 : 60, 0);
     lv_label_set_long_mode(subtitle_label_, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_align(subtitle_label_, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(subtitle_label_, theme->text_color(), 0);
@@ -301,10 +372,11 @@ void HomeView::CreateUi() {
 
 #ifdef CONFIG_LSPLATFORM
     image_container_ = lv_obj_create(root_);
-    lv_obj_set_size(image_container_, LV_HOR_RES, LV_PCT(85));
-    lv_obj_align(image_container_, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_size(image_container_, 160, 120);
+    lv_obj_align(image_container_, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_style_bg_color(image_container_, theme->background_color(), 0);
     lv_obj_set_style_border_width(image_container_, 0, 0);
+    lv_obj_set_style_pad_all(image_container_, 0, 0);
     lv_obj_add_flag(image_container_, LV_OBJ_FLAG_HIDDEN);
     image_ = lv_image_create(image_container_);
     lv_obj_set_size(image_, LV_PCT(100), LV_PCT(100));
@@ -404,6 +476,18 @@ void HomeView::RenderEmotion(const std::string& emotion, bool one_shot, uint32_t
     if (!lock.locked()) {
         return;
     }
+    if (image_visible_) {
+        if (emoji_box_ != nullptr) {
+            lv_obj_add_flag(emoji_box_, LV_OBJ_FLAG_HIDDEN);
+        }
+        if (emoji_image_ != nullptr) {
+            lv_obj_add_flag(emoji_image_, LV_OBJ_FLAG_HIDDEN);
+        }
+        if (emoji_label_ != nullptr) {
+            lv_obj_add_flag(emoji_label_, LV_OBJ_FLAG_HIDDEN);
+        }
+        return;
+    }
     if (animation_player_ != nullptr) {
         animation_player_->Stop();
     }
@@ -485,7 +569,7 @@ void HomeView::SetText(const std::string& text) {
     SetChatMessage("system", text);
 }
 
-void HomeView::SetSubtitleText(const std::string& text) {
+void HomeView::SetSubtitleText(const std::string& text, uint8_t max_lines) {
     if (lvgl_ == nullptr) {
         if (display_ != nullptr) {
             display_->SetChatMessage("system", text.c_str());
@@ -497,7 +581,17 @@ void HomeView::SetSubtitleText(const std::string& text) {
         return;
     }
     if (subtitle_label_ != nullptr) {
-        lv_label_set_text(subtitle_label_, text.c_str());
+        const std::string visible_text =
+            LatestWrappedLines(subtitle_label_, text, max_lines);
+        const auto* font = lv_obj_get_style_text_font(subtitle_label_, LV_PART_MAIN);
+        const int32_t line_space =
+            lv_obj_get_style_text_line_space(subtitle_label_, LV_PART_MAIN);
+        if (font != nullptr && max_lines > 0) {
+            lv_obj_set_style_max_height(
+                subtitle_label_, lv_font_get_line_height(font) * max_lines +
+                                     line_space * (max_lines - 1), 0);
+        }
+        lv_label_set_text(subtitle_label_, visible_text.c_str());
         if (text.empty()) {
             lv_obj_add_flag(subtitle_label_, LV_OBJ_FLAG_HIDDEN);
         } else {
@@ -557,7 +651,9 @@ void HomeView::SetChatMessage(const std::string& role, const std::string& text) 
     lv_obj_scroll_to_view_recursive(bubble, LV_ANIM_ON);
 #else
     if (chat_message_label_ != nullptr) {
-        lv_label_set_text(chat_message_label_, text.c_str());
+        const std::string visible_text = role == "system"
+            ? LatestWrappedLines(chat_message_label_, text, 3) : text;
+        lv_label_set_text(chat_message_label_, visible_text.c_str());
         lv_obj_remove_flag(chat_message_label_, LV_OBJ_FLAG_HIDDEN);
     }
     if (subtitle_label_ != nullptr) {
@@ -788,6 +884,7 @@ void HomeView::ShowImage(std::unique_ptr<LvglImage> image) {
     }
     image_cached_ = std::move(image);
     lv_image_set_src(image_, image_cached_->image_dsc());
+    image_visible_ = true;
     lv_obj_remove_flag(image_container_, LV_OBJ_FLAG_HIDDEN);
     if (emoji_box_ != nullptr) {
         lv_obj_add_flag(emoji_box_, LV_OBJ_FLAG_HIDDEN);
@@ -799,16 +896,24 @@ void HomeView::ShowImage(std::unique_ptr<LvglImage> image) {
 
 void HomeView::HideImage() {
     if (lvgl_ != nullptr && image_container_ != nullptr) {
-        DisplayLockGuard lock(display_);
-        if (lock.locked()) {
-            lv_obj_add_flag(image_container_, LV_OBJ_FLAG_HIDDEN);
-            if (image_ != nullptr) {
-                lv_image_set_src(image_, nullptr);
+        {
+            DisplayLockGuard lock(display_);
+            if (lock.locked()) {
+                image_visible_ = false;
+                lv_obj_add_flag(image_container_, LV_OBJ_FLAG_HIDDEN);
+                // ShowImage 会隐藏整个表情父容器；退出图片模式时必须先恢复
+                // 父容器，仅恢复子动画仍会被 LVGL 的父级隐藏状态裁掉。
+                if (emoji_box_ != nullptr) {
+                    lv_obj_remove_flag(emoji_box_, LV_OBJ_FLAG_HIDDEN);
+                }
+                if (image_ != nullptr) {
+                    lv_image_set_src(image_, nullptr);
+                }
+                image_cached_.reset();
             }
-            if (emoji_box_ != nullptr) {
-                lv_obj_remove_flag(emoji_box_, LV_OBJ_FLAG_HIDDEN);
-            }
-            image_cached_.reset();
+        }
+        if (!current_emotion_.empty()) {
+            RenderEmotion(current_emotion_, false);
         }
     } else if (display_ != nullptr) {
         display_->DismissImage();

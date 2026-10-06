@@ -29,6 +29,7 @@ public:
     void ShowEmotionOnce(std::string emotion);
     void SetPowerSaveMode(bool enabled);
     void SetText(std::string text);
+    void SetSubtitleText(std::string text, uint8_t max_lines = 3);
     void SetChatMessage(std::string role, std::string text);
     void ShowNotification(std::string text, int duration_ms = 3000);
     void SetWifiIcon(std::string icon);

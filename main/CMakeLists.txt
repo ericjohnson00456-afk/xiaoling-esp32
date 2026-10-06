@@ -85,6 +85,7 @@ file(GLOB UI_SOURCES
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/widgets/*.cc"
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/screens/home/*.cc"
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/screens/alarm/*.cc"
+     "${CMAKE_CURRENT_SOURCE_DIR}/ui/screens/camera_preview/*.cc"
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/screens/qrcode/*.cc"
      "${CMAKE_CURRENT_SOURCE_DIR}/ui/screens/upgrade/*.cc")
 file(GLOB SD_MUSIC_UI_SOURCES
@@ -100,7 +101,7 @@ list(APPEND SOURCES ${SHELL_CMD_SOURCES})
 set(INCLUDE_DIRS "."
                  "ui/themes" "ui/utils/font" "ui/utils/image" "ui/utils/emoji" "audio"
                  "player" "player/types" "player/backend" "player/channels" "xiaoling" "xiaoling/session" "xiaoling/conn" "mcp"
-                 "player/intents" "ui" "ui/compat" "ui/widgets" "ui/screens" "ui/screens/home" "ui/screens/alarm" "ui/screens/qrcode" "ui/screens/upgrade"
+                 "player/intents" "ui" "ui/compat" "ui/widgets" "ui/screens" "ui/screens/home" "ui/screens/alarm" "ui/screens/camera_preview" "ui/screens/qrcode" "ui/screens/upgrade"
                  "alarm" "sd_card" "ui/screens/sd_music_sync"
                   "system" "resource" "shell" "ota" "event")
 

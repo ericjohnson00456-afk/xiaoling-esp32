@@ -12,6 +12,7 @@
 
 #include "camera.h"
 #include "image_to_jpeg.h"
+#include "esp_cam_sensor_types.h"
 #include "esp_video_init.h"
 
 struct JpegChunk {
@@ -42,11 +43,16 @@ private:
     std::thread encoder_thread_;
 
 public:
-    Esp32Camera(const esp_video_init_config_t& config);
+    Esp32Camera(const esp_video_init_config_t& config,
+                const esp_cam_sensor_format_t* custom_sensor_format = nullptr);
     ~Esp32Camera();
 
+    virtual bool IsAvailable() const override;
     virtual void SetExplainUrl(const std::string& url, const std::string& token);
     virtual bool Capture();
+    virtual bool CaptureWithPreviewSize(uint16_t preview_width,
+                                        uint16_t preview_height) override;
+    virtual std::string EncodeJpegBase64(uint8_t quality = 80) override;
     // 翻转控制函数
     virtual bool SetHMirror(bool enabled) override;
     virtual bool SetVFlip(bool enabled) override;

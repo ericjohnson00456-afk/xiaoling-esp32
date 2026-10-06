@@ -147,6 +147,12 @@ void HomePresenter::SetText(std::string text) {
     }
 }
 
+void HomePresenter::SetSubtitleText(std::string text, uint8_t max_lines) {
+    if (view_ != nullptr) {
+        view_->SetSubtitleText(text, max_lines);
+    }
+}
+
 void HomePresenter::SetChatMessage(std::string role, std::string text) {
     last_chat_role_ = role;
     last_chat_text_ = text;

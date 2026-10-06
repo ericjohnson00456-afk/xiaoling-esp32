@@ -605,6 +605,7 @@ void XiaolingSessionVoice::SendWakeWordDetected(const std::string& wake_word) {
 }
 
 std::string XiaolingSessionVoice::BuildStartMessage(ListeningMode mode) {
+    text_session_ = false;
     session_id_ = std::to_string(static_cast<unsigned long>(esp_random()));
 
     cJSON* root = cJSON_CreateObject();
@@ -665,6 +666,13 @@ std::string XiaolingSessionVoice::BuildStartMessage(ListeningMode mode) {
     cJSON_Delete(root);
     pending_wake_word_.clear();
     return text;
+}
+
+void XiaolingSessionVoice::PrepareTextSession(std::string session_id) {
+    ResetResultState();
+    SetAudioUploadEnabled(false, "prepare_text_session");
+    session_id_ = std::move(session_id);
+    text_session_ = true;
 }
 
 void XiaolingSessionVoice::SendStartListening(ListeningMode mode) {
@@ -942,11 +950,15 @@ void XiaolingSessionVoice::HandleMessage(const cJSON* root) {
             ResetResultState();
         }
         SetSessionActive(true);
-        SetAudioUploadEnabled(true, "cloud_started");
+        SetAudioUploadEnabled(!text_session_,
+                              text_session_ ? "cloud_text_started"
+                                            : "cloud_started");
         if (event_group_ != nullptr) {
             xEventGroupSetBits(event_group_, kSessionStartedBit);
         }
-        ESP_LOGI(TAG, "lschat 语音会话已启动，允许上传音频");
+        ESP_LOGI(TAG, "%s", text_session_
+                                ? "lschat 文本会话已启动，禁止上传音频"
+                                : "lschat 语音会话已启动，允许上传音频");
         return;
     }
     if (std::strcmp(action, "finish") == 0 ||
@@ -954,6 +966,7 @@ void XiaolingSessionVoice::HandleMessage(const cJSON* root) {
         std::strcmp(action, "error") == 0) {
         SetAudioUploadEnabled(false, action);
         SetSessionActive(false);
+        text_session_ = false;
         if (event_group_ != nullptr) {
             xEventGroupSetBits(event_group_, kSessionStartedBit);
         }
@@ -988,10 +1001,12 @@ void XiaolingSessionVoice::HandleMessage(const cJSON* root) {
     const char* message_sid = ReadString(root, "sid");
     if (stream_url != nullptr && stream_url[0] != '\0' &&
         nlp_origin != nullptr && std::strcmp(nlp_origin, "reply_text") == 0) {
-        if (stream_format != nullptr && std::strcmp(stream_format, "timeline") == 0) {
-            SetPendingSubtitleUrl(stream_url, message_sid != nullptr ? message_sid : "");
-        } else {
-            ESP_LOGW(TAG, "reply_text 未声明 timeline 格式，忽略字幕流且不启用打断位置上报");
+        const bool timeline_stream =
+            stream_format != nullptr && std::strcmp(stream_format, "timeline") == 0;
+        SetPendingSubtitleUrl(stream_url, message_sid != nullptr ? message_sid : "",
+                              timeline_stream);
+        if (!timeline_stream) {
+            ESP_LOGI(TAG, "reply_text 使用普通文本字幕流，不启用打断位置上报");
         }
     }
     const auto* sub = ReadString(data, "sub");
@@ -1009,6 +1024,7 @@ void XiaolingSessionVoice::Reset() {
     SetAudioUploadEnabled(false, "reset");
     SetSessionActive(false);
     pending_wake_word_.clear();
+    text_session_ = false;
     uplink_audio_format_checked_ = false;
     if (event_group_ != nullptr) {
         xEventGroupSetBits(event_group_, kSessionStartedBit);
@@ -1073,25 +1089,28 @@ void XiaolingSessionVoice::HandleIat(const cJSON* data) {
 }
 
 void XiaolingSessionVoice::SetPendingSubtitleUrl(const std::string& url,
-                                                 const std::string& reply_sid) {
+                                                 const std::string& reply_sid,
+                                                 bool timeline_stream) {
     bool start_now = false;
     {
         std::lock_guard<std::mutex> lock(subtitle_state_mutex_);
         ResetTimelineStateLocked();
-        timeline_negotiated_ = true;
-        timeline_valid_ = true;
+        timeline_subtitle_stream_ = timeline_stream;
+        timeline_negotiated_ = timeline_stream;
+        timeline_valid_ = timeline_stream;
         reply_sid_ = reply_sid;
         pending_subtitle_url_ = url;
         start_now = tts_audio_playing_;
     }
-    if (reply_sid.empty()) {
+    if (timeline_stream && reply_sid.empty()) {
         ESP_LOGW(TAG, "timeline 字幕帧缺少旧回复 sid，本次可显示字幕但不做打断位置上报");
     }
     if (start_now) {
         ESP_LOGI(TAG, "TTS 首帧 PCM 已输出，字幕 URL 到达后立即请求");
         StartPendingSubtitleStream();
     } else {
-        ESP_LOGI(TAG, "timeline 字幕 URL 已暂存，等待 TTS 音频流水线运行");
+        ESP_LOGI(TAG, "%s字幕 URL 已暂存，等待 TTS 音频流水线运行",
+                 timeline_stream ? "timeline " : "普通文本");
     }
 }
 
@@ -1221,6 +1240,7 @@ void XiaolingSessionVoice::CancelSubtitleStream(bool notify_interrupt) {
 
 void XiaolingSessionVoice::ResetTimelineStateLocked() {
     timeline_negotiated_ = false;
+    timeline_subtitle_stream_ = false;
     timeline_valid_ = false;
     timeline_reported_ = false;
     reply_sid_.clear();
@@ -1232,6 +1252,23 @@ void XiaolingSessionVoice::ResetTimelineStateLocked() {
 
 void XiaolingSessionVoice::HandleSubtitleEvent(int event, const std::string& text) {
     if (event == 0) {
+        bool timeline_stream = false;
+        {
+            std::lock_guard<std::mutex> lock(subtitle_state_mutex_);
+            timeline_stream = timeline_subtitle_stream_;
+        }
+        if (!timeline_stream) {
+            if (text.empty()) {
+                return;
+            }
+            if (!tts_text_active_.exchange(true)) {
+                AppEvent::Publish(AppEvent::Id::XiaolingTtsTextStart);
+            }
+            AppEvent::PublishText(AppEvent::Id::XiaolingTtsTextUpdate, text);
+            ESP_LOGI(TAG, "普通文本字幕已推送: bytes=%u",
+                     static_cast<unsigned>(text.size()));
+            return;
+        }
         cJSON* root = cJSON_ParseWithLength(text.data(), text.size());
         const cJSON* item = root;
         if (cJSON_IsObject(root)) {

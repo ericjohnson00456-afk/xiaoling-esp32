@@ -77,6 +77,10 @@ public:
     std::string GetHttpAuthorization() const;
     bool RequestAlarmTtsUrl(const std::string& text, AlarmTtsCallback callback);
     void CancelAlarmTtsRequest();
+    // 按键拍照协议：把 JPEG Base64 放入 start.nlu_properties.custom.image，
+    // 随后发送文本提示词，由同一 WS 会话返回 TTS URL 和字幕地址。
+    bool RequestImageRecognition(const std::string& image_base64,
+                                 const std::string& prompt);
     bool FetchAlarmList(std::string& response_body);
     bool ResolveCustomAlarmDate(const std::string& alarm_id, std::string& date);
     int server_sample_rate() const;

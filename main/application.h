@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <atomic>
 #include <vector>
+#include <functional>
 
 #include "xiaoling/conn/xiaoling_conn.h"
 #include "ota/ota.h"
@@ -127,6 +128,12 @@ public:
     uint32_t StartAlarmTtsUrl(const std::string& url);
     bool RequestAlarmTtsUrl(const std::string& text);
     void CancelAlarmTtsRequest();
+    // 文本 TTS 与闹钟共用云端取 URL 通道；图片识别则通过独立的 WS 文本会话提交。
+    using TextTtsCallback = std::function<void(bool, std::string)>;
+    bool RequestTextTtsUrl(const std::string& text, TextTtsCallback callback);
+    void CancelTextTtsRequest();
+    bool RequestImageRecognition(const std::string& image_base64,
+                                 const std::string& prompt);
     bool FetchCloudAlarmList(std::string& response_body);
     bool ResolveCustomAlarmDate(const std::string& alarm_id, std::string& date);
     void StopAlarmTone();

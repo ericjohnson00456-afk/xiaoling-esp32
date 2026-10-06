@@ -31,6 +31,50 @@ constexpr uint8_t kPowerKeyEventMask = kPowerKeyLongPressMask | kPowerKeyShortPr
 constexpr int64_t kPowerKeyMultiClickTimeoutUs = 400 * 1000;
 constexpr uint64_t kPowerKeyPollPeriodUs = 50 * 1000;
 
+struct Gc0308Register {
+    uint8_t address;
+    uint8_t value;
+};
+
+// GC0308 QQVGA 保留完整的 640x480 视场，并由传感器从每个 4x4 像素块
+// 输出一个像素。基础 QVGA 配置负责时序、AE/AWB 和 YUYV，此处只调整
+// 输入窗口与传感器抽样阶段。
+constexpr Gc0308Register kGc0308QqvgaRegisters[] = {
+    {0xfe, 0x00},  // 切换到第 0 页寄存器
+    {0x05, 0x00},  // 输入窗口行起点高字节
+    {0x06, 0x00},  // 输入窗口行起点低字节
+    {0x07, 0x00},  // 输入窗口列起点高字节
+    {0x08, 0x00},  // 输入窗口列起点低字节
+    {0x09, 0x01},  // 输入窗口高度为 480 + 8
+    {0x0a, 0xe8},
+    {0x0b, 0x02},  // 输入窗口宽度为 640 + 8
+    {0x0c, 0x88},
+    {0xfe, 0x01},  // 切换到第 1 页寄存器
+    {0x53, 0x83},  // 启用主抽样路径
+    {0x54, 0x44},  // 水平和垂直方向均按 1/4 抽样
+    {0x55, 0x03},  // 启用辅助抽样路径
+    {0x56, 0x00},
+    {0x57, 0x00},
+    {0x58, 0x00},
+    {0x59, 0x00},
+    {0xfe, 0x00},  // 返回第 0 页寄存器
+};
+
+const esp_cam_sensor_format_t kGc0308QqvgaFormat = {
+    .name = "GC0308 YUYV 160x120 sensor subsample",
+    .format = ESP_CAM_SENSOR_PIXFORMAT_YUV422,
+    .port = ESP_CAM_SENSOR_DVP,
+    .xclk = XCLK_FREQ_HZ,
+    .width = 160,
+    .height = 120,
+    .regs = kGc0308QqvgaRegisters,
+    .regs_size = static_cast<int>(std::size(kGc0308QqvgaRegisters)),
+    .fps = 20,
+    .isp_info = nullptr,
+    .mipi_info = {},
+    .reserved = nullptr,
+};
+
 }  // namespace
 
 class Pmic : public Axp2101 {
@@ -415,8 +459,12 @@ private:
             .dvp = &dvp_config,
         };
 
-        camera_ = new Esp32Camera(video_config);
-        camera_->SetHMirror(false);
+        camera_ = new Esp32Camera(video_config, &kGc0308QqvgaFormat);
+        const bool mirror_set = camera_->SetHMirror(CAMERA_H_MIRROR);
+        const bool flip_set = camera_->SetVFlip(CAMERA_V_FLIP);
+        if (!mirror_set || !flip_set) {
+            ESP_LOGW(TAG, "Failed to configure camera mirror/flip registers");
+        }
     }
 
 public:

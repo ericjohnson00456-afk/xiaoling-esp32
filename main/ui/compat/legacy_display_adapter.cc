@@ -74,7 +74,7 @@ bool LegacyDisplayAdapter::HandlePowerSaveMode(bool on) {
 #ifdef CONFIG_LSPLATFORM
 bool LegacyDisplayAdapter::HandlePreviewImage(std::unique_ptr<LvglImage> image) {
     if (image != nullptr) {
-        Ui::ShowImage(std::move(image));
+        Ui::ShowPreviewImage(std::move(image));
     } else {
         Ui::DismissImage();
     }

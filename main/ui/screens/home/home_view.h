@@ -30,7 +30,7 @@ public:
     void HideImage();
 #endif
     void SetText(const std::string& text);
-    void SetSubtitleText(const std::string& text);
+    void SetSubtitleText(const std::string& text, uint8_t max_lines = 3);
     void SetChatMessage(const std::string& role, const std::string& text);
     void ShowNotification(const std::string& text, int duration_ms);
     void SetWifiIcon(const std::string& icon);
@@ -77,6 +77,7 @@ private:
     std::unique_ptr<LvglImage> image_cached_;
     std::string current_emotion_;
     bool one_shot_emotion_active_ = false;
+    bool image_visible_ = false;
 #ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
     std::unique_ptr<LvglRawImage> half_duplex_icon_;
     std::unique_ptr<LvglRawImage> full_duplex_icon_;

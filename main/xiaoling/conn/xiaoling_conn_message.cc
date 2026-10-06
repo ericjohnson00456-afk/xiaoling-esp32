@@ -199,6 +199,65 @@ bool XiaolingConn::RequestAlarmTtsUrl(const std::string& text,
     return true;
 }
 
+// start 控制帧和提示词二进制帧必须在同一次队列加锁期间连续入队，
+// 防止音频或其他控制消息插入两帧之间，导致云端把提示词归入错误会话。
+bool XiaolingConn::RequestImageRecognition(const std::string& image_base64,
+                                           const std::string& prompt) {
+    if (image_base64.empty() || prompt.empty() || !IsConnected() ||
+        voice_ == nullptr) {
+        return false;
+    }
+
+    uint32_t request_id = esp_random();
+    if (request_id == 0) request_id = 1;
+    const std::string rid = std::to_string(static_cast<unsigned long>(request_id));
+
+    cJSON* root = cJSON_CreateObject();
+    cJSON* params = root != nullptr ? cJSON_AddObjectToObject(root, "params") : nullptr;
+    cJSON* features = params != nullptr ? cJSON_AddArrayToObject(params, "features") : nullptr;
+    cJSON* nlu = params != nullptr ? cJSON_AddObjectToObject(params, "nlu_properties") : nullptr;
+    cJSON* custom = nlu != nullptr ? cJSON_AddObjectToObject(nlu, "custom") : nullptr;
+    if (root == nullptr || params == nullptr || features == nullptr ||
+        nlu == nullptr || custom == nullptr) {
+        cJSON_Delete(root);
+        return false;
+    }
+    cJSON_AddStringToObject(root, "action", "start");
+    cJSON_AddStringToObject(params, "data_type", "text");
+    cJSON_AddItemToArray(features, cJSON_CreateString("nlu"));
+    cJSON_AddItemToArray(features, cJSON_CreateString("tts"));
+    cJSON_AddStringToObject(nlu, "sn", SystemInfo::GetCloudDeviceId().c_str());
+    cJSON_AddStringToObject(custom, "rid", rid.c_str());
+    cJSON_AddStringToObject(custom, "image", image_base64.c_str());
+    const std::string start_message = JsonToString(root);
+    cJSON_Delete(root);
+    if (start_message.empty()) {
+        return false;
+    }
+
+    std::string text_frame = prompt;
+    text_frame.push_back('\0');
+    {
+        std::lock_guard<std::mutex> lock(control_mutex_);
+        if (control_queue_.size() + 2 > kMaxControlMessages) {
+            ESP_LOGE(TAG, "WebSocket 控制队列空间不足，无法上传按键照片");
+            return false;
+        }
+        voice_->PrepareTextSession(rid);
+        control_queue_.push_back(ControlFrame{false, start_message});
+        control_queue_.push_back(ControlFrame{true, std::move(text_frame)});
+    }
+    LogTextFrame("TX", start_message);
+    ESP_LOGI(TAG,
+             "按键照片已通过 WS 提交: rid=%s, image_base64=%u, prompt=%u",
+             rid.c_str(), static_cast<unsigned>(image_base64.size()),
+             static_cast<unsigned>(prompt.size()));
+    if (task_handle_ != nullptr) {
+        xTaskNotifyGive(task_handle_);
+    }
+    return true;
+}
+
 void XiaolingConn::CancelAlarmTtsRequest() {
     std::lock_guard<std::mutex> lock(alarm_tts_mutex_);
     if (pending_alarm_tts_.rid.empty()) {

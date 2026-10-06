@@ -10,6 +10,7 @@
 #include "ui/screens/home/home_presenter.h"
 #include "ui/screens/alarm/alarm_ring_presenter.h"
 #include "ui/screens/alarm/alarm_success_presenter.h"
+#include "ui/screens/camera_preview/camera_preview_presenter.h"
 #include "ui/screens/qrcode/qrcode_presenter.h"
 #include "ui/screens/upgrade/upgrade_presenter.h"
 #include "ui/screens/sd_music_sync/sd_music_sync_presenter.h"
@@ -153,6 +154,7 @@ bool Initialize() {
     if (ui.RegisterScreen(&HomePresenter::Screen()) != 0 ||
         ui.RegisterScreen(&AlarmSuccessPresenter::Screen()) != 0 ||
         ui.RegisterScreen(&AlarmRingPresenter::Screen()) != 0 ||
+        ui.RegisterScreen(&CameraPreviewPresenter::Screen()) != 0 ||
         ui.RegisterScreen(&QrCodePresenter::Screen()) != 0 ||
         ui.RegisterScreen(&UpgradePresenter::Screen()) != 0 ||
         ui.RegisterScreen(&SdMusicSyncPresenter::Screen()) != 0 ||
@@ -590,6 +592,79 @@ void ShowImage(std::unique_ptr<LvglImage> image) {
 #else
     (void)image;
 #endif
+}
+
+void ShowPreviewImage(std::unique_ptr<LvglImage> image) {
+#ifdef CONFIG_LSPLATFORM
+    if (image == nullptr) {
+        return;
+    }
+    auto pending = std::make_shared<std::unique_ptr<LvglImage>>(std::move(image));
+    UiManager::GetInstance().Dispatch([pending = std::move(pending)]() mutable {
+        auto& manager = UiManager::GetInstance();
+        if (manager.TopScreenId() == UI_PAGE_CAMERA_PREVIEW) {
+            CameraPreviewPresenter::GetInstance().SetFrame(std::move(*pending));
+        } else {
+            HomePresenter::GetInstance().SetImage(std::move(*pending));
+        }
+    });
+#else
+    (void)image;
+#endif
+}
+
+void ShowCameraPreview() {
+    UiManager::GetInstance().Dispatch([]() {
+        auto& manager = UiManager::GetInstance();
+#ifdef CONFIG_LSPLATFORM
+        HomePresenter::GetInstance().ClearImage();
+#endif
+        CameraPreviewPresenter::GetInstance().SetState(CameraPreviewPhase::Preview, {});
+        manager.NavigateTo(UI_PAGE_CAMERA_PREVIEW);
+    });
+}
+
+void FreezeCameraPreviewToHome(std::string status) {
+    UiManager::GetInstance().Dispatch(
+        [status = std::move(status)]() mutable {
+            auto& manager = UiManager::GetInstance();
+            auto frame = CameraPreviewPresenter::GetInstance().TakeFrame();
+#ifdef CONFIG_LSPLATFORM
+            if (frame != nullptr) {
+                HomePresenter::GetInstance().SetImage(std::move(frame));
+            }
+#else
+            (void)frame;
+#endif
+            current_localized_status.reset();
+            HomePresenter::GetInstance().SetStatus(std::move(status), false);
+            if (manager.TopScreenId() == UI_PAGE_CAMERA_PREVIEW) {
+                manager.NavigateHome();
+            }
+        });
+}
+
+void SetHomeSubtitle(std::string text) {
+    UiManager::GetInstance().Dispatch([text = std::move(text)]() mutable {
+        HomePresenter::GetInstance().SetSubtitleText(std::move(text));
+    });
+}
+
+void SetCameraPreviewState(CameraPreviewPhase phase, std::string detail) {
+    UiManager::GetInstance().Dispatch(
+        [phase, detail = std::move(detail)]() mutable {
+            CameraPreviewPresenter::GetInstance().SetState(phase, std::move(detail));
+        });
+}
+
+void DismissCameraPreview() {
+    UiManager::GetInstance().Dispatch([]() {
+        auto& manager = UiManager::GetInstance();
+        CameraPreviewPresenter::GetInstance().ClearFrame();
+        if (manager.TopScreenId() == UI_PAGE_CAMERA_PREVIEW) {
+            manager.NavigateHome();
+        }
+    });
 }
 
 void DismissImage() {

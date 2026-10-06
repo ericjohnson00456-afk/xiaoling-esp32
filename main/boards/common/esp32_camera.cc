@@ -9,11 +9,14 @@
 #include <cstring>
 
 #include "esp_imgfx_color_convert.h"
+#include "esp_imgfx_scale.h"
 #include "esp_video_device.h"
 #include "esp_video_init.h"
+#include "esp_video_ioctl.h"
 #include "linux/videodev2.h"
 
 #include "board.h"
+#include "base64_codec.h"
 #include "display/display.h"
 #include "esp32_camera.h"
 #include "esp_jpeg_common.h"
@@ -52,6 +55,66 @@
 
 
 #define TAG "Esp32Camera"
+
+namespace {
+
+uint8_t ClampColorComponent(int value) {
+    if (value < 0) {
+        return 0;
+    }
+    if (value > 255) {
+        return 255;
+    }
+    return static_cast<uint8_t>(value);
+}
+
+uint16_t YuvToRgb565(uint8_t y, uint8_t u, uint8_t v) {
+    const int c = static_cast<int>(y) - 16;
+    const int d = static_cast<int>(u) - 128;
+    const int e = static_cast<int>(v) - 128;
+    const uint8_t r = ClampColorComponent((298 * c + 409 * e + 128) >> 8);
+    const uint8_t g = ClampColorComponent((298 * c - 100 * d - 208 * e + 128) >> 8);
+    const uint8_t b = ClampColorComponent((298 * c + 516 * d + 128) >> 8);
+    return static_cast<uint16_t>(((r & 0xf8) << 8) |
+                                 ((g & 0xfc) << 3) | (b >> 3));
+}
+
+// GC0308 按 Y0、U、Y1、V 输出紧凑 YUV422。转换和缩小在一次遍历中完成，
+// 避免通用缩放器拆散或错误解释共用的色度字节。
+bool ConvertYuyvPreviewToRgb565(const uint8_t* source, size_t source_size,
+                                uint16_t source_width, uint16_t source_height,
+                                uint16_t output_width, uint16_t output_height,
+                                uint8_t* output) {
+    if (source == nullptr || output == nullptr || output_width == 0 ||
+        output_height == 0 || source_width == 0 || source_height == 0 ||
+        (source_width & 1) != 0 ||
+        source_size < static_cast<size_t>(source_width) * source_height * 2) {
+        return false;
+    }
+
+    auto* output_pixels = reinterpret_cast<uint16_t*>(output);
+    const size_t source_stride = static_cast<size_t>(source_width) * 2;
+    for (uint16_t output_y = 0; output_y < output_height; ++output_y) {
+        const uint16_t source_y = static_cast<uint32_t>(output_y) *
+                                  source_height / output_height;
+        const uint8_t* source_row =
+            source + static_cast<size_t>(source_y) * source_stride;
+        for (uint16_t output_x = 0; output_x < output_width; ++output_x) {
+            const uint16_t source_x = static_cast<uint32_t>(output_x) *
+                                      source_width / output_width;
+            const size_t pair_offset = static_cast<size_t>(source_x & ~1U) * 2;
+            const uint8_t y = source_row[pair_offset +
+                                         ((source_x & 1U) != 0 ? 2 : 0)];
+            const uint8_t u = source_row[pair_offset + 1];
+            const uint8_t v = source_row[pair_offset + 3];
+            output_pixels[static_cast<size_t>(output_y) * output_width +
+                          output_x] = YuvToRgb565(y, u, v);
+        }
+    }
+    return true;
+}
+
+}  // 匿名命名空间
 
 #if defined(CONFIG_CAMERA_SENSOR_SWAP_PIXEL_BYTE_ORDER) || defined(CONFIG_XIAOZHI_ENABLE_CAMERA_ENDIANNESS_SWAP)
 #warning \
@@ -93,7 +156,9 @@ static void log_available_video_devices() {
 #define CAM_PRINT_FOURCC(pixelformat) (void)0;
 #endif  // CONFIG_XIAOZHI_ENABLE_CAMERA_DEBUG_MODE
 
-Esp32Camera::Esp32Camera(const esp_video_init_config_t& config) {
+Esp32Camera::Esp32Camera(
+    const esp_video_init_config_t& config,
+    const esp_cam_sensor_format_t* custom_sensor_format) {
     if (esp_video_init(&config) != ESP_OK) {
         ESP_LOGE(TAG, "esp_video_init failed");
         return;
@@ -145,6 +210,15 @@ Esp32Camera::Esp32Camera(const esp_video_init_config_t& config) {
 #if CONFIG_XIAOZHI_ENABLE_CAMERA_DEBUG_MODE
         log_available_video_devices();
 #endif  // CONFIG_XIAOZHI_ENABLE_CAMERA_DEBUG_MODE
+        return;
+    }
+
+    if (custom_sensor_format != nullptr &&
+        ioctl(video_fd_, VIDIOC_S_SENSOR_FMT, custom_sensor_format) != 0) {
+        ESP_LOGE(TAG, "VIDIOC_S_SENSOR_FMT failed, errno=%d(%s)", errno,
+                 strerror(errno));
+        close(video_fd_);
+        video_fd_ = -1;
         return;
     }
 
@@ -377,12 +451,21 @@ Esp32Camera::~Esp32Camera() {
     esp_video_deinit();
 }
 
+bool Esp32Camera::IsAvailable() const {
+    return streaming_on_ && video_fd_ >= 0 && !mmap_buffers_.empty();
+}
+
 void Esp32Camera::SetExplainUrl(const std::string& url, const std::string& token) {
     explain_url_ = url;
     explain_token_ = token;
 }
 
 bool Esp32Camera::Capture() {
+    return CaptureWithPreviewSize(0, 0);
+}
+
+bool Esp32Camera::CaptureWithPreviewSize(uint16_t preview_width,
+                                         uint16_t preview_height) {
     if (encoder_thread_.joinable()) {
         encoder_thread_.join();
     }
@@ -391,7 +474,10 @@ bool Esp32Camera::Capture() {
         return false;
     }
 
-    for (int i = 0; i < 3; i++) {
+    // 视频流在摄像头生命周期内持续运行，每个完整 DVP 帧都是当前帧；
+    // 因此直接校验并显示首个出队帧，不再每四帧丢弃前三帧。
+    const int dequeue_count = 1;
+    for (int i = 0; i < dequeue_count; i++) {
         struct v4l2_buffer buf = {};
         buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         buf.memory = V4L2_MEMORY_MMAP;
@@ -399,7 +485,39 @@ bool Esp32Camera::Capture() {
             ESP_LOGE(TAG, "VIDIOC_DQBUF failed");
             return false;
         }
-        if (i == 2) {
+        if (i == dequeue_count - 1) {
+            // DVP 短帧不是有效图像，不能复制到帧缓冲区；缺失的尾部既会
+            // 形成马赛克，也可能破坏 YUV 色度字节的配对关系。
+            size_t expected_len = 0;
+            switch (sensor_format_) {
+                case V4L2_PIX_FMT_RGB565:
+                case V4L2_PIX_FMT_YUYV:
+                case V4L2_PIX_FMT_YUV422P:
+                    expected_len = static_cast<size_t>(frame_.width) *
+                                   static_cast<size_t>(frame_.height) * 2;
+                    break;
+                case V4L2_PIX_FMT_RGB24:
+                    expected_len = static_cast<size_t>(frame_.width) *
+                                   static_cast<size_t>(frame_.height) * 3;
+                    break;
+                case V4L2_PIX_FMT_GREY:
+                    expected_len = static_cast<size_t>(frame_.width) *
+                                   static_cast<size_t>(frame_.height);
+                    break;
+                default:
+                    break;
+            }
+            if ((buf.flags & V4L2_BUF_FLAG_ERROR) != 0 ||
+                (expected_len != 0 && buf.bytesused < expected_len)) {
+                ESP_LOGW(TAG,
+                         "discard incomplete camera frame: bytesused=%lu expected=%lu flags=0x%08lx",
+                         static_cast<unsigned long>(buf.bytesused),
+                         static_cast<unsigned long>(expected_len), buf.flags);
+                if (ioctl(video_fd_, VIDIOC_QBUF, &buf) != 0) {
+                    ESP_LOGE(TAG, "Cleanup: VIDIOC_QBUF failed");
+                }
+                return false;
+            }
             // 保存帧副本到PSRAM
             if (frame_.data) {
                 heap_caps_free(frame_.data);
@@ -428,6 +546,23 @@ bool Esp32Camera::Capture() {
 
             switch (sensor_format_) {
                 case V4L2_PIX_FMT_RGB565:
+#ifdef CONFIG_XIAOZHI_ENABLE_CAMERA_ENDIANNESS_SWAP
+                {
+                    const auto* src16 = static_cast<const uint16_t*>(mmap_buffers_[buf.index].start);
+                    auto* dst16 = reinterpret_cast<uint16_t*>(frame_.data);
+                    const size_t count = static_cast<size_t>(frame_.len) / 2;
+                    for (size_t pixel = 0; pixel < count; ++pixel) {
+                        dst16[pixel] = __builtin_bswap16(src16[pixel]);
+                    }
+                    frame_.format = sensor_format_;
+                    break;
+                }
+#else
+                    memcpy(frame_.data, mmap_buffers_[buf.index].start,
+                           MIN(mmap_buffers_[buf.index].length, frame_.len));
+                    frame_.format = sensor_format_;
+                    break;
+#endif
                 case V4L2_PIX_FMT_RGB24:
                 case V4L2_PIX_FMT_YUYV:
                 case V4L2_PIX_FMT_YUV420:
@@ -735,12 +870,187 @@ bool Esp32Camera::Capture() {
         }
         uint16_t w = frame_.width;
         uint16_t h = frame_.height;
-        size_t lvgl_image_size = frame_.len;
+        const uint8_t* preview_data = frame_.data;
+        size_t preview_data_size = frame_.len;
+        uint8_t* scaled_data = nullptr;
+        uint32_t preview_format = frame_.format;
+
+        if (frame_.format == V4L2_PIX_FMT_YUYV && preview_width > 0 &&
+            preview_height > 0) {
+            const size_t output_size = static_cast<size_t>(preview_width) *
+                                       preview_height * sizeof(uint16_t);
+            scaled_data = static_cast<uint8_t*>(heap_caps_aligned_alloc(
+                64, output_size,
+                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT | MALLOC_CAP_CACHE_ALIGNED));
+            if (scaled_data == nullptr) {
+                ESP_LOGE(TAG, "failed to allocate %u-byte RGB565 preview",
+                         static_cast<unsigned>(output_size));
+                return false;
+            }
+            if (!ConvertYuyvPreviewToRgb565(
+                    frame_.data, frame_.len, frame_.width, frame_.height,
+                    preview_width, preview_height, scaled_data)) {
+                ESP_LOGE(TAG, "failed to convert YUYV preview to RGB565");
+                heap_caps_free(scaled_data);
+                return false;
+            }
+            preview_data = scaled_data;
+            preview_data_size = output_size;
+            preview_format = V4L2_PIX_FMT_RGB565;
+            w = preview_width;
+            h = preview_height;
+        }
+
+        if (preview_width > 0 && preview_height > 0 &&
+            (preview_width != w || preview_height != h)) {
+            esp_imgfx_pixel_fmt_t scale_format;
+            switch (frame_.format) {
+                case V4L2_PIX_FMT_YUYV:
+                    scale_format = ESP_IMGFX_PIXEL_FMT_YUYV;
+                    break;
+                case V4L2_PIX_FMT_RGB565:
+                    scale_format = ESP_IMGFX_PIXEL_FMT_RGB565_LE;
+                    break;
+                case V4L2_PIX_FMT_RGB24:
+                    scale_format = ESP_IMGFX_PIXEL_FMT_RGB888;
+                    break;
+                case V4L2_PIX_FMT_YUV420:
+                    scale_format = ESP_IMGFX_PIXEL_FMT_I420;
+                    break;
+                case V4L2_PIX_FMT_GREY:
+                    scale_format = ESP_IMGFX_PIXEL_FMT_Y;
+                    break;
+                default:
+                    ESP_LOGE(TAG, "unsupported preview scale format: 0x%08lx",
+                             frame_.format);
+                    return false;
+            }
+
+            esp_imgfx_resolution_t output_resolution = {
+                .width = static_cast<int16_t>(preview_width),
+                .height = static_cast<int16_t>(preview_height),
+            };
+            uint32_t scaled_size = 0;
+            const bool is_yuyv = frame_.format == V4L2_PIX_FMT_YUYV;
+            if (is_yuyv) {
+                // YUYV 的每两个像素共用一组 U/V；缩小时必须保持像素对齐，
+                // 否则色度错位会导致画面偏绿。
+                scaled_size = static_cast<uint32_t>(preview_width) *
+                              static_cast<uint32_t>(preview_height) * 2;
+            } else if (esp_imgfx_get_image_size(scale_format, &output_resolution,
+                                                &scaled_size) != ESP_IMGFX_ERR_OK) {
+                ESP_LOGE(TAG, "failed to calculate preview buffer size");
+                return false;
+            }
+            scaled_data = static_cast<uint8_t*>(heap_caps_aligned_alloc(
+                64, scaled_size,
+                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT | MALLOC_CAP_CACHE_ALIGNED));
+            if (scaled_data == nullptr) {
+                ESP_LOGE(TAG, "failed to allocate %lu-byte scaled preview",
+                         static_cast<unsigned long>(scaled_size));
+                return false;
+            }
+
+            if (is_yuyv) {
+                const size_t source_stride =
+                    static_cast<size_t>(frame_.width) * 2;
+                const size_t output_pair_count = preview_width / 2;
+                const size_t x_step = frame_.width / preview_width;
+                const size_t y_step = frame_.height / preview_height;
+                if ((preview_width & 1) != 0 || x_step == 0 || y_step == 0 ||
+                    frame_.width % preview_width != 0 ||
+                    frame_.height % preview_height != 0) {
+                    ESP_LOGE(TAG, "unsupported YUYV preview ratio: %ux%u -> %ux%u",
+                             frame_.width, frame_.height, preview_width,
+                             preview_height);
+                    heap_caps_free(scaled_data);
+                    return false;
+                }
+                for (size_t output_y = 0; output_y < preview_height; ++output_y) {
+                    const size_t source_y = output_y * y_step;
+                    const uint8_t* source_row =
+                        frame_.data + source_y * source_stride;
+                    uint8_t* output_row =
+                        scaled_data + output_y * preview_width * 2;
+                    for (size_t pair = 0; pair < output_pair_count; ++pair) {
+                        const size_t source_x = pair * 2 * x_step;
+                        memcpy(output_row + pair * 4,
+                               source_row + source_x * 2, 4);
+                    }
+                }
+            } else if (frame_.format == V4L2_PIX_FMT_RGB565) {
+                // RGB565 已经是显示格式，直接使用最近邻抽样，既保持摄像头
+                // 字节序，也避免通用缩放器重新解释紧凑像素。
+                const size_t source_stride = static_cast<size_t>(frame_.width) * 2;
+                const size_t x_step = frame_.width / preview_width;
+                const size_t y_step = frame_.height / preview_height;
+                if (x_step == 0 || y_step == 0 ||
+                    frame_.width % preview_width != 0 ||
+                    frame_.height % preview_height != 0) {
+                    ESP_LOGE(TAG, "unsupported RGB565 preview ratio: %ux%u -> %ux%u",
+                             frame_.width, frame_.height, preview_width,
+                             preview_height);
+                    heap_caps_free(scaled_data);
+                    return false;
+                }
+                for (size_t output_y = 0; output_y < preview_height; ++output_y) {
+                    const uint8_t* source_row =
+                        frame_.data + output_y * y_step * source_stride;
+                    uint8_t* output_row =
+                        scaled_data + output_y * preview_width * 2;
+                    for (size_t output_x = 0; output_x < preview_width; ++output_x) {
+                        memcpy(output_row + output_x * 2,
+                               source_row + output_x * x_step * 2, 2);
+                    }
+                }
+            } else {
+                esp_imgfx_scale_cfg_t scale_cfg = {
+                    .in_res = {
+                        .width = static_cast<int16_t>(frame_.width),
+                        .height = static_cast<int16_t>(frame_.height),
+                    },
+                    .in_pixel_fmt = scale_format,
+                    .scale_res = output_resolution,
+                    .filter_type = ESP_IMGFX_SCALE_FILTER_TYPE_DOWN_RESAMPLE,
+                };
+                esp_imgfx_scale_handle_t scale_handle = nullptr;
+                esp_imgfx_err_t scale_error =
+                    esp_imgfx_scale_open(&scale_cfg, &scale_handle);
+                if (scale_error == ESP_IMGFX_ERR_OK && scale_handle != nullptr) {
+                    esp_imgfx_data_t input = {
+                        .data = frame_.data,
+                        .data_len = static_cast<uint32_t>(frame_.len),
+                    };
+                    esp_imgfx_data_t output = {
+                        .data = scaled_data,
+                        .data_len = scaled_size,
+                    };
+                    scale_error =
+                        esp_imgfx_scale_process(scale_handle, &input, &output);
+                }
+                esp_imgfx_scale_close(scale_handle);
+                if (scale_error != ESP_IMGFX_ERR_OK) {
+                    ESP_LOGE(TAG, "preview downsampling failed: %d",
+                             static_cast<int>(scale_error));
+                    heap_caps_free(scaled_data);
+                    return false;
+                }
+            }
+
+            preview_data = scaled_data;
+            preview_data_size = scaled_size;
+            w = preview_width;
+            h = preview_height;
+            ESP_LOGD(TAG, "preview downsampled: %ux%u -> %ux%u",
+                     frame_.width, frame_.height, w, h);
+        }
+
+        size_t lvgl_image_size = preview_data_size;
         size_t stride = ((w * 2) + 3) & ~3;  // 4字节对齐
         lv_color_format_t color_format = LV_COLOR_FORMAT_RGB565;
         uint8_t* data = nullptr;
 
-        switch (frame_.format) {
+        switch (preview_format) {
             // LVGL 显示 YUV 系的图像似乎都有问题，暂时转换为 RGB565 显示
             case V4L2_PIX_FMT_YUYV:
             case V4L2_PIX_FMT_YUV420:
@@ -749,12 +1059,13 @@ bool Esp32Camera::Capture() {
                 data = (uint8_t*)heap_caps_malloc(w * h * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
                 if (data == nullptr) {
                     ESP_LOGE(TAG, "Failed to allocate memory for preview image");
+                    heap_caps_free(scaled_data);
                     return false;
                 }
                 esp_imgfx_color_convert_cfg_t convert_cfg = {
-                    .in_res = {.width = static_cast<int16_t>(frame_.width),
-                               .height = static_cast<int16_t>(frame_.height)},
-                    .in_pixel_fmt = static_cast<esp_imgfx_pixel_fmt_t>(frame_.format),
+                    .in_res = {.width = static_cast<int16_t>(w),
+                               .height = static_cast<int16_t>(h)},
+                    .in_pixel_fmt = static_cast<esp_imgfx_pixel_fmt_t>(preview_format),
                     .out_pixel_fmt = ESP_IMGFX_PIXEL_FMT_RGB565_LE,
                     .color_space_std = ESP_IMGFX_COLOR_SPACE_STD_BT601,
                 };
@@ -763,12 +1074,13 @@ bool Esp32Camera::Capture() {
                 if (err != ESP_IMGFX_ERR_OK || convert_handle == nullptr) {
                     ESP_LOGE(TAG, "esp_imgfx_color_convert_open failed");
                     heap_caps_free(data);
+                    heap_caps_free(scaled_data);
                     data = nullptr;
                     return false;
                 }
                 esp_imgfx_data_t convert_input_data = {
-                    .data = frame_.data,
-                    .data_len = frame_.len,
+                    .data = const_cast<uint8_t*>(preview_data),
+                    .data_len = static_cast<uint32_t>(preview_data_size),
                 };
                 esp_imgfx_data_t convert_output_data = {
                     .data = data,
@@ -778,6 +1090,7 @@ bool Esp32Camera::Capture() {
                 if (err != ESP_IMGFX_ERR_OK) {
                     ESP_LOGE(TAG, "esp_imgfx_color_convert_process failed");
                     heap_caps_free(data);
+                    heap_caps_free(scaled_data);
                     data = nullptr;
                     esp_imgfx_color_convert_close(convert_handle);
                     convert_handle = nullptr;
@@ -785,18 +1098,26 @@ bool Esp32Camera::Capture() {
                 }
                 esp_imgfx_color_convert_close(convert_handle);
                 convert_handle = nullptr;
+                heap_caps_free(scaled_data);
+                scaled_data = nullptr;
                 lvgl_image_size = w * h * 2;
                 break;
             }
 
             case V4L2_PIX_FMT_RGB565:
-                data = (uint8_t*)heap_caps_malloc(w * h * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-                if (data == nullptr) {
-                    ESP_LOGE(TAG, "Failed to allocate memory for preview image");
-                    return false;
+                if (scaled_data != nullptr) {
+                    data = scaled_data;
+                    scaled_data = nullptr;
+                } else {
+                    data = (uint8_t*)heap_caps_malloc(
+                        preview_data_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+                    if (data == nullptr) {
+                        ESP_LOGE(TAG, "Failed to allocate memory for preview image");
+                        return false;
+                    }
+                    memcpy(data, preview_data, preview_data_size);
                 }
-                memcpy(data, frame_.data, frame_.len);
-                lvgl_image_size = frame_.len;  // fallthrough 时兼顾 YUYV 与 RGB565
+                lvgl_image_size = preview_data_size;
                 break;
 
 #ifdef CONFIG_XIAOZHI_CAMERA_ALLOW_JPEG_INPUT
@@ -828,6 +1149,7 @@ bool Esp32Camera::Capture() {
 #endif
             default:
                 ESP_LOGE(TAG, "unsupported frame format: 0x%08lx", frame_.format);
+                heap_caps_free(scaled_data);
                 return false;
         }
 
@@ -869,6 +1191,37 @@ bool Esp32Camera::SetVFlip(bool enabled) {
         return false;
     }
     return true;
+}
+
+std::string Esp32Camera::EncodeJpegBase64(uint8_t quality) {
+    if (encoder_thread_.joinable()) {
+        encoder_thread_.join();
+    }
+    if (frame_.data == nullptr || frame_.len == 0 || frame_.width == 0 ||
+        frame_.height == 0) {
+        ESP_LOGE(TAG, "No captured frame available for Base64 encoding");
+        return {};
+    }
+
+    uint8_t* jpeg_data = nullptr;
+    size_t jpeg_size = 0;
+    if (!image_to_jpeg(frame_.data, frame_.len, frame_.width, frame_.height,
+                       frame_.format, quality, &jpeg_data, &jpeg_size) ||
+        jpeg_data == nullptr || jpeg_size == 0) {
+        ESP_LOGE(TAG, "Failed to encode captured frame as JPEG");
+        if (jpeg_data != nullptr) {
+            heap_caps_free(jpeg_data);
+        }
+        return {};
+    }
+
+    const std::string encoded = Base64Codec::Encode(std::string_view(
+        reinterpret_cast<const char*>(jpeg_data), jpeg_size));
+    heap_caps_free(jpeg_data);
+    ESP_LOGI(TAG, "Button photo encoded: jpeg=%u bytes, base64=%u bytes",
+             static_cast<unsigned>(jpeg_size),
+             static_cast<unsigned>(encoded.size()));
+    return encoded;
 }
 
 /**

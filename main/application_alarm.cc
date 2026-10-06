@@ -75,11 +75,7 @@ uint32_t Application::StartAlarmTtsUrl(const std::string& url) {
 }
 
 bool Application::RequestAlarmTtsUrl(const std::string& text) {
-    std::lock_guard<std::mutex> lock(xiaoling_conn_mutex_);
-    if (xiaoling_conn_ == nullptr) {
-        return false;
-    }
-    return xiaoling_conn_->RequestAlarmTtsUrl(
+    return RequestTextTtsUrl(
         text, [](bool success, std::string url) {
             auto& app = Application::GetInstance();
             app.Schedule([success, url = std::move(url)]() mutable {
@@ -88,11 +84,37 @@ bool Application::RequestAlarmTtsUrl(const std::string& text) {
         });
 }
 
+bool Application::RequestTextTtsUrl(const std::string& text,
+                                    TextTtsCallback callback) {
+    std::lock_guard<std::mutex> lock(xiaoling_conn_mutex_);
+    if (xiaoling_conn_ == nullptr || !callback) {
+        return false;
+    }
+    return xiaoling_conn_->RequestAlarmTtsUrl(text, std::move(callback));
+}
+
 void Application::CancelAlarmTtsRequest() {
+    CancelTextTtsRequest();
+}
+
+void Application::CancelTextTtsRequest() {
     std::lock_guard<std::mutex> lock(xiaoling_conn_mutex_);
     if (xiaoling_conn_ != nullptr) {
         xiaoling_conn_->CancelAlarmTtsRequest();
     }
+}
+
+bool Application::RequestImageRecognition(const std::string& image_base64,
+                                          const std::string& prompt) {
+    std::lock_guard<std::mutex> lock(xiaoling_conn_mutex_);
+    if (xiaoling_conn_ == nullptr) {
+        return false;
+    }
+    if (xiaoling_conn_->IsSessionActive()) {
+        ESP_LOGW(kTag, "上传按键照片前取消残留云端会话");
+        xiaoling_conn_->CancelSession();
+    }
+    return xiaoling_conn_->RequestImageRecognition(image_base64, prompt);
 }
 
 bool Application::FetchCloudAlarmList(std::string& response_body) {

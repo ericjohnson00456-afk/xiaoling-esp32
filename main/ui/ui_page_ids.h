@@ -7,4 +7,5 @@ enum UiPageId {
     UI_PAGE_ALARM_SUCCESS = 3,
     UI_PAGE_ALARM_RING = 4,
     UI_PAGE_SD_MUSIC_SYNC = 5,
+    UI_PAGE_CAMERA_PREVIEW = 6,
 };

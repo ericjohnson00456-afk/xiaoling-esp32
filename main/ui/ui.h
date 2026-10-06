@@ -43,6 +43,14 @@ enum class TextKey : int32_t {
     PleaseWait,
 };
 
+// 预览页展示状态；业务状态机与 UI 解耦，只通过这些状态更新页面。
+enum class CameraPreviewPhase : int32_t {
+    Preview,
+    Processing,
+    Speaking,
+    Error,
+};
+
 /*
  * 初始化顺序：
  * 1. 读取语言配置；
@@ -109,6 +117,14 @@ void ShowQrCode(std::unique_ptr<LvglImage> image, std::string message);
 void DismissQrCode();
 void ShowImage(std::unique_ptr<LvglImage> image);
 void DismissImage();
+// 相机 Capture() 经 Display 适配器送入此入口；预览页打开时更新实时画面，
+// 其他场景保持原有的首页图片行为。
+void ShowPreviewImage(std::unique_ptr<LvglImage> image);
+void ShowCameraPreview();
+void FreezeCameraPreviewToHome(std::string status);
+void SetHomeSubtitle(std::string text);
+void SetCameraPreviewState(CameraPreviewPhase phase, std::string detail = {});
+void DismissCameraPreview();
 
 // 只返回 UI 模块自身的只读状态，不向外暴露 Manager 或 Presenter。
 bool IsHome();

@@ -30,8 +30,8 @@
 #define DISPLAY_SCL_PIN GPIO_NUM_NC
 #define DISPLAY_WIDTH   320
 #define DISPLAY_HEIGHT  240
-#define DISPLAY_MIRROR_X false
-#define DISPLAY_MIRROR_Y false
+#define DISPLAY_MIRROR_X true
+#define DISPLAY_MIRROR_Y true
 #define DISPLAY_SWAP_XY false
 
 #define DISPLAY_OFFSET_X  0
@@ -70,6 +70,8 @@
 #define CAMERA_PIN_PCLK GPIO_NUM_45
 
 #define XCLK_FREQ_HZ 20000000
+#define CAMERA_H_MIRROR false
+#define CAMERA_V_FLIP true
 
  
 

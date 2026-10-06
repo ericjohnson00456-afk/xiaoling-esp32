@@ -46,6 +46,8 @@ public:
     bool SendAudio(std::unique_ptr<AudioStreamPacket> packet);
     bool SendAudioBatch(std::vector<std::unique_ptr<AudioStreamPacket>> packets);
     void SendWakeWordDetected(const std::string& wake_word);
+    // 为按键图片识别准备无音频上行的文本会话，并清理上一轮语音结果状态。
+    void PrepareTextSession(std::string session_id);
     void SendStartListening(ListeningMode mode);
     void SendStopListening();
     bool EndSession();
@@ -100,6 +102,7 @@ private:
     std::atomic_bool session_active_{false};
     std::atomic_bool audio_upload_enabled_{false};
     std::string session_id_;
+    bool text_session_ = false;
     std::string pending_wake_word_;
     std::atomic_bool uplink_audio_format_checked_{false};
     std::atomic<uint32_t> uplink_batch_sequence_{0};
@@ -116,6 +119,7 @@ private:
     bool tts_audio_playing_ = false;
     uint32_t tts_audio_clock_ms_ = 0;
     bool timeline_negotiated_ = false;
+    bool timeline_subtitle_stream_ = false;
     bool timeline_valid_ = false;
     bool timeline_reported_ = false;
     std::string reply_sid_;
@@ -138,7 +142,8 @@ private:
     void ResetResultState();
     void HandleIat(const cJSON* data);
     void HandleTts(const cJSON* data, const std::string& reply_sid);
-    void SetPendingSubtitleUrl(const std::string& url, const std::string& reply_sid);
+    void SetPendingSubtitleUrl(const std::string& url, const std::string& reply_sid,
+                               bool timeline_stream);
     void StartTtsAudio(std::string url, const std::string& reply_sid);
     void StartPendingSubtitleStream();
     void OnTtsPipelinePlaying();

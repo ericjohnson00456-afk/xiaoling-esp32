@@ -25,17 +25,28 @@ private:
         uint32_t end_ms = 0;
     };
 
+    // 无 timeline 字幕的句段排期；每个节点到时整体替换上一句。
+    struct PlainSubtitleCue {
+        size_t start_byte = 0;
+        size_t end_byte = 0;
+        uint32_t show_at_ms = 0;
+    };
+
     void QueueIatText(std::string text);
     void DrainIatText();
     void QueueTtsAudioProgress(uint32_t audio_clock_ms);
     void OnTtsTextStart();
     void OnTtsTextUpdate(const std::string& text);
+    void OnTtsTextEnd();
     void OnTtsTextInterrupt();
     void OnTtsPlaying();
     void OnTtsAudioProgress(uint32_t audio_clock_ms);
     void OnTtsStopped();
     void ResetSubtitles(bool clear_text);
     void ScheduleSubtitle();
+    void AppendPlainSubtitle(const std::string& text);
+    void BuildPlainSubtitleCues(bool flush_pending);
+    void SchedulePlainSubtitle();
 
     HomePresenter& presenter_;
     std::vector<uint32_t> event_subscriptions_;
@@ -43,6 +54,14 @@ private:
     size_t subtitle_index_ = 0;
     bool subtitle_audio_started_ = false;
     uint32_t subtitle_audio_clock_ms_ = 0;
+    std::string plain_subtitle_text_;
+    std::vector<PlainSubtitleCue> plain_subtitle_cues_;
+    size_t plain_subtitle_cue_index_ = 0;
+    size_t plain_subtitle_visible_start_byte_ = 0;
+    size_t plain_subtitle_visible_bytes_ = 0;
+    size_t plain_subtitle_scheduled_bytes_ = 0;
+    uint32_t plain_subtitle_next_due_ms_ = 0;
+    bool plain_subtitle_mode_ = false;
     std::atomic<uint32_t> tts_progress_generation_{0};
     std::atomic<uint32_t> latest_tts_audio_clock_ms_{0};
     std::atomic_bool tts_progress_dispatch_pending_{false};
