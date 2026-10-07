@@ -40,6 +40,31 @@ set(PROJECT_VER ${XIAOLING_VER})
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(xiaoling)
 
+# 普通 idf.py build 同时生成供量产工具使用的全量烧录包，以及后台 OTA
+# 上传所需的版本/MD5 信息。merge-bin 会读取 flash_args，因此包含 bootloader、
+# 分区表、应用和所有已配置了镜像的资源分区。
+set(XIAOLING_OTA_INFO
+    "${CMAKE_BINARY_DIR}/xiaoling_v${XIAOLING_VER}_ota_info.txt")
+add_custom_target(xiaoling_ota_info
+    COMMAND "${PYTHON}" "${CMAKE_CURRENT_LIST_DIR}/scripts/generate_ota_info.py"
+            --version "${XIAOLING_VER}"
+            --app "${CMAKE_BINARY_DIR}/${PROJECT_NAME}.bin"
+            --output "${XIAOLING_OTA_INFO}"
+    DEPENDS "${CMAKE_CURRENT_LIST_DIR}/scripts/generate_ota_info.py"
+    BYPRODUCTS "${XIAOLING_OTA_INFO}"
+    COMMENT "Generating ${XIAOLING_OTA_INFO}"
+    VERBATIM)
+add_dependencies(xiaoling_ota_info gen_project_binary)
+
+if(TARGET generated_split_resources)
+    add_dependencies(merge-bin generated_split_resources)
+endif()
+if(TARGET generated_default_assets)
+    add_dependencies(merge-bin generated_default_assets)
+endif()
+add_custom_target(xiaoling_release_artifacts ALL)
+add_dependencies(xiaoling_release_artifacts merge-bin xiaoling_ota_info)
+
 # esp_asrc 1.0.1 的内存分配日志仍用 %d 打印 uint32_t。
 # 保留格式告警，但避免 ESP-IDF 5.4.4 的新工具链将供应商代码告警升级为构建错误。
 idf_component_get_property(ESP_ASRC_LIB espressif__esp_asrc COMPONENT_LIB)
