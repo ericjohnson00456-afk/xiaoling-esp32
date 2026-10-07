@@ -34,7 +34,7 @@ if(BOARD_TYPE)
     endif()
 endif()
 
-set(XIAOLING_VER "3.0.0")
+set(XIAOLING_VER "2.0.0")
 set(PROJECT_VER ${XIAOLING_VER})
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)

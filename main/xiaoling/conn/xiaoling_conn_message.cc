@@ -112,7 +112,7 @@ std::string XiaolingConn::BuildWebSocketUrl() const {
 
     cJSON* firmware_info = cJSON_CreateObject();
     if (firmware_info != nullptr) {
-        cJSON_AddStringToObject(firmware_info, "type", "arcs-mini");
+        cJSON_AddStringToObject(firmware_info, "type", BOARD_NAME);
         cJSON_AddStringToObject(firmware_info, "version", esp_app_get_description()->version);
         cJSON_AddItemToObject(params, "firmware_info", firmware_info);
     }
