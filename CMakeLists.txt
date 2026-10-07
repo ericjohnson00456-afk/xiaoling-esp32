@@ -38,7 +38,7 @@ set(XIAOLING_VER "3.0.0")
 set(PROJECT_VER ${XIAOLING_VER})
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-project(xiaozhi)
+project(xiaoling)
 
 # esp_asrc 1.0.1 的内存分配日志仍用 %d 打印 uint32_t。
 # 保留格式告警，但避免 ESP-IDF 5.4.4 的新工具链将供应商代码告警升级为构建错误。

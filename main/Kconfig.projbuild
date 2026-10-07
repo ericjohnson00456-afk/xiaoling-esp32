@@ -48,7 +48,7 @@ if LSPLATFORM
 
     choice
         prompt "配网模式"
-        default PROV_MODE_BLE
+        default PROV_MODE_XIAOZHI
         config PROV_MODE_BLE
             bool "BLE配网"
             depends on !IDF_TARGET_ESP32S2
@@ -57,7 +57,7 @@ if LSPLATFORM
             select BT_BLE_42_FEATURES_SUPPORTED
             select MBEDTLS_DHM_C
         config PROV_MODE_XIAOZHI
-            bool "XIAOZHI配网方案"
+            bool "WIFI热点配网"
     endchoice
 
     if PROV_MODE_BLE
