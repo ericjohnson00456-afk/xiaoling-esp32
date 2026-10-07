@@ -201,22 +201,25 @@ bool StreamingModel::LoadModel(tflite::MicroMutableOpResolver<20> &op_resolver) 
 
     ESP_LOGI(TAG, "Loading model with tensor arena size: %" PRIu32, (uint32_t)tensor_arena_size_);
 
-    // 使用内部RAM而非SPIRAM分配tensor arena以避免缓存一致性问题
-    tensor_arena_ = (uint8_t *)heap_caps_aligned_alloc(64, tensor_arena_size_, 
-                                                      MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    // MicroWakeWord 只在带 PSRAM 的目标上可用。Tensor arena 会长期占用
+    // 数万字节，若放在内部 RAM 会挤占 Wi-Fi 管理帧和任务栈空间。
+    // 因此强制分配到 PSRAM；分配失败时不回退到内部 RAM，保证系统可用。
+    tensor_arena_ = (uint8_t *)heap_caps_aligned_alloc(
+        64, tensor_arena_size_, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!tensor_arena_) {
-        ESP_LOGW(TAG, "Failed to allocate tensor arena in internal RAM, trying SPIRAM with alignment");
-        // 如果内部RAM不足，使用SPIRAM但确保64字节对齐
-        tensor_arena_ = (uint8_t *)heap_caps_aligned_alloc(64, tensor_arena_size_, 
-                                                          MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (!tensor_arena_) {
-            ESP_LOGE(TAG, "Failed to allocate tensor arena");
-            return false;
-        }
-        ESP_LOGI(TAG, "Allocated tensor arena in SPIRAM with 64-byte alignment: %p", tensor_arena_);
-    } else {
-        ESP_LOGI(TAG, "Allocated tensor arena in internal RAM: %p", tensor_arena_);
+        ESP_LOGE(TAG,
+                 "Failed to allocate tensor arena in SPIRAM: requested=%u, "
+                 "free_spiram=%u, free_internal=%u",
+                 (unsigned int)tensor_arena_size_,
+                 (unsigned int)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+                 (unsigned int)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+        return false;
     }
+    ESP_LOGI(TAG,
+             "Allocated tensor arena in SPIRAM with 64-byte alignment: %p "
+             "(free_internal=%u)",
+             tensor_arena_,
+             (unsigned int)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
 
     // Set up the model
     const tflite::Model *model = tflite::GetModel(model_start_);
