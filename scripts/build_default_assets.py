@@ -738,7 +738,9 @@ def get_micro_wake_word_model_path(model_name, microwakeword_models_path):
     if not model_name:
         return None
     
-    mww_model_path = os.path.join(microwakeword_models_path, f"{model_name}.tflite")
+    mww_model_path = os.path.join(
+        microwakeword_models_path, model_name, f"{model_name}.tflite"
+    )
     if os.path.exists(mww_model_path):
         return mww_model_path
     else:

@@ -47,13 +47,65 @@ def package(root: Path, output: Path, name: str) -> None:
     pack_image(str(root), str(output), name)
 
 
+def copy_wake_word_bundle(bundle_dir: Path, destination: Path,
+                          wake_word_name: str | None) -> None:
+    """Copy exactly one matching TFLite/JSON pair into the ROMFS root."""
+    if not bundle_dir.is_dir():
+        raise RuntimeError(f"Wake-word bundle directory not found: {bundle_dir}")
+
+    models = sorted(bundle_dir.glob("*.tflite"))
+    descriptors = sorted(bundle_dir.glob("*.json"))
+    if len(models) != 1 or len(descriptors) != 1:
+        raise RuntimeError(
+            f"Wake-word bundle {bundle_dir} must contain exactly one .tflite "
+            f"and one .json file (found {len(models)} model(s), "
+            f"{len(descriptors)} descriptor(s))"
+        )
+
+    model = models[0]
+    descriptor_path = descriptors[0]
+    if model.stem != descriptor_path.stem:
+        raise RuntimeError(
+            f"Wake-word model and descriptor names must match: "
+            f"{model.name}, {descriptor_path.name}"
+        )
+
+    try:
+        descriptor = json.loads(descriptor_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            f"Invalid wake-word descriptor {descriptor_path}: {exc}"
+        ) from exc
+    if not isinstance(descriptor, dict):
+        raise RuntimeError(
+            f"Wake-word descriptor must contain a JSON object: {descriptor_path}"
+        )
+
+    selected_name = wake_word_name or descriptor.get("wake_word")
+    if not isinstance(selected_name, str) or not selected_name:
+        raise RuntimeError(
+            f"Wake-word descriptor is missing a valid wake_word: {descriptor_path}"
+        )
+
+    # The selected SDK configuration is authoritative. Only this model pair is
+    # emitted, and both files are flattened into the wake_word ROMFS root.
+    descriptor["model"] = model.name
+    descriptor["wake_word"] = selected_name
+    shutil.copy2(model, destination / model.name)
+    (destination / descriptor_path.name).write_text(
+        json.dumps(descriptor, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--resource-root", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--font-file")
-    parser.add_argument("--wake-word-dir")
-    parser.add_argument("--wake-word-file")
+    wake_word_source = parser.add_mutually_exclusive_group()
+    wake_word_source.add_argument("--wake-word-dir")
+    wake_word_source.add_argument("--wake-word-file")
     parser.add_argument("--wake-word-name")
     args = parser.parse_args()
 
@@ -88,8 +140,9 @@ def main() -> int:
         copy_tree(source / "tone", tone)
         copy_tree(source / "emoji", emoji)
         if args.wake_word_dir:
-            copy_tree(Path(args.wake_word_dir), wake)
-        if args.wake_word_file:
+            copy_wake_word_bundle(Path(args.wake_word_dir), wake,
+                                  args.wake_word_name)
+        elif args.wake_word_file:
             model = Path(args.wake_word_file)
             if model.is_file():
                 shutil.copy2(model, wake / model.name)

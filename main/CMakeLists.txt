@@ -996,13 +996,14 @@ function(build_split_resources)
     set(SPLIT_EMOJI "${SPLIT_OUTPUT_DIR}/emoji.bin")
     set(SPLIT_WAKE_WORD "${SPLIT_OUTPUT_DIR}/wake_word.bin")
 
-    set(SPLIT_WAKE_WORD_DESCRIPTOR
-        "${CMAKE_CURRENT_SOURCE_DIR}/audio/wake_words/micro_wake_word/models/${MWW_MODEL_FILE}")
-    string(REGEX REPLACE "\\.tflite$" ".json" SPLIT_WAKE_WORD_DESCRIPTOR
-                         "${SPLIT_WAKE_WORD_DESCRIPTOR}")
-    set(SPLIT_WAKE_WORD_DESCRIPTOR_DEPENDS)
-    if(EXISTS "${SPLIT_WAKE_WORD_DESCRIPTOR}")
-        list(APPEND SPLIT_WAKE_WORD_DESCRIPTOR_DEPENDS "${SPLIT_WAKE_WORD_DESCRIPTOR}")
+    set(SPLIT_WAKE_WORD_DEPENDS)
+    set(SPLIT_WAKE_WORD_ARGS)
+    if(CONFIG_USE_MICRO_WAKE_WORD)
+        list(APPEND SPLIT_WAKE_WORD_DEPENDS
+             "${MWW_MODEL_FILE}" "${MWW_MODEL_DESCRIPTOR}")
+        list(APPEND SPLIT_WAKE_WORD_ARGS
+             --wake-word-dir "${MWW_MODEL_DIR}"
+             --wake-word-name "${MWW_MODEL_WAKE_WORD}")
     endif()
 
     file(GLOB_RECURSE SPLIT_RESOURCE_FILES
@@ -1014,11 +1015,10 @@ function(build_split_resources)
         COMMAND python ${PROJECT_DIR}/scripts/build_split_resources.py
                 --resource-root "${CMAKE_CURRENT_SOURCE_DIR}/resource/assets"
                 --output-dir "${SPLIT_OUTPUT_DIR}"
-                --wake-word-file "${CMAKE_CURRENT_SOURCE_DIR}/audio/wake_words/micro_wake_word/models/${MWW_MODEL_FILE}"
-                --wake-word-name "${MWW_MODEL_WAKE_WORD}"
+                ${SPLIT_WAKE_WORD_ARGS}
         DEPENDS ${PROJECT_DIR}/scripts/build_split_resources.py
                 ${PROJECT_DIR}/scripts/romfs.py ${SPLIT_RESOURCE_FILES}
-                ${SPLIT_WAKE_WORD_DESCRIPTOR_DEPENDS}
+                ${SPLIT_WAKE_WORD_DEPENDS}
         COMMENT "Building split respak/tone/emoji resource images"
         VERBATIM)
     add_custom_target(generated_split_resources ALL
