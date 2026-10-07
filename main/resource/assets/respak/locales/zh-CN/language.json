@@ -36,6 +36,7 @@
         "SCANNING_WIFI": "扫描 Wi-Fi...",
         "NEW_VERSION": "新版本 ",
         "ACTIVATION_CODE": "激活码：",
+        "ACTIVATION_INSTRUCTIONS": "微信扫码或搜索\"小聆AI\"小程序添加ESP32开源套件，选择AP配网，输入设备码：",
         "OTA_UPGRADE": "OTA 升级",
         "OTA_CONFIRM": "发现新版本 %s\n更新内容：%s\n单击开始更新，长按跳过",
         "OTA_CONFIRM_WITH_SIZE": "发现新版本 %s\n更新包大小：%s\n更新内容：%s\n单击开始更新，长按跳过",

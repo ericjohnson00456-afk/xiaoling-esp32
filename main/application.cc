@@ -573,7 +573,7 @@ void Application::RunXiaolingActivation() {
     }
 
     if (!activation.code().empty()) {
-        ShowActivationCode(activation.code(), activation.message(), activation.qrcode());
+        ShowActivationCode(activation.code(), activation.qrcode());
     }
     if (!activation.IsRequired()) {
         return;
@@ -596,15 +596,9 @@ void Application::RunXiaolingActivation() {
 }
 
 void Application::ShowActivationCode(const std::string& code,
-                                     const std::string& message,
                                      const std::string& qrcode) {
-    const std::string activation_title = message.empty()
-                                             ? Lang::Strings::ACTIVATION
-                                             : message;
-    const std::string activation_text = code.empty()
-                                            ? activation_title
-                                            : activation_title + "\n" +
-                                                  Lang::Strings::ACTIVATION_CODE + code;
+    const std::string activation_text =
+        std::string(Lang::Strings::ACTIVATION_INSTRUCTIONS) + code;
 
     ESP_LOGI(TAG, "显示激活码: %s, 二维码 URL: %s",
              code.c_str(), qrcode.c_str());

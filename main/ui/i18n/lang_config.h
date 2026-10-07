@@ -19,6 +19,7 @@ namespace PrimaryStrings {
 inline constexpr const char* ACCESS_VIA_BROWSER = "，浏览器访问 ";
 inline constexpr const char* ACTIVATION = "激活设备";
 inline constexpr const char* ACTIVATION_CODE = "激活码：";
+inline constexpr const char* ACTIVATION_INSTRUCTIONS = "微信扫码或搜索\"小聆AI\"小程序添加ESP32开源套件，选择AP配网，输入设备码：";
 inline constexpr const char* BATTERY_CHARGING = "正在充电";
 inline constexpr const char* BATTERY_FULL = "电量已满";
 inline constexpr const char* BATTERY_LOW = "电量不足";
@@ -90,6 +91,7 @@ namespace EnglishStrings {
 inline constexpr const char* ACCESS_VIA_BROWSER = " Config URL: ";
 inline constexpr const char* ACTIVATION = "Activation";
 inline constexpr const char* ACTIVATION_CODE = "Activation code: ";
+inline constexpr const char* ACTIVATION_INSTRUCTIONS = "Scan with WeChat or search for the \"Xiaoling AI\" mini app, add the ESP32 open-source kit, select AP provisioning, and enter the device code: ";
 inline constexpr const char* BATTERY_CHARGING = "Charging";
 inline constexpr const char* BATTERY_FULL = "Battery full";
 inline constexpr const char* BATTERY_LOW = "Low battery";
@@ -165,6 +167,7 @@ namespace Strings {
 inline const char* ACCESS_VIA_BROWSER = PrimaryStrings::ACCESS_VIA_BROWSER;
 inline const char* ACTIVATION = PrimaryStrings::ACTIVATION;
 inline const char* ACTIVATION_CODE = PrimaryStrings::ACTIVATION_CODE;
+inline const char* ACTIVATION_INSTRUCTIONS = PrimaryStrings::ACTIVATION_INSTRUCTIONS;
 inline const char* BATTERY_CHARGING = PrimaryStrings::BATTERY_CHARGING;
 inline const char* BATTERY_FULL = PrimaryStrings::BATTERY_FULL;
 inline const char* BATTERY_LOW = PrimaryStrings::BATTERY_LOW;
@@ -246,6 +249,7 @@ inline void SetLanguage(Language language) {
     Strings::ACCESS_VIA_BROWSER = language == Language::English ? EnglishStrings::ACCESS_VIA_BROWSER : PrimaryStrings::ACCESS_VIA_BROWSER;
     Strings::ACTIVATION = language == Language::English ? EnglishStrings::ACTIVATION : PrimaryStrings::ACTIVATION;
     Strings::ACTIVATION_CODE = language == Language::English ? EnglishStrings::ACTIVATION_CODE : PrimaryStrings::ACTIVATION_CODE;
+    Strings::ACTIVATION_INSTRUCTIONS = language == Language::English ? EnglishStrings::ACTIVATION_INSTRUCTIONS : PrimaryStrings::ACTIVATION_INSTRUCTIONS;
     Strings::BATTERY_CHARGING = language == Language::English ? EnglishStrings::BATTERY_CHARGING : PrimaryStrings::BATTERY_CHARGING;
     Strings::BATTERY_FULL = language == Language::English ? EnglishStrings::BATTERY_FULL : PrimaryStrings::BATTERY_FULL;
     Strings::BATTERY_LOW = language == Language::English ? EnglishStrings::BATTERY_LOW : PrimaryStrings::BATTERY_LOW;

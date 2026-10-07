@@ -224,7 +224,7 @@ private:
     // 设备激活与小聆连接属于 Application 启动阶段，不是 OTA 的一部分。
     bool WaitForOtaFlowCompletion();
     void RunXiaolingActivation();
-    void ShowActivationCode(const std::string& code, const std::string& message,
+    void ShowActivationCode(const std::string& code,
                             const std::string& qrcode = "");
     void PlayActivationAudio(const char* name);
 

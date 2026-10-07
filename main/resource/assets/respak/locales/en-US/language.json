@@ -36,6 +36,7 @@
         "SCANNING_WIFI": "Scanning Wi-Fi...",
         "NEW_VERSION": "New version ",
         "ACTIVATION_CODE": "Activation code: ",
+        "ACTIVATION_INSTRUCTIONS": "Scan with WeChat or search for the \"Xiaoling AI\" mini app, add the ESP32 open-source kit, select AP provisioning, and enter the device code: ",
         "OTA_UPGRADE": "OTA Upgrade",
         "OTA_CONFIRM": "New version %s found\nChanges: %s\nSingle click to update, long press to skip",
         "OTA_CONFIRM_WITH_SIZE": "New version %s found\nPackage size: %s\nChanges: %s\nSingle click to update, long press to skip",
