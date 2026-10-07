@@ -337,12 +337,12 @@ private:
             
             // 只有短触才触发
             if (touch_duration < TOUCH_THRESHOLD_MS) {
-                auto& app = Application::GetInstance();
-                if (app.GetDeviceState() == kDeviceStateStarting) {
-                    EnterWifiConfigMode();
-                    return;
-                }
-                app.ToggleChatState();
+                // auto& app = Application::GetInstance();
+                // if (app.GetDeviceState() == kDeviceStateStarting) {
+                //     EnterWifiConfigMode();
+                //     return;
+                // }
+                // app.ToggleChatState();
             }
         }
     }
