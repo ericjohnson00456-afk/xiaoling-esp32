@@ -528,7 +528,12 @@ void Application::ProcessMainEvents(EventBits_t bits) {
                 }
                 SetDeviceState(kDeviceStateIdle);
                 listening_started_at_us_ = 0;
-                PlayTone(72);
+                // 当前就在 Application 主任务中，先让超时提示音占住栈顶，
+                // 再退出语音会话。这样提示音结束后，Intent 管理器会恢复
+                // 被唤醒流程暂停的 MusicIntent；若先退出语音会话，音乐会在
+                // 提示音入栈前短暂恢复播放。
+                PlayPromptTone(72);
+                intent_manager_.Pop(PlaybackIntentId::kVoiceSession);
             }
         }
 
