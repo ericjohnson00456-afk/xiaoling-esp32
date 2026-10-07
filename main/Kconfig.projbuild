@@ -22,11 +22,11 @@ if LSPLATFORM
         endchoice
         config LSPLATFORM_BUILTIN_PRODUCT_ID
             string
-            default "54c71d3e-e257-4284-835b-8645f357e91c"
+            default "78426e95-326c-41b1-83f7-378c7d106d9f"
             depends on LSPLATFORM_PRODUCT_ID_BUILTIN
         config LSPLATFORM_BUILTIN_SECRET_ID
             string
-            default "7993f759-3678-49ea-a959-13756ba93456"
+            default "fa601e37-f32e-4429-98f7-805d074ff411"
             depends on LSPLATFORM_PRODUCT_ID_BUILTIN
         config LSPLATFORM_CUSTOM_PRODUCT_ID
             string "自建应用 Product ID"

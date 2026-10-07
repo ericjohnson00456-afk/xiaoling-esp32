@@ -4,7 +4,7 @@
 # CMakeLists in this exact order for cmake to work correctly
 cmake_minimum_required(VERSION 3.16)
 
-set(PROJECT_VER "2.1.0")
+set(PROJECT_VER "2.0.0")
 
 execute_process(
     COMMAND git rev-parse HEAD
@@ -34,8 +34,7 @@ if(BOARD_TYPE)
     endif()
 endif()
 
-set(XIAOLING_VER "2.0.0")
-set(PROJECT_VER ${XIAOLING_VER})
+set(XIAOLING_VER ${PROJECT_VER})
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(xiaoling)
