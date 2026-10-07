@@ -585,18 +585,8 @@ void AudioService::AudioOutputTask() {
         const bool initial_prebuffer = player_output_chunks_.load() == 0;
         const size_t prebuffer_target = initial_prebuffer
                                             ? player_initial_prebuffer_bytes_
-                                            : kAudioPlayerInitialPrebufferBytes;
-        const auto queued_player_pcm_bytes = [this]() {
-            size_t bytes = 0;
-            for (const auto& queued_task : audio_playback_queue_) {
-                if (queued_task->type != kAudioTaskTypePlayerToPlaybackQueue) {
-                    break;
-                }
-                bytes += queued_task->PlaybackSamples() * sizeof(int16_t);
-            }
-            return bytes;
-        };
-        size_t prebuffered_pcm_bytes = is_player ? queued_player_pcm_bytes() : 0;
+                                            : player_recovery_prebuffer_bytes_;
+        size_t prebuffered_pcm_bytes = is_player ? queued_player_pcm_bytes_ : 0;
         while (!service_stopped_ && !audio_playback_queue_.empty() &&
                audio_playback_queue_.front()->type == kAudioTaskTypePlayerToPlaybackQueue &&
                player_prebuffering_ &&
@@ -614,7 +604,7 @@ void AudioService::AudioOutputTask() {
             audio_queue_cv_.wait(lock);
             prebuffered_pcm_bytes = audio_playback_queue_.empty()
                                          ? 0
-                                         : queued_player_pcm_bytes();
+                                         : queued_player_pcm_bytes_;
         }
         if (service_stopped_) {
             break;
@@ -638,6 +628,12 @@ void AudioService::AudioOutputTask() {
 
         auto task = std::move(audio_playback_queue_.front());
         audio_playback_queue_.pop_front();
+        if (task->type == kAudioTaskTypePlayerToPlaybackQueue) {
+            const size_t task_bytes = task->PlaybackSamples() * sizeof(int16_t);
+            queued_player_pcm_bytes_ = task_bytes <= queued_player_pcm_bytes_
+                                           ? queued_player_pcm_bytes_ - task_bytes
+                                           : 0;
+        }
         if (task->type == kAudioTaskTypePlayerToPlaybackQueue &&
             audio_playback_queue_.empty() && !player_playback_finished_) {
             player_prebuffering_ = true;
@@ -914,18 +910,38 @@ bool AudioService::PushPcm(const uint8_t* data, size_t size, int sample_rate,
 
     std::unique_lock<std::mutex> lock(audio_queue_mutex_);
     const uint32_t enqueue_wait_start_ms = esp_log_timestamp();
-    const bool queue_was_full = audio_playback_queue_.size() >= MAX_PLAYER_PLAYBACK_TASKS_IN_QUEUE;
+    const bool task_queue_full =
+        audio_playback_queue_.size() >= MAX_PLAYER_PLAYBACK_TASKS_IN_QUEUE;
+    const bool byte_queue_full = player_max_buffered_pcm_bytes_ != 0 &&
+                                 queued_player_pcm_bytes_ >=
+                                     player_max_buffered_pcm_bytes_;
+    const bool queue_was_full = task_queue_full || byte_queue_full;
     if (wait) {
-        audio_queue_cv_.wait(lock, [this]() {
-            return service_stopped_ || audio_playback_queue_.size() < MAX_PLAYER_PLAYBACK_TASKS_IN_QUEUE;
+        audio_queue_cv_.wait(lock, [this, queue_was_full]() {
+            if (service_stopped_) {
+                return true;
+            }
+            if (audio_playback_queue_.size() >= MAX_PLAYER_PLAYBACK_TASKS_IN_QUEUE) {
+                return false;
+            }
+            if (player_max_buffered_pcm_bytes_ == 0) {
+                return true;
+            }
+            const size_t threshold = queue_was_full
+                                         ? player_producer_resume_pcm_bytes_
+                                         : player_max_buffered_pcm_bytes_;
+            return queued_player_pcm_bytes_ <= threshold;
         });
         const uint32_t enqueue_wait_ms = esp_log_timestamp() - enqueue_wait_start_ms;
         if (queue_was_full && enqueue_wait_ms >= 80) {
-            ESP_LOGI(TAG, "播放器生产受队列反压: wait=%lums, queue=%u",
+            ESP_LOGI(TAG,
+                     "播放器生产受队列反压: wait=%lums, queue=%u, pcm=%u/%u",
                      static_cast<unsigned long>(enqueue_wait_ms),
-                     static_cast<unsigned>(audio_playback_queue_.size()));
+                     static_cast<unsigned>(audio_playback_queue_.size()),
+                     static_cast<unsigned>(queued_player_pcm_bytes_),
+                     static_cast<unsigned>(player_max_buffered_pcm_bytes_));
         }
-    } else if (audio_playback_queue_.size() >= MAX_PLAYER_PLAYBACK_TASKS_IN_QUEUE) {
+    } else if (task_queue_full || byte_queue_full) {
         return false;
     }
 
@@ -933,6 +949,7 @@ bool AudioService::PushPcm(const uint8_t* data, size_t size, int sample_rate,
         return false;
     }
     audio_playback_queue_.push_back(std::move(task));
+    queued_player_pcm_bytes_ += pcm_bytes;
     player_pcm_bytes_ += pcm_bytes;
     const size_t queue_size = audio_playback_queue_.size();
     const bool first_chunk = player_output_chunks_.load() == 0 && queue_size == 1;
@@ -950,6 +967,22 @@ void AudioService::BeginPlayback(const AudioPlaybackConfig& config) {
     {
         std::lock_guard<std::mutex> lock(audio_queue_mutex_);
         player_initial_prebuffer_bytes_ = config.initial_prebuffer_bytes;
+        player_recovery_prebuffer_bytes_ = config.recovery_prebuffer_bytes != 0
+                                               ? config.recovery_prebuffer_bytes
+                                               : kAudioPlayerInitialPrebufferBytes;
+        player_max_buffered_pcm_bytes_ = config.max_buffered_pcm_bytes;
+        player_producer_resume_pcm_bytes_ =
+            config.producer_resume_pcm_bytes != 0
+                ? std::min(config.producer_resume_pcm_bytes,
+                           config.max_buffered_pcm_bytes)
+                : config.max_buffered_pcm_bytes;
+        ESP_LOGI(TAG,
+                 "播放器 PCM 水位: session=%lu, start=%u, recovery=%u, resume=%u, max=%u",
+                 static_cast<unsigned long>(config.session_id),
+                 static_cast<unsigned>(player_initial_prebuffer_bytes_),
+                 static_cast<unsigned>(player_recovery_prebuffer_bytes_),
+                 static_cast<unsigned>(player_producer_resume_pcm_bytes_),
+                 static_cast<unsigned>(player_max_buffered_pcm_bytes_));
     }
     player_stream_active_.store(true);
 }
@@ -958,6 +991,10 @@ void AudioService::SuspendPlayback() {
     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
     suspended_player_playback_queue_.clear();
     suspended_player_pcm_bytes_ = 0;
+    suspended_player_recovery_prebuffer_bytes_ = player_recovery_prebuffer_bytes_;
+    suspended_player_max_buffered_pcm_bytes_ = player_max_buffered_pcm_bytes_;
+    suspended_player_producer_resume_pcm_bytes_ =
+        player_producer_resume_pcm_bytes_;
     while (!audio_playback_queue_.empty()) {
         auto task = std::move(audio_playback_queue_.front());
         audio_playback_queue_.pop_front();
@@ -967,6 +1004,7 @@ void AudioService::SuspendPlayback() {
         }
     }
     player_pcm_bytes_ = 0;
+    queued_player_pcm_bytes_ = 0;
     player_playback_finished_ = false;
     player_stream_active_.store(false);
     audio_queue_cv_.notify_all();
@@ -977,6 +1015,10 @@ void AudioService::SuspendPlayback() {
 
 void AudioService::ResumePlayback(const AudioOutputEvent& output) {
     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    player_recovery_prebuffer_bytes_ = suspended_player_recovery_prebuffer_bytes_;
+    player_max_buffered_pcm_bytes_ = suspended_player_max_buffered_pcm_bytes_;
+    player_producer_resume_pcm_bytes_ =
+        suspended_player_producer_resume_pcm_bytes_;
     if (suspended_player_playback_queue_.empty()) {
         player_playback_finished_ = false;
         player_initial_prebuffer_bytes_ = 0;
@@ -994,9 +1036,12 @@ void AudioService::ResumePlayback(const AudioOutputEvent& output) {
     }
     suspended_player_pcm_bytes_ = 0;
     player_pcm_bytes_ = 0;
+    queued_player_pcm_bytes_ = 0;
     for (const auto& task : audio_playback_queue_) {
         if (task != nullptr) {
-            player_pcm_bytes_ += task->PlaybackSamples() * sizeof(int16_t);
+            const size_t task_bytes = task->PlaybackSamples() * sizeof(int16_t);
+            player_pcm_bytes_ += task_bytes;
+            queued_player_pcm_bytes_ += task_bytes;
         }
     }
     player_playback_finished_ = false;
@@ -1037,6 +1082,7 @@ void AudioService::MarkPlaybackFinished(const AudioOutputEvent& output) {
         }
         std::memset(padding->player_pcm, 0, padding_bytes);
         audio_playback_queue_.push_back(std::move(padding));
+        queued_player_pcm_bytes_ += padding_bytes;
         player_pcm_bytes_ += padding_bytes;
         ESP_LOGI(TAG, "播放器末尾 DMA 对齐: padding=%u bytes",
                  static_cast<unsigned>(padding_bytes));
@@ -1049,6 +1095,7 @@ void AudioService::ClearActivePlaybackQueue() {
     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
     player_stream_active_.store(false);
     audio_playback_queue_.clear();
+    queued_player_pcm_bytes_ = 0;
     player_pcm_bytes_ = 0;
     audio_queue_cv_.notify_all();
 }
@@ -1060,6 +1107,11 @@ void AudioService::ClearPlaybackQueue() {
     audio_playback_queue_.clear();
     suspended_player_playback_queue_.clear();
     suspended_player_pcm_bytes_ = 0;
+    queued_player_pcm_bytes_ = 0;
+    suspended_player_recovery_prebuffer_bytes_ =
+        kAudioPlayerInitialPrebufferBytes;
+    suspended_player_max_buffered_pcm_bytes_ = 0;
+    suspended_player_producer_resume_pcm_bytes_ = 0;
     player_pcm_bytes_ = 0;
     audio_queue_cv_.notify_all();
 }
@@ -1399,14 +1451,22 @@ void AudioService::ResetPlayerPlaybackState(bool clear_suspended_queue) {
     player_output_last_activity_ms_.store(0);
     player_audio_clock_ms_.store(0);
     player_pcm_bytes_ = 0;
+    queued_player_pcm_bytes_ = 0;
     audio_decode_queue_.clear();
     audio_playback_queue_.clear();
     if (clear_suspended_queue) {
         suspended_player_playback_queue_.clear();
         suspended_player_pcm_bytes_ = 0;
+        suspended_player_recovery_prebuffer_bytes_ =
+            kAudioPlayerInitialPrebufferBytes;
+        suspended_player_max_buffered_pcm_bytes_ = 0;
+        suspended_player_producer_resume_pcm_bytes_ = 0;
     }
     player_playback_finished_ = false;
     player_initial_prebuffer_bytes_ = 0;
+    player_recovery_prebuffer_bytes_ = kAudioPlayerInitialPrebufferBytes;
+    player_max_buffered_pcm_bytes_ = 0;
+    player_producer_resume_pcm_bytes_ = 0;
     player_prebuffering_ = true;
     player_prebuffer_wait_logged_ = false;
     player_rebuffer_count_ = 0;

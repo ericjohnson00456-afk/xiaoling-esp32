@@ -38,6 +38,9 @@ Application / Board / Cloud
 调用 `Ui::XXX()`；不得直接访问 `UiManager`、Presenter、View 或 LVGL 控件。尚未迁移的旧板型
 代码由兼容层转发，新增板型代码应直接调用 `Ui::XXX()`。
 
+LCD 与 SD 共用 SPI 的板型会把一次完整 LVGL 刷新的全部分段视为同一总线事务，
+只允许 SD 在两次刷新之间插入命令，避免动画帧被读卡事务切成可见条带。
+
 UI 初始化完成后，`UiManager` 创建一个专用任务。外部调用会把命令放进同一个 FIFO 队列，
 UI 任务按顺序更新 Presenter 和 View。UI 不借用 `Application` 主任务，也不需要业务层注入调度器。
 

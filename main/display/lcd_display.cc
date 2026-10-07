@@ -15,6 +15,7 @@
 #include "board.h"
 #include "system/device_status.h"
 #include "ui/ui_manager.h"
+#include "system/spi_bus_arbiter.h"
 #ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
 #include "xiaoling/session/session_core.h"
 #endif
@@ -80,9 +81,9 @@ LcdDisplay::LcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_
 
 SpiLcdDisplay::SpiLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_t panel,
                            int width, int height, int offset_x, int offset_y, bool mirror_x, bool mirror_y, bool swap_xy,
-                           SemaphoreHandle_t shared_bus_lock)
+                           SpiBusArbiter* spi_bus_arbiter)
     : LcdDisplay(panel_io, panel, width, height),
-      shared_bus_lock_(shared_bus_lock) {
+      spi_bus_arbiter_(spi_bus_arbiter) {
 
     // draw white
     std::vector<uint16_t> buffer(width_, 0xFFFF);
@@ -140,7 +141,9 @@ SpiLcdDisplay::SpiLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_h
         .io_handle = panel_io_,
         .panel_handle = panel_,
         .control_handle = nullptr,
-        .buffer_size = static_cast<uint32_t>(width_ * 20),
+        // 40 行约占屏幕 1/6，减少表情帧的分段数量；仍使用单 DMA 缓冲，
+        // 避免双缓冲继续挤占 Wi-Fi 和音频需要的片上内存。
+        .buffer_size = static_cast<uint32_t>(width_ * 40),
         .double_buffer = false,
         .trans_size = 0,
         .hres = static_cast<uint32_t>(width_),
@@ -168,7 +171,7 @@ SpiLcdDisplay::SpiLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_h
         return;
     }
 
-    if (shared_bus_lock_ != nullptr) {
+    if (spi_bus_arbiter_ != nullptr) {
         const esp_lcd_panel_io_callbacks_t callbacks = {
             .on_color_trans_done = SharedBusFlushDone,
         };
@@ -176,7 +179,7 @@ SpiLcdDisplay::SpiLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_h
             panel_io_, &callbacks, this));
         lv_display_add_event_cb(display_, SharedBusFlushStart,
                                 LV_EVENT_FLUSH_START, this);
-        ESP_LOGI(TAG, "Shared SPI transaction lock enabled");
+        ESP_LOGI(TAG, "SPI bus arbiter enabled");
     }
 
     if (offset_x != 0 || offset_y != 0) {
@@ -189,11 +192,15 @@ SpiLcdDisplay::SpiLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_h
 void SpiLcdDisplay::SharedBusFlushStart(lv_event_t* event) {
     auto* display = static_cast<SpiLcdDisplay*>(lv_event_get_user_data(event));
     configASSERT(display != nullptr);
-    configASSERT(display->shared_bus_lock_ != nullptr);
-    const BaseType_t taken =
-        xSemaphoreTake(display->shared_bus_lock_, portMAX_DELAY);
-    configASSERT(taken == pdTRUE);
-    (void)taken;
+    configASSERT(display->spi_bus_arbiter_ != nullptr);
+    // 首个分段取得总线，后续分段沿用；最后一个分段 DMA 完成后才释放。
+    if (!display->refresh_bus_locked_.exchange(true)) {
+        const bool locked = display->spi_bus_arbiter_->LockDisplay();
+        configASSERT(locked);
+        (void)locked;
+    }
+    display->release_bus_on_flush_done_.store(
+        lv_display_flush_is_last(display->display_));
 }
 
 bool SpiLcdDisplay::SharedBusFlushDone(
@@ -206,10 +213,13 @@ bool SpiLcdDisplay::SharedBusFlushDone(
     configASSERT(display != nullptr);
 
     BaseType_t task_woken = pdFALSE;
-    const BaseType_t released =
-        xSemaphoreGiveFromISR(display->shared_bus_lock_, &task_woken);
-    configASSERT(released == pdTRUE);
-    (void)released;
+    if (display->release_bus_on_flush_done_.exchange(false)) {
+        display->refresh_bus_locked_.store(false);
+        const bool unlocked =
+            display->spi_bus_arbiter_->UnlockDisplayFromIsr(&task_woken);
+        configASSERT(unlocked);
+        (void)unlocked;
+    }
     lv_display_flush_ready(display->display_);
     return task_woken == pdTRUE;
 }

@@ -121,6 +121,8 @@ public:
     bool CanEnterSleepMode();
     void SendMcpMessage(const std::string& payload);
     void PlayRespakAudio(const char* name);
+    // 播放需要抢占和恢复语义的通用提示音，可跨任务安全调用。
+    // 拍照等已有独立业务 Intent 的音效应直接使用 AudioPlayer。
     void PlayTone(uint16_t tone_id);
     /*  ========== 闹钟业务 ======== */
     // AlarmService 通过以下接口使用 Application 的播放器和小聆连接。
@@ -172,6 +174,8 @@ private:
     PlaybackIntentManager intent_manager_;
     uint32_t active_tts_session_id_ = 0;
     uint32_t pending_tts_session_id_ = 0;
+    // 通用提示音持有 kPromptTone，终态只释放与当前 session 匹配的 Intent。
+    std::atomic_uint32_t prompt_tone_session_id_{0};
     // TTS URL 到达后保持该标志，直到 DAC 首帧输出或当前 TTS 会话结束。
     std::atomic_bool tts_waiting_for_playback_{false};
     // DAC 首个 PCM 输出和播放器 kPlaying 事件可能乱序到达，暂存首帧状态。
@@ -266,6 +270,7 @@ private:
     void HandlePlayerOutputStartedEvent(const PlaybackOutputEvent& event);
     void HandlePlayerOutputProgressEvent(const PlaybackOutputEvent& event);
     void HandlePlaybackEvent(const PlaybackEvent& event);
+    void PlayPromptTone(uint16_t tone_id);
     void ProcessMainEvents(EventBits_t bits);
     void InitializeXiaolingConn();
     // 唤醒入口的连接检查：WS 就绪返回 true；否则按网络状态播报 085/064 提示音。

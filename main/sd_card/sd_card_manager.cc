@@ -15,6 +15,7 @@
 #include <driver/spi_master.h>
 #include <esp_vfs_fat.h>
 #include <sdmmc_cmd.h>
+#include "system/spi_bus_arbiter.h"
 
 #define TAG "SdCard"
 
@@ -169,8 +170,8 @@ esp_err_t SdCardManager::Mount(bool log_details) {
     }
 
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
-    if (config.shared_bus_lock != nullptr) {
-        host.do_transaction = &SdCardManager::DoSharedSpiTransaction;
+    if (config.spi_bus_arbiter != nullptr) {
+        host.do_transaction = &SdCardManager::DoArbitratedSpiTransaction;
     }
     sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
     slot_config.gpio_cs = config.cs;
@@ -210,22 +211,20 @@ esp_err_t SdCardManager::Mount(bool log_details) {
     return ESP_OK;
 }
 
-esp_err_t SdCardManager::DoSharedSpiTransaction(
+esp_err_t SdCardManager::DoArbitratedSpiTransaction(
     int slot, sdmmc_command_t* command) {
     auto& manager = GetInstance();
     if (!manager.config_.has_value() ||
-        manager.config_->shared_bus_lock == nullptr) {
+        manager.config_->spi_bus_arbiter == nullptr) {
         return ESP_ERR_INVALID_STATE;
     }
 
-    SemaphoreHandle_t lock = manager.config_->shared_bus_lock;
-    if (xSemaphoreTake(lock, portMAX_DELAY) != pdTRUE) {
+    auto* arbiter = manager.config_->spi_bus_arbiter;
+    if (!arbiter->LockStorage()) {
         return ESP_ERR_TIMEOUT;
     }
     const esp_err_t ret = sdspi_host_do_transaction(slot, command);
-    const BaseType_t released = xSemaphoreGive(lock);
-    configASSERT(released == pdTRUE);
-    (void)released;
+    arbiter->UnlockStorage();
     return ret;
 }
 

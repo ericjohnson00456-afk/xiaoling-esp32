@@ -105,6 +105,25 @@ void Application::HandlePlaybackEvent(const PlaybackEvent& event) {
         }
         return;
     }
+    if (event.channel == PlaybackChannel::kPrompt) {
+        if (event.state == PlaybackState::kCompleted ||
+            event.state == PlaybackState::kStopped ||
+            event.state == PlaybackState::kFailed) {
+            const uint32_t session_id = event.session_id;
+            // 播放器事件运行在 AppEvent 任务中，Intent 栈操作统一投递到
+            // Application 主任务，避免与按键或其他业务入口并发修改。
+            Schedule([this, session_id]() {
+                uint32_t expected = session_id;
+                if (!prompt_tone_session_id_.compare_exchange_strong(expected, 0)) {
+                    return;
+                }
+                intent_manager_.Pop(PlaybackIntentId::kPromptTone);
+                ESP_LOGI(TAG, "通用提示音结束，释放提示音事件: session=%lu",
+                         static_cast<unsigned long>(session_id));
+            });
+        }
+        return;
+    }
     if (event.channel != PlaybackChannel::kTts) {
         return;
     }
@@ -1039,6 +1058,11 @@ void Application::BeginWakeup(ListeningMode mode) {
     if (audio_player_.IsWakeupPending() || !xiaoling_conn_) {
         return;
     }
+    // 唤醒提示音沿用 kPromptTone。若通用提示音尚未结束，先移交它持有的
+    // Intent，后续旧 session 的终态事件会因 session 不匹配而被忽略。
+    if (prompt_tone_session_id_.exchange(0) != 0) {
+        intent_manager_.Pop(PlaybackIntentId::kPromptTone);
+    }
     intent_manager_.Push(PlaybackIntentId::kVoiceSession);
     exit_requested_.store(false);
     if (!SetDeviceState(kDeviceStateConnecting)) {
@@ -1206,6 +1230,14 @@ void Application::HandleStateChangedEvent() {
         if (xiaoling_conn_) {
             xiaoling_conn_->SendWakeWordDetected("");
         }
+    }
+    if (new_state == kDeviceStateWifiConfiguring &&
+        intent_manager_.Contains(PlaybackIntentId::kMusic)) {
+        // 配网是独立的终止型业务。先停止播放器并退出音乐 Intent，随后播放
+        // 070 提示音时栈内不再保留音乐，提示音结束后也不会恢复原曲。
+        audio_player_.Stop(PlaybackEndReason::kCancelled);
+        intent_manager_.Music().Exit();
+        ESP_LOGI(TAG, "进入配网模式，已停止音乐并退出音乐事件");
     }
     clock_ticks_ = 0;
 
@@ -1468,9 +1500,33 @@ void Application::PlayActivationAudio(const char* name) {
 }
 
 void Application::PlayTone(uint16_t tone_id) {
-    if (audio_player_.PlayTone(tone_id) == 0) {
-        ESP_LOGW(TAG, "ROMFS tone 播放失败: id=%u", static_cast<unsigned>(tone_id));
+    // 调用者可能位于网络、UI 或定时器任务，统一回到 Application 主任务
+    // 操作 Intent 栈和播放器。
+    Schedule([this, tone_id]() { PlayPromptTone(tone_id); });
+}
+
+void Application::PlayPromptTone(uint16_t tone_id) {
+    const bool intent_already_present =
+        intent_manager_.Contains(PlaybackIntentId::kPromptTone);
+    if (!intent_manager_.Push(PlaybackIntentId::kPromptTone)) {
+        ESP_LOGW(TAG, "提示音事件入栈失败: id=%u",
+                 static_cast<unsigned>(tone_id));
+        return;
     }
+
+    const uint32_t session_id = audio_player_.PlayTone(tone_id);
+    if (session_id == 0) {
+        ESP_LOGW(TAG, "ROMFS tone 播放失败: id=%u", static_cast<unsigned>(tone_id));
+        // 已存在的提示音事件可能属于唤醒流程或上一段提示音，不能误弹出。
+        if (!intent_already_present && prompt_tone_session_id_.load() == 0) {
+            intent_manager_.Pop(PlaybackIntentId::kPromptTone);
+        }
+        return;
+    }
+    prompt_tone_session_id_.store(session_id);
+    ESP_LOGI(TAG, "通用提示音取得最高播放优先级: id=%u, session=%lu",
+             static_cast<unsigned>(tone_id),
+             static_cast<unsigned long>(session_id));
 }
 
 void Application::ResetXiaolingConn() {

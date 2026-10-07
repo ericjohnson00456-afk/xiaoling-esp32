@@ -4,8 +4,8 @@
 
 #include <driver/gpio.h>
 #include <driver/spi_common.h>
-#include <freertos/FreeRTOS.h>
-#include <freertos/semphr.h>
+
+class SpiBusArbiter;
 
 enum class SdSpiBusOwnership : uint8_t {
     // SdCardManager initializes the SPI bus and releases it after unmounting.
@@ -25,7 +25,6 @@ struct SdSpiCardConfig {
     gpio_num_t power = GPIO_NUM_NC;
     uint8_t power_on_level = 0;
     SdSpiBusOwnership bus_ownership = SdSpiBusOwnership::kManagerOwned;
-    // Optional board-owned lock shared with other devices on the same SPI host.
-    // SdCardManager holds it for each complete SDSPI command.
-    SemaphoreHandle_t shared_bus_lock = nullptr;
+    // 版型持有的可选 SPI 总线仲裁器；SdCardManager 每次完整 SDSPI 命令持有一次。
+    SpiBusArbiter* spi_bus_arbiter = nullptr;
 };

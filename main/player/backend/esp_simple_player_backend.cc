@@ -47,8 +47,14 @@ constexpr size_t kStreamingHttpBufferSize = 32 * 1024;
 constexpr size_t kFileReadSize = 4 * 1024;
 constexpr size_t kFileBufferSize = 32 * 1024;
 constexpr size_t kFileInputStackSize = 4 * 1024;
-constexpr uint32_t kFileDecodeYieldChunkInterval = 32;
+constexpr uint32_t kFileDecodeYieldChunkInterval = 8;
 constexpr char kBufferedFileIoName[] = "io_file_buffered";
+// 建链阶段由 HTTP 客户端先在 10 秒返回，外层 12 秒看门狗负责兜底；请求
+// 真正发出后重新给首帧 8 秒，播放过程中仍以 5 秒实际无声作为断流阈值。
+constexpr int kTtsHttpConnectTimeoutMs = 10 * 1000;
+constexpr uint64_t kTtsConnectWatchdogUs = 12ULL * 1000ULL * 1000ULL;
+constexpr uint64_t kTtsFirstPcmTimeoutUs = 8ULL * 1000ULL * 1000ULL;
+constexpr uint64_t kTtsPcmStallTimeoutUs = 5ULL * 1000ULL * 1000ULL;
 // esp_http_client_read() 默认会等待完整的请求长度。较短的正文读取超时可以让
 // 稀疏的实时 TTS 数据一到达就返回部分正文，同时保留 GMF 对请求头和连接阶段
 // 的默认超时设置。
@@ -58,10 +64,6 @@ constexpr size_t kPlayerCommandStackSize = 4096;
 constexpr UBaseType_t kPlayerCommandPriority = 8;
 constexpr UBaseType_t kPlayerInputPriority = 8;
 constexpr UBaseType_t kPlayerDecodePriority = 8;
-// 首个 PCM 和播放中途的云端生成停顿使用相同的超时时间。
-// 首个 PCM 的计时从提交 HTTP 音频流时开始。
-constexpr uint64_t kTtsFirstPcmTimeoutUs = 5ULL * 1000ULL * 1000ULL;
-constexpr uint64_t kTtsPcmStallTimeoutUs = 5ULL * 1000ULL * 1000ULL;
 #if CONFIG_FREERTOS_NUMBER_OF_CORES > 1
 constexpr BaseType_t kPlayerCommandCore = 1;
 #else
@@ -359,11 +361,23 @@ bool EspSimplePlayerBackend::DoPlay(const PlaybackRequest& request) {
     DisarmTtsPcmTimeout();
 
     // 新媒体开始前清掉旧下行 Opus 和残留 PCM，物理 I2S 仍由 AudioOutputTask 独占。
+    const bool local_file = request.source_type == PlaybackSourceType::kFile;
     audio_output_->BeginPlayback(AudioPlaybackConfig{
         .session_id = request.session_id,
-        .initial_prebuffer_bytes = request.channel == PlaybackChannel::kTts
-                                        ? kAudioTtsInitialPrebufferBytes
+        .initial_prebuffer_bytes = local_file
+                                       ? kAudioLocalFilePrebufferBytes
+                                       : (request.channel == PlaybackChannel::kTts
+                                              ? kAudioTtsInitialPrebufferBytes
+                                              : kAudioPlayerInitialPrebufferBytes),
+        .recovery_prebuffer_bytes = local_file
+                                        ? kAudioLocalFilePrebufferBytes
                                         : kAudioPlayerInitialPrebufferBytes,
+        .max_buffered_pcm_bytes = local_file
+                                      ? kAudioLocalFileMaxBufferedBytes
+                                      : 0,
+        .producer_resume_pcm_bytes = local_file
+                                         ? kAudioLocalFileProducerResumeBytes
+                                         : 0,
     });
     playback_started_ms_ = esp_log_timestamp();
     if (request.source_type == PlaybackSourceType::kFile) {
@@ -401,7 +415,7 @@ bool EspSimplePlayerBackend::DoPlay(const PlaybackRequest& request) {
     const auto result = esp_audio_simple_player_run(handle_, request.source.c_str(), nullptr);
     if (result == ESP_GMF_ERR_OK) {
         if (request.channel == PlaybackChannel::kTts) {
-            ArmTtsPcmTimeout(kTtsFirstPcmTimeoutUs);
+            ArmTtsPcmTimeout(kTtsConnectWatchdogUs);
         }
         command_pending_playback_ = false;
         ESP_LOGI(TAG, "GMF run 已提交: session=%lu, elapsed=%lums",
@@ -490,12 +504,14 @@ bool EspSimplePlayerBackend::Resume() {
 bool EspSimplePlayerBackend::DoResume() {
     // 恢复解码器后，TTS 重新开始计算首帧或连续 PCM 的超时。
     bool is_tts = false;
+    bool request_ready = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!initialized_ || handle_ == nullptr || !playing_) {
             return false;
         }
         is_tts = current_request_.channel == PlaybackChannel::kTts;
+        request_ready = http_request_ready_emitted_;
     }
 
     // resume 同样会同步触发 RUNNING 状态回调，必须在 mutex_ 外调用。
@@ -513,7 +529,8 @@ bool EspSimplePlayerBackend::DoResume() {
             tts_timeout_stop_pending_ = false;
         }
         ArmTtsPcmTimeout(output_chunks_.load() == 0
-                             ? kTtsFirstPcmTimeoutUs
+                             ? (request_ready ? kTtsFirstPcmTimeoutUs
+                                              : kTtsConnectWatchdogUs)
                              : kTtsPcmStallTimeoutUs);
     }
     return resumed;
@@ -681,10 +698,12 @@ void EspSimplePlayerBackend::DisarmTtsPcmTimeout() {
 }
 
 void EspSimplePlayerBackend::HandleTtsPcmTimeout() {
-    // TTS 长时间没有产生首帧或新的 PCM 时，主动断开 HTTP 并停止当前会话。
+    // 分别限制 HTTP 建链、请求发出后的首帧以及播放中的实际无声时间。
     PlaybackEndReason timeout_reason = PlaybackEndReason::kNone;
     uint32_t session_id = 0;
     uint64_t remaining_us = 0;
+    uint64_t timeout_interval_us = 0;
+    const char* timeout_type = "unknown";
     void* http_client = nullptr;
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -694,6 +713,7 @@ void EspSimplePlayerBackend::HandleTtsPcmTimeout() {
             return;
         }
         const bool received_pcm = output_chunks_.load() != 0;
+        const bool request_ready = http_request_ready_emitted_;
         int64_t reference_us = received_pcm
                                    ? last_tts_pcm_us_
                                    : tts_timeout_started_us_;
@@ -714,14 +734,18 @@ void EspSimplePlayerBackend::HandleTtsPcmTimeout() {
          * 已经刷新参考时间；如果使用加锁前的时间戳，减法可能变成负数，
          * 转成无符号数后会被误认为是一个很大的超时时间。 */
         const int64_t now_us = esp_timer_get_time();
-        const uint64_t timeout_us = received_pcm
-                                        ? kTtsPcmStallTimeoutUs
-                                        : kTtsFirstPcmTimeoutUs;
+        timeout_interval_us = received_pcm
+                                  ? kTtsPcmStallTimeoutUs
+                                  : (request_ready ? kTtsFirstPcmTimeoutUs
+                                                   : kTtsConnectWatchdogUs);
+        timeout_type = received_pcm
+                           ? "pcm_stall"
+                           : (request_ready ? "first_pcm" : "connect");
         const uint64_t elapsed_us = now_us >= reference_us
                                         ? static_cast<uint64_t>(now_us - reference_us)
                                         : 0;
-        if (elapsed_us < timeout_us) {
-            remaining_us = timeout_us - elapsed_us;
+        if (elapsed_us < timeout_interval_us) {
+            remaining_us = timeout_interval_us - elapsed_us;
         } else {
             timeout_reason = received_pcm
                                  ? PlaybackEndReason::kPcmStallTimeout
@@ -738,14 +762,10 @@ void EspSimplePlayerBackend::HandleTtsPcmTimeout() {
     }
 
     const unsigned long timeout_ms = static_cast<unsigned long>(
-        (timeout_reason == PlaybackEndReason::kFirstPcmTimeout
-             ? kTtsFirstPcmTimeoutUs
-             : kTtsPcmStallTimeoutUs) / 1000ULL);
+        timeout_interval_us / 1000ULL);
     ESP_LOGE(TAG, "TTS PCM 超时: session=%lu, type=%s, timeout=%lums",
              static_cast<unsigned long>(session_id),
-             timeout_reason == PlaybackEndReason::kFirstPcmTimeout
-                 ? "first_pcm"
-                 : "pcm_stall",
+             timeout_type,
              timeout_ms);
     NetworkDiagnostics::LogSnapshot("tts_pcm_timeout");
     if (http_client != nullptr) {
@@ -773,9 +793,7 @@ void EspSimplePlayerBackend::HandleTtsPcmTimeout() {
             std::lock_guard<std::mutex> lock(mutex_);
             tts_timeout_stop_pending_ = false;
         }
-        ArmTtsPcmTimeout(timeout_reason == PlaybackEndReason::kFirstPcmTimeout
-                             ? kTtsFirstPcmTimeoutUs
-                             : kTtsPcmStallTimeoutUs);
+        ArmTtsPcmTimeout(timeout_interval_us);
     }
 }
 
@@ -795,8 +813,17 @@ int EspSimplePlayerBackend::HandleHttpIoEvent(http_stream_event_msg_t* event) {
         return ESP_GMF_ERR_OK;
     }
 
-    // PRE_REQUEST 保存 HTTP 句柄，超时处理可以主动中断阻塞中的 socket 读取。
+    // PRE_REQUEST 发生在 connect 之前；先缩短组件默认的 30 秒连接超时，再保存
+    // 句柄供外层看门狗在已经取得 socket 后主动中断。
     if (event->event_id == HTTP_STREAM_PRE_REQUEST) {
+        const auto client =
+            static_cast<esp_http_client_handle_t>(event->http_client);
+        const esp_err_t timeout_result =
+            esp_http_client_set_timeout_ms(client, kTtsHttpConnectTimeoutMs);
+        if (timeout_result != ESP_OK) {
+            ESP_LOGW(TAG, "TTS HTTP 建链超时设置失败: %s",
+                     esp_err_to_name(timeout_result));
+        }
         std::lock_guard<std::mutex> lock(mutex_);
         if (playing_ && current_request_.channel == PlaybackChannel::kTts) {
             // 保存 HTTP 句柄，让五秒超时时可以中断正在 esp_http_client 内部
@@ -897,6 +924,7 @@ int EspSimplePlayerBackend::HandleHttpIoEvent(http_stream_event_msg_t* event) {
         }
         tts_http_client_ = event->http_client;
         http_request_ready_emitted_ = true;
+        tts_timeout_started_us_ = esp_timer_get_time();
         playback_event.session_id = current_request_.session_id;
         playback_event.channel = current_request_.channel;
         playback_event.state = PlaybackState::kStreamReady;
@@ -904,6 +932,7 @@ int EspSimplePlayerBackend::HandleHttpIoEvent(http_stream_event_msg_t* event) {
     ESP_LOGI(TAG, "TTS HTTP 音频请求已发出: session=%lu, elapsed=%lums",
              static_cast<unsigned long>(playback_event.session_id),
              static_cast<unsigned long>(esp_log_timestamp() - playback_started_ms_));
+    ArmTtsPcmTimeout(kTtsFirstPcmTimeoutUs);
     Emit(playback_event);
     return ESP_GMF_ERR_OK;
 }

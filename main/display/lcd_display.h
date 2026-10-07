@@ -7,11 +7,11 @@
 #include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>
 #include <font_emoji.h>
-#include <freertos/FreeRTOS.h>
-#include <freertos/semphr.h>
 
 #include <atomic>
 #include <memory>
+
+class SpiBusArbiter;
 
 #define PREVIEW_IMAGE_DURATION_MS 5000
 
@@ -92,7 +92,10 @@ public:
 // SPI LCD display
 class SpiLcdDisplay : public LcdDisplay {
 private:
-    SemaphoreHandle_t shared_bus_lock_ = nullptr;
+    SpiBusArbiter* spi_bus_arbiter_ = nullptr;
+    // 一次 LVGL 刷新可能被绘制缓冲拆成多个 flush；整个刷新期间只持有一次总线。
+    std::atomic_bool refresh_bus_locked_{false};
+    std::atomic_bool release_bus_on_flush_done_{false};
 
     static void SharedBusFlushStart(lv_event_t* event);
     static bool SharedBusFlushDone(esp_lcd_panel_io_handle_t panel_io,
@@ -103,7 +106,7 @@ public:
     SpiLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_t panel,
                   int width, int height, int offset_x, int offset_y,
                   bool mirror_x, bool mirror_y, bool swap_xy,
-                  SemaphoreHandle_t shared_bus_lock = nullptr);
+                  SpiBusArbiter* spi_bus_arbiter = nullptr);
 };
 
 // RGB LCD display

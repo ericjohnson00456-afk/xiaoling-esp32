@@ -251,6 +251,14 @@ private:
     bool player_playback_finished_ = false;
     // 当前播放器会话的首播预缓冲门槛，由 AudioOutput 配置传入。
     size_t player_initial_prebuffer_bytes_ = 0;
+    size_t player_recovery_prebuffer_bytes_ = kAudioPlayerInitialPrebufferBytes;
+    size_t player_max_buffered_pcm_bytes_ = 0;
+    size_t player_producer_resume_pcm_bytes_ = 0;
+    size_t queued_player_pcm_bytes_ = 0;
+    // 音乐被 TTS 抢占期间保存本地文件会话的反压配置，恢复后继续沿用。
+    size_t suspended_player_recovery_prebuffer_bytes_ = kAudioPlayerInitialPrebufferBytes;
+    size_t suspended_player_max_buffered_pcm_bytes_ = 0;
+    size_t suspended_player_producer_resume_pcm_bytes_ = 0;
     bool player_prebuffering_ = true;
     bool player_prebuffer_wait_logged_ = false;
     uint32_t player_rebuffer_count_ = 0;

@@ -60,8 +60,8 @@ private:
     void Notify(SdCardEvent event);
     void MonitorLoop();
     static void MonitorTaskEntry(void* arg);
-    static esp_err_t DoSharedSpiTransaction(int slot,
-                                            sdmmc_command_t* command);
+    static esp_err_t DoArbitratedSpiTransaction(int slot,
+                                                sdmmc_command_t* command);
 
     mutable std::mutex mutex_;
     std::optional<SdSpiCardConfig> config_;
