@@ -565,34 +565,42 @@ void Application::HandleNetworkDisconnectedEvent() {
 
 void Application::RunXiaolingActivation() {
     XiaolingConnActivation activation;
-    if (!activation.Fetch()) {
-        // 激活信息查询不会改写 Flash；请求失败时仍让小聆连接层按自身的
-        // 鉴权和重连策略处理，不把它误当成 OTA 失败。
-        ESP_LOGW(TAG, "未取得小聆激活信息，继续初始化小聆连接");
-        return;
-    }
+    while (true) {
+        if (!activation.Fetch()) {
+            ESP_LOGW(TAG, "未取得小聆激活信息，10 秒后重试");
+            vTaskDelay(pdMS_TO_TICKS(10000));
+            continue;
+        }
 
-    if (!activation.code().empty()) {
-        ShowActivationCode(activation.code(), activation.qrcode());
-    }
-    if (!activation.IsRequired()) {
-        return;
-    }
-
-    constexpr int kActivationAttempts = 10;
-    for (int attempt = 0; attempt < kActivationAttempts; ++attempt) {
-        ESP_LOGI(TAG, "等待设备绑定: %d/%d", attempt + 1, kActivationAttempts);
-        const esp_err_t result = activation.Submit();
-        if (result == ESP_OK) {
-            ESP_LOGI(TAG, "设备绑定成功");
+        if (!activation.IsRequired()) {
             Ui::DismissQrCode();
             return;
         }
+        if (!activation.code().empty()) {
+            ShowActivationCode(activation.code(), activation.qrcode());
+        }
 
-        const int delay_ms = result == ESP_ERR_TIMEOUT ? 3000 : 10000;
-        vTaskDelay(pdMS_TO_TICKS(delay_ms));
+        while (true) {
+            ESP_LOGI(TAG, "等待设备绑定");
+            const esp_err_t result = activation.Submit();
+            if (result == ESP_OK) {
+                ESP_LOGI(TAG, "设备绑定成功");
+                Ui::DismissQrCode();
+                return;
+            }
+
+            if (result == ESP_ERR_TIMEOUT) {
+                vTaskDelay(pdMS_TO_TICKS(3000));
+                continue;
+            }
+
+            // 非“等待绑定”响应可能表示网络异常或 challenge 已失效。
+            // 延迟后重新获取激活信息，必要时同步刷新二维码和 challenge。
+            ESP_LOGW(TAG, "设备绑定查询失败，10 秒后重新获取激活信息");
+            vTaskDelay(pdMS_TO_TICKS(10000));
+            break;
+        }
     }
-    ESP_LOGW(TAG, "启动阶段内设备绑定未完成");
 }
 
 void Application::ShowActivationCode(const std::string& code,

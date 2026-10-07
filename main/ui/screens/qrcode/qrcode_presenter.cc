@@ -76,9 +76,11 @@ int QrCodePresenter::Show(const UiNavScreen* screen, void* data) {
         return -1;
     }
     presenter->view_->Show();
-    // The provisioning QR must remain available until the user completes
-    // BluFi setup. Other QR-code screens keep their normal auto-dismissal.
-    if (DeviceStatus::GetState() == kDeviceStateWifiConfiguring) {
+    // 配网和设备绑定二维码必须持续显示，直到对应流程明确完成并关闭页面。
+    // 其他二维码页面仍保留正常的自动关闭行为。
+    const auto state = DeviceStatus::GetState();
+    if (state == kDeviceStateWifiConfiguring ||
+        state == kDeviceStateActivating) {
         presenter->DestroyTimeoutTimer();
     } else {
         presenter->StartTimeoutTimer();
