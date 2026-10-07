@@ -144,8 +144,8 @@ public:
     bool LoadWakeWordResources();
 #if CONFIG_USE_MICRO_WAKE_WORD
     void SetMicroWakeWordModel(const void* model_data, size_t model_size,
-                               const std::string& wake_word = {},
-                               const MicroWakeWordConfig& config = {});
+                               const std::string& wake_word,
+                               const MicroWakeWordConfig& config);
 #else // !CONFIG_USE_MICRO_WAKE_WORD
     void SetModelsList(srmodel_list_t* models_list);
 #endif // CONFIG_USE_MICRO_WAKE_WORD

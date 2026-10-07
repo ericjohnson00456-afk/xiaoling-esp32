@@ -75,15 +75,17 @@ std::string ModelPathForDescriptor(const std::string& descriptor_path) {
     return descriptor_path.substr(0, descriptor_path.size() - 5) + ".tflite";
 }
 
-void ParseMicroWakeWordConfig(const cJSON* descriptor, MicroWakeWordConfig& config) {
+bool ParseMicroWakeWordConfig(const cJSON* descriptor, MicroWakeWordConfig& config) {
     const cJSON* micro = cJSON_GetObjectItemCaseSensitive(descriptor, "micro");
     if (!cJSON_IsObject(micro)) {
-        return;
+        return false;
     }
     const cJSON* cutoff = cJSON_GetObjectItemCaseSensitive(micro, "probability_cutoff");
-    if (cJSON_IsNumber(cutoff) && cutoff->valuedouble > 0.0 && cutoff->valuedouble <= 1.0) {
-        config.probability_cutoff = static_cast<float>(cutoff->valuedouble);
+    if (!cJSON_IsNumber(cutoff) || cutoff->valuedouble <= 0.0 ||
+        cutoff->valuedouble > 1.0) {
+        return false;
     }
+    config.probability_cutoff = static_cast<float>(cutoff->valuedouble);
     const cJSON* sliding = cJSON_GetObjectItemCaseSensitive(micro, "sliding_window_size");
     if (cJSON_IsNumber(sliding) && sliding->valuedouble >= 1.0 && sliding->valuedouble <= 64.0) {
         config.sliding_window_size = static_cast<size_t>(sliding->valuedouble);
@@ -97,6 +99,7 @@ void ParseMicroWakeWordConfig(const cJSON* descriptor, MicroWakeWordConfig& conf
         arena->valuedouble <= 1024.0 * 1024.0) {
         config.tensor_arena_size = static_cast<size_t>(arena->valuedouble);
     }
+    return true;
 }
 #endif
 }  // namespace
@@ -1525,7 +1528,13 @@ bool AudioService::LoadWakeWordResources() {
         }
         MicroWakeWordConfig config;
         config.wake_word = wake_word->valuestring;
-        ParseMicroWakeWordConfig(descriptor, config);
+        if (!ParseMicroWakeWordConfig(descriptor, config)) {
+            ESP_LOGW(TAG,
+                     "Wake-word descriptor has no valid micro.probability_cutoff: %s",
+                     descriptor_path.c_str());
+            cJSON_Delete(descriptor);
+            continue;
+        }
 
         std::string model_path = ModelPathForDescriptor(descriptor_path);
         ResourceData model_asset;

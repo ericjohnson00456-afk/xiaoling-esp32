@@ -17,7 +17,8 @@
 
 namespace micro_wake_word {
 
-    static const uint32_t STREAMING_MODEL_VARIABLE_ARENA_SIZE = 1024;
+    static constexpr size_t STREAMING_MODEL_VARIABLE_ARENA_SIZE = 1024;
+    static constexpr int STREAMING_MODEL_MAX_RESOURCE_VARIABLES = 20;
 
     class StreamingModel {
     public:
@@ -42,6 +43,8 @@ namespace micro_wake_word {
         void UnloadModel();
 
     protected:
+        void UnloadModelLocked();
+
         uint8_t current_stride_step_{0};
 
         float probability_cutoff_;
@@ -52,9 +55,10 @@ namespace micro_wake_word {
 
         const uint8_t *model_start_;
         uint8_t *tensor_arena_{nullptr};
+        uint8_t *variable_arena_{nullptr};
         std::unique_ptr<tflite::MicroInterpreter> interpreter_;
         tflite::MicroResourceVariables *mrv_{nullptr};
-        tflite::MicroAllocator *ma_{nullptr};
+        tflite::MicroAllocator *variable_allocator_{nullptr};
         
         mutable std::mutex inference_mutex_;
         mutable std::atomic<bool> model_loaded_{false};

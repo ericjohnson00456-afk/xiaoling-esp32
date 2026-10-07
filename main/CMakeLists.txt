@@ -789,12 +789,6 @@ idf_component_register(SRCS ${SOURCES}
 target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=lwip_send")
 
 
-if(CONFIG_USE_MICRO_WAKE_WORD)
-    target_compile_definitions(${COMPONENT_LIB} PRIVATE
-        MICRO_WAKE_WORD_MODEL_PROBABILITY_CUTOFF=${MWW_MODEL_PROB_CUTOFF}
-    )
-endif()
-
 # Use target_compile_definitions to define BOARD_TYPE, BOARD_NAME
 # If BOARD_NAME is empty, use BOARD_TYPE
 if(NOT BOARD_NAME)

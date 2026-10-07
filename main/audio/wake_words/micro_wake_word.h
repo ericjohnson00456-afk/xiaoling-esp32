@@ -24,7 +24,7 @@
 class MicroWakeWord : public WakeWord {
 public:
     MicroWakeWord(const void* model_data, size_t model_size,
-                  const MicroWakeWordConfig& config = {});
+                  const MicroWakeWordConfig& config);
     ~MicroWakeWord();
 
     bool Initialize(AudioCodec* codec, srmodel_list_t* models_list) override;

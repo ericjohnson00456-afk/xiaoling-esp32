@@ -45,9 +45,11 @@ bool StreamingModel::PerformStreamingInference(const int8_t features[PREPROCESSO
     }
 
     // 额外的安全检查
-    if (!tensor_arena_ || !ma_ || !mrv_) {
-        ESP_LOGE(TAG, "Model components not properly initialized (arena:%p, ma:%p, mrv:%p)", 
-                tensor_arena_, ma_, mrv_);
+    if (!tensor_arena_ || !variable_arena_ || !variable_allocator_ || !mrv_) {
+        ESP_LOGE(TAG,
+                 "Model components not properly initialized "
+                 "(tensor_arena:%p, variable_arena:%p, allocator:%p, mrv:%p)",
+                 tensor_arena_, variable_arena_, variable_allocator_, mrv_);
         model_loaded_.store(false);  // 标记模型为未加载状态
         return false;
     }
@@ -226,39 +228,46 @@ bool StreamingModel::LoadModel(tflite::MicroMutableOpResolver<20> &op_resolver) 
     if (model->version() != TFLITE_SCHEMA_VERSION) {
         ESP_LOGE(TAG, "Model schema version %" PRIu32 " doesn't match supported version %d", 
                 model->version(), TFLITE_SCHEMA_VERSION);
-        UnloadModel();
+        UnloadModelLocked();
         return false;
     }
 
-    // Create MicroAllocator and MicroResourceVariables
-    ma_ = tflite::MicroAllocator::Create(tensor_arena_, tensor_arena_size_);
-    if (!ma_) {
-        ESP_LOGE(TAG, "Failed to create MicroAllocator");
-        UnloadModel();
+    // Resource variables use their own small arena. The second argument of
+    // MicroResourceVariables::Create is a variable count, not an arena size.
+    variable_arena_ = static_cast<uint8_t*>(heap_caps_aligned_alloc(
+        16, STREAMING_MODEL_VARIABLE_ARENA_SIZE,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (!variable_arena_) {
+        ESP_LOGE(TAG,
+                 "Failed to allocate resource-variable arena in SPIRAM: "
+                 "requested=%u",
+                 static_cast<unsigned>(STREAMING_MODEL_VARIABLE_ARENA_SIZE));
+        UnloadModelLocked();
         return false;
     }
-    
-    // Reset any leftover temporary allocations before proceeding
-    ESP_LOGI(TAG, "Resetting temporary allocations before interpreter creation...");
-    try {
-        ma_->ResetTempAllocations();
-        ESP_LOGI(TAG, "Temporary allocations reset successfully");
-    } catch (...) {
-        ESP_LOGW(TAG, "Exception during temporary allocation reset - continuing...");
+
+    variable_allocator_ = tflite::MicroAllocator::Create(
+        variable_arena_, STREAMING_MODEL_VARIABLE_ARENA_SIZE);
+    if (!variable_allocator_) {
+        ESP_LOGE(TAG, "Failed to create resource-variable allocator");
+        UnloadModelLocked();
+        return false;
     }
-    
-    mrv_ = tflite::MicroResourceVariables::Create(ma_, STREAMING_MODEL_VARIABLE_ARENA_SIZE);
+
+    mrv_ = tflite::MicroResourceVariables::Create(
+        variable_allocator_, STREAMING_MODEL_MAX_RESOURCE_VARIABLES);
     if (!mrv_) {
         ESP_LOGE(TAG, "Failed to create MicroResourceVariables");
-        UnloadModel();
+        UnloadModelLocked();
         return false;
     }
 
     // Create interpreter
-    interpreter_ = std::make_unique<tflite::MicroInterpreter>(model, op_resolver, ma_, mrv_);
+    interpreter_ = std::make_unique<tflite::MicroInterpreter>(
+        model, op_resolver, tensor_arena_, tensor_arena_size_, mrv_);
     if (!interpreter_) {
         ESP_LOGE(TAG, "Failed to create MicroInterpreter");
-        UnloadModel();
+        UnloadModelLocked();
         return false;
     }
 
@@ -272,20 +281,21 @@ bool StreamingModel::LoadModel(tflite::MicroMutableOpResolver<20> &op_resolver) 
 
         // 检查tensor arena是否足够
         ESP_LOGE(TAG, "Tensor arena size: %u bytes", (unsigned int)tensor_arena_size_);
-        if (ma_) {
-            ESP_LOGE(TAG, "MicroAllocator created successfully");
-        }
-        
-        UnloadModel();
+        UnloadModelLocked();
         return false;
     }
 
-    // 检查实际使用的张量竞技场大小
-    if (ma_) {
-        size_t used_bytes = ma_->used_bytes();
-        ESP_LOGI(TAG, "Actual tensor arena size used: %u bytes (allocated: %u bytes)", 
-                (unsigned int)used_bytes, (unsigned int)tensor_arena_size_);
-    }
+    const size_t used_bytes = interpreter_->arena_used_bytes();
+    ESP_LOGI(TAG,
+             "Actual tensor arena size used: %u bytes (allocated: %u bytes)",
+             static_cast<unsigned>(used_bytes),
+             static_cast<unsigned>(tensor_arena_size_));
+    ESP_LOGI(TAG,
+             "Resource-variable arena used: %u bytes (allocated: %u bytes, "
+             "max_variables=%d)",
+             static_cast<unsigned>(variable_allocator_->used_bytes()),
+             static_cast<unsigned>(STREAMING_MODEL_VARIABLE_ARENA_SIZE),
+             STREAMING_MODEL_MAX_RESOURCE_VARIABLES);
 
     // 初始化资源变量以避免 "non-existent resource variable" 错误
     if (mrv_) {
@@ -304,7 +314,10 @@ bool StreamingModel::LoadModel(tflite::MicroMutableOpResolver<20> &op_resolver) 
 
 void StreamingModel::UnloadModel() {
     std::lock_guard<std::mutex> lock(inference_mutex_);
-    
+    UnloadModelLocked();
+}
+
+void StreamingModel::UnloadModelLocked() {
     ESP_LOGI(TAG, "Starting model unload process...");
     
     // 立即标记模型为未加载状态，防止并发访问
@@ -328,18 +341,13 @@ void StreamingModel::UnloadModel() {
         mrv_ = nullptr;
     }
     
-    // 清理MicroAllocator
-    if (ma_) {
-        try {
-            ESP_LOGI(TAG, "Resetting MicroAllocator temporary allocations...");
-            ma_->ResetTempAllocations();
-            ESP_LOGI(TAG, "MicroAllocator reset successfully");
-        } catch (const std::exception& e) {
-            ESP_LOGW(TAG, "Standard exception during MicroAllocator reset");
-        } catch (...) {
-            ESP_LOGW(TAG, "Unknown exception during MicroAllocator reset");
-        }
-        ma_ = nullptr;
+    variable_allocator_ = nullptr;
+
+    if (variable_arena_) {
+        ESP_LOGI(TAG, "Freeing resource-variable arena...");
+        heap_caps_free(variable_arena_);
+        variable_arena_ = nullptr;
+        ESP_LOGI(TAG, "Resource-variable arena freed");
     }
     
     // 最后释放tensor arena
