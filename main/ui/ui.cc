@@ -613,15 +613,17 @@ void ShowPreviewImage(std::unique_ptr<LvglImage> image) {
 #endif
 }
 
-void ShowCameraPreview() {
-    UiManager::GetInstance().Dispatch([]() {
-        auto& manager = UiManager::GetInstance();
+void ShowCameraPreview(CameraPreviewPhase phase, std::string detail) {
+    UiManager::GetInstance().Dispatch(
+        [phase, detail = std::move(detail)]() mutable {
+            auto& manager = UiManager::GetInstance();
 #ifdef CONFIG_LSPLATFORM
-        HomePresenter::GetInstance().ClearImage();
+            HomePresenter::GetInstance().ClearImage();
 #endif
-        CameraPreviewPresenter::GetInstance().SetState(CameraPreviewPhase::Preview, {});
-        manager.NavigateTo(UI_PAGE_CAMERA_PREVIEW);
-    });
+            CameraPreviewPresenter::GetInstance().SetState(
+                phase, std::move(detail));
+            manager.NavigateTo(UI_PAGE_CAMERA_PREVIEW);
+        });
 }
 
 void FreezeCameraPreviewToHome(std::string status) {
@@ -629,8 +631,9 @@ void FreezeCameraPreviewToHome(std::string status) {
         [status = std::move(status)]() mutable {
             auto& manager = UiManager::GetInstance();
             auto frame = CameraPreviewPresenter::GetInstance().TakeFrame();
+            const bool has_frame = frame != nullptr;
 #ifdef CONFIG_LSPLATFORM
-            if (frame != nullptr) {
+            if (has_frame) {
                 HomePresenter::GetInstance().SetImage(std::move(frame));
             }
 #else
@@ -638,9 +641,14 @@ void FreezeCameraPreviewToHome(std::string status) {
 #endif
             current_localized_status.reset();
             HomePresenter::GetInstance().SetStatus(std::move(status), false);
-            if (manager.TopScreenId() == UI_PAGE_CAMERA_PREVIEW) {
-                manager.NavigateHome();
-            }
+            const int previous_page = manager.TopScreenId();
+            // 拍照冻结后的业务目标固定是 Home。无条件导航可避免顶层页面 ID
+            // 短暂变化时照片和字幕只更新到后台的 Home 页面。
+            const int navigate_result = manager.NavigateHome();
+            ESP_LOGI(kTag,
+                     "冻结照片并返回 Home: previous=%d, result=%d, current=%d, frame=%d",
+                     previous_page, navigate_result, manager.TopScreenId(),
+                     has_frame ? 1 : 0);
         });
 }
 

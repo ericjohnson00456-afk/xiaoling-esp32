@@ -10,10 +10,12 @@
 
 #include <esp_log.h>
 #include <esp_timer.h>
+#include <cJSON.h>
 
 #include <array>
 #include <exception>
 #include <memory>
+#include <stdexcept>
 #include <utility>
 
 namespace {
@@ -25,9 +27,11 @@ constexpr uint16_t kPreviewHeight = 120;
 constexpr TickType_t kPreviewWaitInterval = pdMS_TO_TICKS(20);
 constexpr TickType_t kCaptureToneWaitTimeout = pdMS_TO_TICKS(2000);
 constexpr TickType_t kTtsStartWaitTimeout = pdMS_TO_TICKS(12000);
+constexpr uint32_t kVoiceAutoCaptureDelayMs = 3000;
 constexpr configSTACK_DEPTH_TYPE kWorkerStackSize = 12 * 1024;
 constexpr UBaseType_t kWorkerPriority = 5;
 constexpr int64_t kStartupGuardUs = 3 * 1000 * 1000;
+constexpr int64_t kEarlyVoiceTtsWindowUs = 10 * 1000 * 1000;
 constexpr char kVisionPrompt[] =
     "这个图片里面有什么东西";
 
@@ -84,16 +88,118 @@ bool CameraService::StartButtonCapture() {
     return Start(Origin::Button, 0);
 }
 
+bool CameraService::StartVoiceMcpCapture(VoiceMcpResultCallback callback) {
+    if (!callback) {
+        return false;
+    }
+    if (phase_.load() != Phase::Inactive) {
+        callback(false, "当前已有拍照任务正在进行");
+        return false;
+    }
+
+    const int64_t now_us = esp_timer_get_time();
+    const bool tts_waiting_without_pcm =
+        application_ != nullptr &&
+        application_->GetDeviceState() == kDeviceStateListening &&
+        application_->GetAudioPlayer().IsPlaying();
+    bool adopted_early_tts = false;
+    std::string adopted_url;
+
+    // 从 MCP 工具开始执行就关闭 TTS 放行门。若 TTS URL 比工具调用更早
+    // 到达，则接管正在空等云端合成的 URL，待工具响应后重新提交播放器。
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        voice_tts_gate_active_ = true;
+        deferred_voice_tts_url_.clear();
+        if (tts_waiting_without_pcm && !recent_tts_url_.empty() &&
+            now_us >= recent_tts_url_at_us_ &&
+            now_us - recent_tts_url_at_us_ <= kEarlyVoiceTtsWindowUs) {
+            adopted_url = recent_tts_url_;
+            deferred_voice_tts_url_ = adopted_url;
+            adopted_early_tts = true;
+        }
+    }
+
+    if (adopted_early_tts && application_ != nullptr) {
+        // 必须在拍照 Intent 停止旧播放器之前标记重播，否则极快的 STOPPED
+        // 事件可能先清除已经到达的 timeline。
+        application_->PrepareTtsReplay();
+    }
+
+    std::string error;
+    if (Start(Origin::VoiceMcp, kVoiceAutoCaptureDelayMs,
+              callback, &error)) {
+        if (adopted_early_tts) {
+            ESP_LOGI(kTag, "已接管提前到达的拍照 TTS，等待 MCP 响应后重播");
+        }
+        return true;
+    }
+
+    if (adopted_early_tts) {
+        // 相机未能启动时不重播仍在运行的原 TTS，只需在错误响应后解除门控。
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (deferred_voice_tts_url_ == adopted_url) {
+            deferred_voice_tts_url_.clear();
+        }
+    }
+    callback(false, error.empty() ? "无法启动拍照" : std::move(error));
+    if (application_ != nullptr) {
+        application_->Schedule([this]() { ReleaseVoiceMcpTtsGate(); });
+    } else {
+        ReleaseVoiceMcpTtsGate();
+    }
+    return false;
+}
+
+bool CameraService::CancelVoiceMcpCountdown(const char* reason) {
+    if (phase_.load() != Phase::Preview ||
+        origin_.load() != Origin::VoiceMcp) {
+        return false;
+    }
+    const uint32_t generation = generation_.load();
+    ESP_LOGI(kTag, "取消语音拍照倒计时: %s",
+             reason != nullptr ? reason : "用户取消拍照");
+    CompleteVoiceMcp(generation, false,
+                     reason != nullptr ? reason : "用户取消拍照", false);
+    return true;
+}
+
+bool CameraService::DeferVoiceMcpTtsUrl(const std::string& url) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    recent_tts_url_ = url;
+    recent_tts_url_at_us_ = esp_timer_get_time();
+    if (!voice_tts_gate_active_) {
+        return false;
+    }
+    // 同一轮回复只应有一个语音 URL；若云端重复下发，以最新值为准。
+    deferred_voice_tts_url_ = url;
+    ESP_LOGI(kTag, "拍照 TTS URL 已暂存，等待 MCP 工具响应");
+    return true;
+}
+
+bool CameraService::OwnsStandaloneTtsLifecycle() const {
+    return IsActive() && origin_.load() == Origin::Button;
+}
+
 bool CameraService::Start(Origin origin,
-                          uint32_t auto_capture_delay_ms) {
+                          uint32_t auto_capture_delay_ms,
+                          VoiceMcpResultCallback callback,
+                          std::string* error) {
+    const auto set_error = [error](const char* message) {
+        if (error != nullptr) {
+            *error = message;
+        }
+    };
     auto* camera = Board::GetInstance().GetCamera();
     if (application_ == nullptr || camera == nullptr || !camera->IsAvailable()) {
         ESP_LOGW(kTag, "双击拍照失败：未检测到摄像头");
         Ui::ShowToast("未检测到摄像头");
+        set_error("未检测到摄像头");
         return false;
     }
     if (esp_timer_get_time() < kStartupGuardUs) {
         ESP_LOGW(kTag, "启动保护期内忽略拍照预览请求");
+        set_error("设备正在启动，请稍后重试");
         return false;
     }
 
@@ -103,23 +209,28 @@ bool CameraService::Start(Origin origin,
         ESP_LOGW(kTag, "当前状态不能进入拍照预览: %s",
                  DeviceStatus::GetStateName(state));
         Ui::ShowToast("当前状态暂时不能拍照");
+        set_error("当前状态暂时不能拍照");
         return false;
     }
 
     std::lock_guard<std::mutex> lock(mutex_);
     if (phase_.load() != Phase::Inactive || task_handle_ != nullptr) {
+        set_error("当前已有拍照任务正在进行");
         return false;
     }
 
     // 先标记为活动态，再让 Intent 停止旧 TTS，避免旧播放器终态被应用层
     // 误判为普通语音会话结束并重新开启上行。
     phase_ = Phase::Starting;
-    if (!application_->GetIntentManager().CameraCapture().Enter()) {
+    if (!application_->GetIntentManager().CameraCapture().Enter(
+            origin == Origin::VoiceMcp)) {
         phase_ = Phase::Inactive;
         ESP_LOGW(kTag, "拍照事件无法取得播放优先级");
         Ui::ShowToast("当前状态暂时不能拍照");
+        set_error("当前状态暂时不能拍照");
         return false;
     }
+    camera_intent_active_ = true;
 
     capture_requested_ = false;
     exit_requested_ = false;
@@ -129,9 +240,15 @@ bool CameraService::Start(Origin origin,
     tts_session_id_ = 0;
     origin_ = origin;
     auto_capture_delay_ms_ = auto_capture_delay_ms;
+    voice_mcp_result_callback_ = std::move(callback);
     const uint32_t generation = generation_.fetch_add(1) + 1;
     phase_ = Phase::Preview;
-    Ui::ShowCameraPreview();
+    if (origin == Origin::VoiceMcp) {
+        Ui::ShowCameraPreview(Ui::CameraPreviewPhase::Countdown,
+                              "3s 后拍照");
+    } else {
+        Ui::ShowCameraPreview();
+    }
 
     auto context = std::make_unique<TaskContext>();
     context->service = this;
@@ -142,13 +259,15 @@ bool CameraService::Start(Origin origin,
         task_handle_ = nullptr;
         phase_ = Phase::Inactive;
         Ui::DismissCameraPreview();
-        application_->GetIntentManager().CameraCapture().Exit();
+        ReleaseCameraIntent();
+        voice_mcp_result_callback_ = {};
+        set_error("创建相机预览任务失败");
         ESP_LOGE(kTag, "创建相机预览任务失败");
         return false;
     }
     context.release();
     ESP_LOGI(kTag, "进入%s拍照预览: generation=%lu",
-             origin_ == Origin::Button ? "按键" : "语音/MCP",
+             origin_.load() == Origin::Button ? "按键" : "语音/MCP",
              static_cast<unsigned long>(generation));
     return true;
 }
@@ -156,6 +275,9 @@ bool CameraService::Start(Origin origin,
 bool CameraService::Capture() {
     if (phase_.load() != Phase::Preview) {
         return IsActive();
+    }
+    if (origin_.load() == Origin::VoiceMcp) {
+        return false;
     }
     if (!capture_requested_.exchange(true)) {
         ESP_LOGI(kTag, "单击拍照请求已提交");
@@ -167,6 +289,17 @@ bool CameraService::Exit() {
     const Phase phase = phase_.load();
     if (phase == Phase::Inactive) {
         return false;
+    }
+    if (origin_.load() == Origin::VoiceMcp) {
+        VoiceMcpResultCallback callback;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            callback = voice_mcp_result_callback_;
+        }
+        if (callback) {
+            CompleteVoiceMcp(generation_.load(), false, "拍照已取消", false);
+            return true;
+        }
     }
     exit_requested_ = true;
     if (phase == Phase::Preview) {
@@ -201,6 +334,8 @@ void CameraService::TaskLoop(uint32_t generation) {
 
     bool preview_frame_ready = false;
     const TickType_t preview_started_at = xTaskGetTickCount();
+    uint32_t displayed_countdown_seconds =
+        (auto_capture_delay_ms_ + 999U) / 1000U;
     while (IsCurrent(generation)) {
         if (phase_.load() == Phase::Exiting || exit_requested_.load()) {
             FinishExit(!preempted_exit_.load());
@@ -209,13 +344,24 @@ void CameraService::TaskLoop(uint32_t generation) {
         if (phase_.load() != Phase::Preview) {
             return;
         }
-        if (auto_capture_delay_ms_ > 0 &&
-            xTaskGetTickCount() - preview_started_at >=
-                pdMS_TO_TICKS(auto_capture_delay_ms_)) {
-            // 语音/MCP 拍照可配置为预览三秒后自动触发；按键模式延迟为 0，
-            // 仍由单击设置 capture_requested_。
-            capture_requested_ = true;
-            auto_capture_delay_ms_ = 0;
+        if (auto_capture_delay_ms_ > 0) {
+            const TickType_t elapsed_ticks =
+                xTaskGetTickCount() - preview_started_at;
+            const uint32_t elapsed_ms =
+                static_cast<uint32_t>(elapsed_ticks * portTICK_PERIOD_MS);
+            if (elapsed_ms >= auto_capture_delay_ms_) {
+                capture_requested_ = true;
+                auto_capture_delay_ms_ = 0;
+            } else {
+                const uint32_t remaining_seconds =
+                    (auto_capture_delay_ms_ - elapsed_ms + 999U) / 1000U;
+                if (remaining_seconds != displayed_countdown_seconds) {
+                    displayed_countdown_seconds = remaining_seconds;
+                    Ui::SetCameraPreviewState(
+                        Ui::CameraPreviewPhase::Countdown,
+                        std::to_string(remaining_seconds) + "s 后拍照");
+                }
+            }
         }
         if (preview_frame_ready && capture_requested_.exchange(false)) {
             phase_ = Phase::Processing;
@@ -249,15 +395,20 @@ void CameraService::TaskLoop(uint32_t generation) {
             if (!IsCurrent(generation) || exit_requested_.load()) {
                 return;
             }
-            RequestCloudDescription(generation, *camera);
+            if (origin_.load() == Origin::VoiceMcp) {
+                UploadMcpPhoto(generation, *camera);
+            } else {
+                RequestCloudDescription(generation, *camera);
+            }
             if (!IsCurrent(generation) || phase_.load() != Phase::WaitingTts) {
                 return;
             }
 
-            // 残留云端会话或服务端瞬时异常可能导致会话结束但不下发 TTS URL。
-            // 此时用冻结帧重试一次；请求入口会先取消旧会话再启动新会话。
+            // 按键识图可用冻结帧重试一次；MCP 拍照已经把 URL 回给云端，
+            // 只能等待该轮 TTS，不能重复上传并响应同一个工具调用。
             ulTaskNotifyTake(pdTRUE, kTtsStartWaitTimeout);
-            if (IsCurrent(generation) && phase_.load() == Phase::WaitingTts) {
+            if (origin_.load() == Origin::Button && IsCurrent(generation) &&
+                phase_.load() == Phase::WaitingTts) {
                 ESP_LOGW(kTag, "识图 TTS 等待超时，重试一次");
                 RequestCloudDescription(generation, *camera);
                 if (!IsCurrent(generation) || phase_.load() != Phase::WaitingTts) {
@@ -297,6 +448,103 @@ void CameraService::RequestCloudDescription(uint32_t generation,
     }
     phase_ = Phase::WaitingTts;
     ESP_LOGI(kTag, "按键照片 Base64 已通过 WS 上报，等待识图 TTS");
+}
+
+void CameraService::UploadMcpPhoto(uint32_t generation, Camera& camera) {
+    if (!IsCurrent(generation) || exit_requested_.load()) {
+        CompleteVoiceMcp(generation, false, "拍照已取消", false);
+        return;
+    }
+
+    try {
+        // vision capability 下发的 HTTP 地址采用 multipart JPEG。Camera
+        // 内部负责把当前完整帧编码后上传，返回 JSON 中的图片 URL。
+        const std::string response = camera.Explain("");
+        cJSON* json = cJSON_ParseWithLength(response.data(), response.size());
+        if (json == nullptr) {
+            throw std::runtime_error("照片上传响应格式错误");
+        }
+        const auto* data = cJSON_GetObjectItemCaseSensitive(json, "data");
+        const auto* url = cJSON_IsObject(data)
+                              ? cJSON_GetObjectItemCaseSensitive(data, "url")
+                              : nullptr;
+        std::string image_url;
+        if (cJSON_IsString(url) && url->valuestring != nullptr) {
+            image_url = url->valuestring;
+        }
+        cJSON_Delete(json);
+        if (image_url.empty()) {
+            throw std::runtime_error("照片上传响应缺少图片 URL");
+        }
+
+        phase_ = Phase::WaitingTts;
+        ESP_LOGI(kTag, "MCP 照片已通过 HTTP 上传，准备响应图片 URL");
+        CompleteVoiceMcp(generation, true, std::move(image_url), true);
+    } catch (const std::exception& error) {
+        CompleteVoiceMcp(generation, false, error.what(), false);
+    }
+}
+
+void CameraService::CompleteVoiceMcp(uint32_t generation, bool success,
+                                     std::string value,
+                                     bool keep_until_tts) {
+    VoiceMcpResultCallback callback;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!IsCurrent(generation) || origin_.load() != Origin::VoiceMcp) {
+            return;
+        }
+        callback = std::move(voice_mcp_result_callback_);
+    }
+    if (!callback) {
+        if (!keep_until_tts) {
+            FinishExit(false);
+        }
+        return;
+    }
+
+    // 回调先把 MCP 响应加入 Application 队列；随后排入 Intent 释放和
+    // TTS 放行任务，从队列顺序上保证响应先于音频拉流。
+    callback(success, std::move(value));
+    if (keep_until_tts) {
+        ReleaseCameraIntent();
+    } else {
+        FinishExit(false);
+    }
+    if (application_ != nullptr) {
+        application_->Schedule([this]() { ReleaseVoiceMcpTtsGate(); });
+    } else {
+        ReleaseVoiceMcpTtsGate();
+    }
+}
+
+void CameraService::ReleaseVoiceMcpTtsGate() {
+    std::string url;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!voice_tts_gate_active_) {
+            return;
+        }
+        voice_tts_gate_active_ = false;
+        url = std::move(deferred_voice_tts_url_);
+        deferred_voice_tts_url_.clear();
+        recent_tts_url_.clear();
+        recent_tts_url_at_us_ = 0;
+    }
+    if (!url.empty() && application_ != nullptr) {
+        ESP_LOGI(kTag, "MCP 工具响应已发送，放行拍照 TTS URL");
+        // 重新走统一事件入口，让 Application 同步绑定新 session，并由
+        // XiaolingSessionVoice 在扬声器首帧后启动已经暂存的 timeline。
+        if (!AppEvent::PublishText(AppEvent::Id::XiaolingTtsUrl, url)) {
+            ESP_LOGW(kTag, "拍照 TTS URL 放行事件提交失败");
+        }
+    }
+}
+
+void CameraService::ReleaseCameraIntent() {
+    if (application_ != nullptr && camera_intent_active_.exchange(false)) {
+        application_->GetIntentManager().CameraCapture().Exit();
+    }
 }
 
 void CameraService::HandlePlaybackEvent(const PlaybackEvent& event) {
@@ -395,6 +643,12 @@ void CameraService::Fail(uint32_t generation, const char* message) {
     if (!IsCurrent(generation)) {
         return;
     }
+    if (origin_.load() == Origin::VoiceMcp) {
+        ESP_LOGE(kTag, "%s", message);
+        Ui::ShowToast(message, 3000);
+        CompleteVoiceMcp(generation, false, message, false);
+        return;
+    }
     phase_ = Phase::Processing;
     ESP_LOGE(kTag, "%s", message);
     Ui::ShowToast(message, 3000);
@@ -403,6 +657,7 @@ void CameraService::Fail(uint32_t generation, const char* message) {
 
 void CameraService::FinishExit(bool stop_audio) {
     TaskHandle_t worker = nullptr;
+    Origin origin = Origin::Button;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (phase_.load() == Phase::Inactive) {
@@ -416,6 +671,9 @@ void CameraService::FinishExit(bool stop_audio) {
         capture_tone_finished_ = false;
         capture_tone_session_id_ = 0;
         tts_session_id_ = 0;
+        voice_mcp_result_callback_ = {};
+        origin = origin_.load();
+        origin_ = Origin::Button;
         worker = task_handle_;
     }
 
@@ -427,17 +685,19 @@ void CameraService::FinishExit(bool stop_audio) {
         application_->GetAudioPlayer().StopNonMusic(
             PlaybackEndReason::kCancelled);
     }
-    if (application_->GetDeviceState() != kDeviceStateIdle) {
-        application_->SetDeviceState(kDeviceStateIdle);
-    }
     Ui::DismissCameraPreview();
     Ui::SetHomeSubtitle({});
     Ui::DismissImage();
-    Ui::SetStatus(Ui::Status::Standby);
-    // 先切到待命状态，再恢复待机表情，避免 UI 把监听状态下的待机表情
-    // 判定为无效更新而忽略。
-    Ui::SetEmotion("待机");
-    application_->GetIntentManager().CameraCapture().Exit();
+    if (origin == Origin::Button) {
+        if (application_->GetDeviceState() != kDeviceStateIdle) {
+            application_->SetDeviceState(kDeviceStateIdle);
+        }
+        Ui::SetStatus(Ui::Status::Standby);
+        // 先切到待命状态，再恢复待机表情，避免 UI 把监听状态下的待机表情
+        // 判定为无效更新而忽略。
+        Ui::SetEmotion("待机");
+    }
+    ReleaseCameraIntent();
     ESP_LOGI(kTag, "退出拍照流程");
 }
 

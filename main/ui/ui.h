@@ -46,6 +46,7 @@ enum class TextKey : int32_t {
 // 预览页展示状态；业务状态机与 UI 解耦，只通过这些状态更新页面。
 enum class CameraPreviewPhase : int32_t {
     Preview,
+    Countdown,
     Processing,
     Speaking,
     Error,
@@ -120,7 +121,8 @@ void DismissImage();
 // 相机 Capture() 经 Display 适配器送入此入口；预览页打开时更新实时画面，
 // 其他场景保持原有的首页图片行为。
 void ShowPreviewImage(std::unique_ptr<LvglImage> image);
-void ShowCameraPreview();
+void ShowCameraPreview(CameraPreviewPhase phase = CameraPreviewPhase::Preview,
+                       std::string detail = {});
 void FreezeCameraPreviewToHome(std::string status);
 void SetHomeSubtitle(std::string text);
 void SetCameraPreviewState(CameraPreviewPhase phase, std::string detail = {});

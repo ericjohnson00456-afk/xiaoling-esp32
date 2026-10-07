@@ -195,6 +195,10 @@ void XiaolingConn::SendStopListening() {
     }
 }
 
+bool XiaolingConn::StopListeningForTts() {
+    return voice_ != nullptr && voice_->StopListeningForTts();
+}
+
 bool XiaolingConn::EndSession() {
     return voice_ != nullptr && voice_->EndSession();
 }
@@ -218,6 +222,12 @@ void XiaolingConn::SendAbortSpeaking(AbortReason reason) {
 void XiaolingConn::HandleIatBargeIn() {
     if (voice_ != nullptr) {
         voice_->HandleIatBargeIn();
+    }
+}
+
+void XiaolingConn::PrepareTtsReplay() {
+    if (voice_ != nullptr) {
+        voice_->PrepareTtsReplay();
     }
 }
 

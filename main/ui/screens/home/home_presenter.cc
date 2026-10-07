@@ -148,6 +148,10 @@ void HomePresenter::SetText(std::string text) {
 }
 
 void HomePresenter::SetSubtitleText(std::string text, uint8_t max_lines) {
+    ESP_LOGI(TAG, "更新 Home 字幕: bytes=%u, max_lines=%u, top_page=%d, view=%d",
+             static_cast<unsigned>(text.size()),
+             static_cast<unsigned>(max_lines),
+             UiManager::GetInstance().TopScreenId(), view_ != nullptr ? 1 : 0);
     if (view_ != nullptr) {
         view_->SetSubtitleText(text, max_lines);
     }

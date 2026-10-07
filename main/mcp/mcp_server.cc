@@ -3,6 +3,8 @@
 #include "mcp_server.h"
 
 #include <algorithm>
+#include <atomic>
+#include <memory>
 #include <cstring>
 
 #include <esp_app_desc.h>
@@ -104,6 +106,13 @@ void McpServer::AddTool(
     const std::string &name, const std::string &description,
     const PropertyList &properties,
     std::function<ReturnValue(const PropertyList &)> callback) {
+  AddTool(new McpTool(name, description, properties, std::move(callback)));
+}
+
+void McpServer::AddAsyncTool(const std::string &name,
+                             const std::string &description,
+                             const PropertyList &properties,
+                             McpAsyncToolCallback callback) {
   AddTool(new McpTool(name, description, properties, std::move(callback)));
 }
 
@@ -322,6 +331,33 @@ void McpServer::DoToolCall(const std::string &id, const std::string &tool_name,
   auto &app = Application::GetInstance();
   app.Schedule([this, id, tool, arguments = std::move(arguments)]() {
     try {
+      if ((*tool)->is_async()) {
+        // 异步工具只启动业务，不阻塞 Application 主任务。成功和失败回调
+        // 共用一次性门闩，避免取消与后台任务完成竞态造成重复响应。
+        auto completed = std::make_shared<std::atomic_bool>(false);
+        (*tool)->CallAsync(
+            arguments,
+            [this, id, completed](ReturnValue result) mutable {
+              if (completed->exchange(true)) {
+                return;
+              }
+              try {
+                ReplyResult("tools/call", id,
+                            McpTool::SerializeResult(std::move(result)));
+              } catch (const std::exception &error) {
+                ESP_LOGE(TAG, "异步 tools/call 结果序列化失败: %s",
+                         error.what());
+                ReplyError("tools/call", id, error.what());
+              }
+            },
+            [this, id, completed](std::string message) {
+              if (completed->exchange(true)) {
+                return;
+              }
+              ReplyError("tools/call", id, message);
+            });
+        return;
+      }
       ReplyResult("tools/call", id, (*tool)->Call(arguments));
     } catch (const std::exception &error) {
       ESP_LOGE(TAG, "tools/call: %s", error.what());

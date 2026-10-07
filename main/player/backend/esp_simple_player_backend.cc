@@ -135,6 +135,9 @@ int EspSimplePlayerBackend::ConfigureInputIo(esp_asp_handle_t handle, void* ctx)
     }
 
     if (is_http) {
+        // 上一条流式 TTS 可能通过 IO abort 强制退出；新请求运行前必须清除
+        // abort 标志并重新释放 HTTP 输入任务。
+        esp_gmf_io_clear_abort(input);
         // 在 esp_gmf_pipeline_run() 打开 IO 并创建任务、数据总线之前配置克隆出的
         // Pipeline IO。这里只覆盖播放实例的 HTTP 参数，不修改 managed_components。
         auto* io = static_cast<esp_gmf_io_t*>(input);
@@ -353,10 +356,18 @@ bool EspSimplePlayerBackend::Play(const PlaybackRequest& request) {
 
 bool EspSimplePlayerBackend::DoPlay(const PlaybackRequest& request) {
     // 以下逻辑只在播放器控制任务中执行：清理旧会话、启动新流并记录会话状态。
-    if (IsPlaying() && !DoStop(PlaybackEndReason::kPreempted)) {
-        ESP_LOGE(TAG, "无法停止当前播放会话");
-        command_pending_playback_ = false;
-        return false;
+    if (IsPlaying()) {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (playing_ && current_request_.channel == PlaybackChannel::kTts) {
+                tts_stop_requested_ = true;
+            }
+        }
+        if (!DoStop(PlaybackEndReason::kPreempted)) {
+            ESP_LOGE(TAG, "无法停止当前播放会话");
+            command_pending_playback_ = false;
+            return false;
+        }
     }
     DisarmTtsPcmTimeout();
 
@@ -409,6 +420,7 @@ bool EspSimplePlayerBackend::DoPlay(const PlaybackRequest& request) {
         last_tts_pcm_us_ = 0;
         tts_timeout_stop_pending_ = false;
         tts_http_read_sequence_ = 0;
+        tts_stop_requested_ = false;
     }
 
     output_chunks_ = 0;
@@ -438,6 +450,7 @@ bool EspSimplePlayerBackend::DoPlay(const PlaybackRequest& request) {
         tts_timeout_started_us_ = 0;
         last_tts_pcm_us_ = 0;
         tts_timeout_stop_pending_ = false;
+        tts_stop_requested_ = false;
     }
     audio_output_->ClearActivePlaybackQueue();
     command_pending_playback_ = false;
@@ -539,6 +552,14 @@ bool EspSimplePlayerBackend::DoResume() {
 bool EspSimplePlayerBackend::Stop(PlaybackEndReason reason) {
     // Stop 同样异步投递，状态终态由 GMF 回调统一确认。
     command_pending_playback_ = false;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (playing_ && current_request_.channel == PlaybackChannel::kTts) {
+            // 流式 TTS 可能正在等云端开始合成。先让 50 ms 正文读取循环退出，
+            // 控制任务才能及时完成 stop，避免后续提示音被堵在队列中。
+            tts_stop_requested_ = true;
+        }
+    }
     return Enqueue(Command{
         .type = CommandType::kStop,
         .reason = reason,
@@ -560,11 +581,18 @@ bool EspSimplePlayerBackend::DoStop(PlaybackEndReason reason) {
             }
         } else {
             stop_reason_ = reason;
+            if (current_request_.channel == PlaybackChannel::kTts) {
+                tts_stop_requested_ = true;
+            }
         }
     }
     if (drain_only) {
         audio_output_->ClearActivePlaybackQueue();
         return true;
+    }
+
+    if (tts_stop_requested_.load()) {
+        InterruptTtsHttpSocket();
     }
 
     const auto result = esp_audio_simple_player_stop(handle_);
@@ -695,6 +723,36 @@ void EspSimplePlayerBackend::DisarmTtsPcmTimeout() {
     if (tts_pcm_timer_ != nullptr) {
         esp_timer_stop(tts_pcm_timer_);
     }
+}
+
+void EspSimplePlayerBackend::InterruptTtsHttpSocket() {
+    esp_gmf_pipeline_handle_t pipeline = nullptr;
+    esp_gmf_io_handle_t input = nullptr;
+    if (handle_ != nullptr &&
+        esp_audio_simple_player_get_pipeline(handle_, &pipeline) == ESP_GMF_ERR_OK &&
+        pipeline != nullptr &&
+        esp_gmf_pipeline_get_in(pipeline, &input) == ESP_GMF_ERR_OK &&
+        input != nullptr) {
+        const auto abort_result = esp_gmf_io_abort(input);
+        ESP_LOGI(TAG, "TTS 停止时中止 GMF HTTP 输入: result=0x%x",
+                 static_cast<unsigned>(abort_result));
+    }
+
+    void* http_client = tts_http_client_.exchange(nullptr);
+    if (http_client == nullptr) {
+        return;
+    }
+    const int fd = esp_http_client_get_socket(
+        static_cast<esp_http_client_handle_t>(http_client));
+    if (fd < 0) {
+        return;
+    }
+    errno = 0;
+    const int result = shutdown(fd, SHUT_RDWR);
+    const int saved_errno = result == 0 ? 0 : errno;
+    ESP_LOGI(TAG,
+             "TTS 停止时中断 HTTP socket: fd=%d, result=%d, errno=%d(%s)",
+             fd, result, saved_errno, std::strerror(saved_errno));
 }
 
 void EspSimplePlayerBackend::HandleTtsPcmTimeout() {
@@ -852,6 +910,10 @@ int EspSimplePlayerBackend::HandleHttpIoEvent(http_stream_event_msg_t* event) {
         const auto client = static_cast<esp_http_client_handle_t>(event->http_client);
         const int64_t started_us = esp_timer_get_time();
 
+        if (tts_stop_requested_.load()) {
+            return 0;
+        }
+
         if (read_sequence == 1) {
             const esp_err_t timeout_result = esp_http_client_set_timeout_ms(
                 client, kStreamingHttpBodyReadTimeoutMs);
@@ -881,6 +943,13 @@ int EspSimplePlayerBackend::HandleHttpIoEvent(http_stream_event_msg_t* event) {
                 break;
             }
             ++eagain_retries;
+
+            if (tts_stop_requested_.load()) {
+                // 返回 EOF 让 GMF 立即退出当前 HTTP 输入；真正的停止原因仍由
+                // 控制任务中的 stop 命令记录并发布。
+                read_len = 0;
+                break;
+            }
 
             bool request_active = false;
             {
@@ -1065,6 +1134,7 @@ int EspSimplePlayerBackend::HandleEvent(esp_asp_event_pkt_t* event) {
             tts_timeout_started_us_ = 0;
             last_tts_pcm_us_ = 0;
             tts_timeout_stop_pending_ = false;
+            tts_stop_requested_ = false;
         }
     }
 

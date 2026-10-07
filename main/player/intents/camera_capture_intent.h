@@ -17,7 +17,8 @@ public:
   void Initialize(PlaybackIntentManager &intent_manager, Application &app);
   void SetCancelCallback(CancelCallback callback);
 
-  bool Enter();
+  // 语音 MCP 拍照保留底层语音会话，按键拍照则结束旧语音会话。
+  bool Enter(bool preserve_voice_session = false);
   void Exit();
   bool active() const { return active_.load(); }
 
@@ -35,4 +36,5 @@ private:
   std::atomic_bool active_{false};
   std::atomic_bool exit_pending_{false};
   std::atomic_bool cancel_pending_{false};
+  std::atomic_bool preserve_voice_session_{false};
 };

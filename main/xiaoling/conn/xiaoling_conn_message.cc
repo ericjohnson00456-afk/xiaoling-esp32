@@ -76,11 +76,26 @@ std::string ReadErrorDetail(const cJSON* root) {
 }
 
 void LogTextFrame(const char* direction, const std::string& text) {
-    // 完整打印 tools/list 等大 JSON 会占满 115200 波特率串口，阻塞日志输出，
-    // 还会让 monitor 把连续内容误判为乱码。默认只保留帧方向和长度，详细内容
-    // 需要调试时再通过提高 XiaolingConn 日志级别单独补充。
-    ESP_LOGD(TAG, "WS %s text: bytes=%u", direction,
-             static_cast<unsigned>(text.size()));
+    if (std::strcmp(direction, "RX") != 0) {
+        // 发送侧包含体积较大的工具列表，只保留长度，避免阻塞实时音频链路。
+        ESP_LOGD(TAG, "WS %s text: bytes=%u", direction,
+                 static_cast<unsigned>(text.size()));
+        return;
+    }
+
+    // 接收 JSON 分段打印，既能完整还原协议时序，也避免单条日志超过
+    // 串口和 monitor 的行缓冲上限。
+    constexpr size_t kLogChunkBytes = 512;
+    if (text.empty()) {
+        ESP_LOGI(TAG, "WS RX text[0]: <empty>");
+        return;
+    }
+    for (size_t offset = 0, chunk = 0; offset < text.size();
+         offset += kLogChunkBytes, ++chunk) {
+        const size_t length = std::min(kLogChunkBytes, text.size() - offset);
+        ESP_LOGI(TAG, "WS RX text[%u]: %.*s", static_cast<unsigned>(chunk),
+                 static_cast<int>(length), text.data() + offset);
+    }
 }
 
 }  // 匿名命名空间

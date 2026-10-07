@@ -15,6 +15,7 @@
 #include <cJSON.h>
 
 class McpServer;
+class PropertyList;
 
 // Tool groups control tools/list visibility and keep the advertised order stable.
 enum class McpToolGroup : uint8_t {
@@ -102,6 +103,10 @@ struct ImageUrlContent {
 
 // 添加类型别名
 using ReturnValue = std::variant<bool, int, std::string, cJSON*, ImageContent*, ImageUrlContent>;
+using McpToolSuccessCallback = std::function<void(ReturnValue)>;
+using McpToolErrorCallback = std::function<void(std::string)>;
+using McpAsyncToolCallback = std::function<void(
+    const PropertyList&, McpToolSuccessCallback, McpToolErrorCallback)>;
 
 enum PropertyType {
     kPropertyTypeBoolean,
@@ -304,6 +309,7 @@ private:
     std::string description_;
     PropertyList properties_;
     std::function<ReturnValue(const PropertyList&)> callback_;
+    McpAsyncToolCallback async_callback_;
     bool user_only_ = false;
 
 public:
@@ -316,11 +322,21 @@ public:
         properties_(properties), 
         callback_(callback) {}
 
+    McpTool(const std::string& name,
+            const std::string& description,
+            const PropertyList& properties,
+            McpAsyncToolCallback callback)
+        : name_(name),
+          description_(description),
+          properties_(properties),
+          async_callback_(std::move(callback)) {}
+
     void set_user_only(bool user_only) { user_only_ = user_only; }
     inline const std::string& name() const { return name_; }
     inline const std::string& description() const { return description_; }
     inline const PropertyList& properties() const { return properties_; }
     inline bool user_only() const { return user_only_; }
+    inline bool is_async() const { return static_cast<bool>(async_callback_); }
 
     std::string to_json() const {
         std::vector<std::string> required = properties_.GetRequired();
@@ -362,8 +378,7 @@ public:
         return result;
     }
 
-    std::string Call(const PropertyList& properties) {
-        ReturnValue return_value = callback_(properties);
+    static std::string SerializeResult(ReturnValue return_value) {
         // 返回结果
         cJSON* result = cJSON_CreateObject();
         cJSON* content = cJSON_CreateArray();
@@ -405,6 +420,19 @@ public:
         cJSON_Delete(result);
         return result_str;
     }
+
+    std::string Call(const PropertyList& properties) {
+        return SerializeResult(callback_(properties));
+    }
+
+    void CallAsync(const PropertyList& properties,
+                   McpToolSuccessCallback success,
+                   McpToolErrorCallback error) {
+        if (!async_callback_) {
+            throw std::runtime_error("工具未配置异步回调");
+        }
+        async_callback_(properties, std::move(success), std::move(error));
+    }
 };
 
 class McpServer {
@@ -418,6 +446,9 @@ public:
     void Initialize();
     void AddTool(McpTool* tool);
     void AddTool(const std::string& name, const std::string& description, const PropertyList& properties, std::function<ReturnValue(const PropertyList&)> callback);
+    void AddAsyncTool(const std::string& name, const std::string& description,
+                      const PropertyList& properties,
+                      McpAsyncToolCallback callback);
     void AddUserOnlyTool(const std::string& name, const std::string& description, const PropertyList& properties, std::function<ReturnValue(const PropertyList&)> callback);
     void ParseMessage(const cJSON* json);
     void ParseMessage(const std::string& message);

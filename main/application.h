@@ -120,6 +120,8 @@ public:
     void WakeWordInvoke(const std::string& wake_word);
     bool CanEnterSleepMode();
     void SendMcpMessage(const std::string& payload);
+    // 语音拍照接管早到 TTS 时，要求会话层保留已收到的 timeline。
+    void PrepareTtsReplay();
     void PlayRespakAudio(const char* name);
     // 播放需要抢占和恢复语义的通用提示音，可跨任务安全调用。
     // 拍照等已有独立业务 Intent 的音效应直接使用 AudioPlayer。

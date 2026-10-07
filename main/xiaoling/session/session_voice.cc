@@ -719,6 +719,33 @@ void XiaolingSessionVoice::SendStopListening() {
     CancelSession();
 }
 
+bool XiaolingSessionVoice::StopListeningForTts() {
+    const bool was_active = session_active_.load();
+    const bool sent = !was_active ||
+        (text_sender_ && text_sender_("{\"action\":\"cancel\"}"));
+
+    // 半双工只需要停止麦克风上行。当前回复的 TTS URL、timeline URL 和
+    // 游标必须继续存活，直到独立的 HTTP 音频与字幕流自然结束。
+    SetAudioUploadEnabled(false, "tts_downlink");
+    pending_wake_word_.clear();
+    uplink_audio_format_checked_ = false;
+    SetSessionActive(false);
+    EndIat();
+    iat_active_ = false;
+    bool tts_pending = false;
+    bool timeline_negotiated = false;
+    {
+        std::lock_guard<std::mutex> lock(subtitle_state_mutex_);
+        tts_pending = tts_audio_pending_;
+        timeline_negotiated = timeline_negotiated_;
+    }
+    ESP_LOGI(TAG,
+             "半双工已结束上行并保留 TTS 结果: sent=%d, pending=%d, timeline=%d",
+             sent ? 1 : 0, tts_pending ? 1 : 0,
+             timeline_negotiated ? 1 : 0);
+    return sent;
+}
+
 bool XiaolingSessionVoice::EndSession() {
     return CancelSession();
 }
@@ -737,6 +764,18 @@ bool XiaolingSessionVoice::CancelSession() {
     SetSessionActive(false);
     ResetResultState();
     return sent;
+}
+
+void XiaolingSessionVoice::PrepareTtsReplay() {
+    std::lock_guard<std::mutex> lock(subtitle_state_mutex_);
+    // 半双工收到早到 TTS URL 时会先结束上行会话并重置结果状态；timeline
+    // 可能随后才到达。重新标记 pending，旧播放器终态就不会删除该 URL。
+    tts_audio_pending_ = true;
+    ESP_LOGI(TAG,
+             "准备重播 TTS，保留字幕状态: pending_url=%u, timeline=%d, negotiated=%d",
+             static_cast<unsigned>(pending_subtitle_url_.size()),
+             timeline_subtitle_stream_ ? 1 : 0,
+             timeline_negotiated_ ? 1 : 0);
 }
 
 void XiaolingSessionVoice::PrepareAbortSpeaking(AbortReason reason) {
@@ -1105,6 +1144,10 @@ void XiaolingSessionVoice::SetPendingSubtitleUrl(const std::string& url,
     if (timeline_stream && reply_sid.empty()) {
         ESP_LOGW(TAG, "timeline 字幕帧缺少旧回复 sid，本次可显示字幕但不做打断位置上报");
     }
+    ESP_LOGI(TAG,
+             "字幕 URL 状态: bytes=%u, timeline=%d, reply_sid_bytes=%u, audio_playing=%d",
+             static_cast<unsigned>(url.size()), timeline_stream ? 1 : 0,
+             static_cast<unsigned>(reply_sid.size()), start_now ? 1 : 0);
     if (start_now) {
         ESP_LOGI(TAG, "TTS 首帧 PCM 已输出，字幕 URL 到达后立即请求");
         StartPendingSubtitleStream();
@@ -1142,14 +1185,23 @@ void XiaolingSessionVoice::StartTtsAudio(std::string url, const std::string& rep
 
 void XiaolingSessionVoice::StartPendingSubtitleStream() {
     std::string url;
+    bool timeline_stream = false;
     {
         std::lock_guard<std::mutex> lock(subtitle_state_mutex_);
         if (pending_subtitle_url_.empty()) {
+            ESP_LOGW(TAG,
+                     "扬声器已出声但没有待启动字幕 URL: timeline=%d, negotiated=%d",
+                     timeline_subtitle_stream_ ? 1 : 0,
+                     timeline_negotiated_ ? 1 : 0);
             return;
         }
         url = std::move(pending_subtitle_url_);
         pending_subtitle_url_.clear();
+        timeline_stream = timeline_subtitle_stream_;
     }
+    ESP_LOGI(TAG, "启动%s字幕请求: url_bytes=%u",
+             timeline_stream ? "timeline " : "普通文本",
+             static_cast<unsigned>(url.size()));
     StartSubtitleStream(url);
 }
 
@@ -1165,14 +1217,21 @@ void XiaolingSessionVoice::OnTtsPipelinePlaying() {
 }
 
 void XiaolingSessionVoice::OnTtsStarted() {
+    size_t pending_subtitle_bytes = 0;
+    bool timeline_stream = false;
     {
         std::lock_guard<std::mutex> lock(subtitle_state_mutex_);
         tts_audio_pending_ = false;
         tts_pipeline_running_ = true;
         tts_audio_playing_ = true;
         tts_audio_clock_ms_ = 0;
+        pending_subtitle_bytes = pending_subtitle_url_.size();
+        timeline_stream = timeline_subtitle_stream_;
     }
-    ESP_LOGI(TAG, "TTS 首个 PCM 已实际输出，timeline 播放时钟启动");
+    ESP_LOGI(TAG,
+             "TTS 首个 PCM 已实际输出，字幕时钟启动: pending_url=%u, timeline=%d",
+             static_cast<unsigned>(pending_subtitle_bytes),
+             timeline_stream ? 1 : 0);
     // 等 DAC 首帧输出后再启动字幕流，保证字幕和扬声器播放时序一致。
     StartPendingSubtitleStream();
 }
@@ -1186,6 +1245,7 @@ void XiaolingSessionVoice::OnTtsAudioProgress(uint32_t audio_clock_ms) {
 
 void XiaolingSessionVoice::OnTtsPlaybackStopped(bool natural_end) {
     bool preserve_pending = false;
+    size_t pending_subtitle_bytes = 0;
     {
         std::lock_guard<std::mutex> lock(subtitle_state_mutex_);
         tts_pipeline_running_ = false;
@@ -1194,6 +1254,7 @@ void XiaolingSessionVoice::OnTtsPlaybackStopped(bool natural_end) {
         if (!preserve_pending) {
             pending_subtitle_url_.clear();
         }
+        pending_subtitle_bytes = pending_subtitle_url_.size();
         if (natural_end) {
             // 正常播完绝不补报 reply_interrupted。
             timeline_reported_ = true;
@@ -1201,6 +1262,10 @@ void XiaolingSessionVoice::OnTtsPlaybackStopped(bool natural_end) {
         }
     }
     CancelSubtitleStream(false);
+    ESP_LOGI(TAG,
+             "TTS 停止后的字幕状态: natural=%d, preserve=%d, pending_url=%u",
+             natural_end ? 1 : 0, preserve_pending ? 1 : 0,
+             static_cast<unsigned>(pending_subtitle_bytes));
     if (preserve_pending) {
         ESP_LOGI(TAG, "旧 TTS 已停止，保留新 TTS 的待启动字幕 URL");
     }

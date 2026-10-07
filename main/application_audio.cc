@@ -3,6 +3,7 @@
 #include <esp_log.h>
 
 #include "board.h"
+#include "camera/camera_service.h"
 #include "event/app_event.h"
 #include "ui/ui.h"
 
@@ -45,8 +46,20 @@ void Application::RegisterAudioEventSubscribers() {
         AppEvent::Id::XiaolingTtsUrl,
         [](const AppEvent::Event& event, void* context) {
             auto* application = static_cast<Application*>(context);
-            if (application->audio_player_.PlayTtsUrl(std::string(event.Text())) == 0) {
+            std::string url(event.Text());
+            if (CameraService::GetInstance().DeferVoiceMcpTtsUrl(url)) {
+                return;
+            }
+            const uint32_t session_id =
+                application->audio_player_.PlayTtsUrl(url);
+            if (session_id == 0) {
                 ESP_LOGW(TAG, "TTS URL 未能立即提交，播放器可能正在暂存");
+            } else {
+                // PlayTtsUrl 返回时已经分配了新 session。立即替换 pending，
+                // 防止上一条被抢占 TTS 的迟到终态清除新 URL 的等待标志。
+                application->pending_tts_session_id_ = session_id;
+                ESP_LOGI(TAG, "TTS URL 已绑定待播放会话: session=%lu",
+                         static_cast<unsigned long>(session_id));
             }
         }, this);
     if (tts_url_subscription_id_ == 0) {
@@ -202,7 +215,7 @@ void Application::BindAudioEventPublishers() {
                 ESP_LOGI(TAG, "半双工收到 TTS URL，结束当前上行会话");
                 audio_service_.EnableAudioUpload(false);
                 if (xiaoling_conn_) {
-                    xiaoling_conn_->SendStopListening();
+                    xiaoling_conn_->StopListeningForTts();
                 }
             }
             if (has_music) {
@@ -216,4 +229,10 @@ void Application::BindAudioEventPublishers() {
             }
         });
     });
+}
+
+void Application::PrepareTtsReplay() {
+    if (xiaoling_conn_ != nullptr) {
+        xiaoling_conn_->PrepareTtsReplay();
+    }
 }

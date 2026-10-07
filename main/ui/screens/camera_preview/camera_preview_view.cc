@@ -186,6 +186,11 @@ void CameraPreviewView::SetState(Ui::CameraPreviewPhase phase,
             lv_label_set_text(title_, "拍照预览");
             lv_label_set_text(hint_, "单击拍照  长按退出");
             break;
+        case Ui::CameraPreviewPhase::Countdown:
+            lv_label_set_text(title_, "拍照预览");
+            lv_label_set_text(hint_,
+                              detail.empty() ? "3s 后拍照" : detail.c_str());
+            break;
         case Ui::CameraPreviewPhase::Processing:
             lv_label_set_text(title_, "拍照完成");
             lv_label_set_text(detail_, detail.empty() ? "正在识别照片..."

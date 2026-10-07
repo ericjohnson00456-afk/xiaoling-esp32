@@ -60,6 +60,7 @@ private:
     void StopCommandTask();
     void ArmTtsPcmTimeout(uint64_t timeout_us);
     void DisarmTtsPcmTimeout();
+    void InterruptTtsHttpSocket();
     void HandleTtsPcmTimeout();
     static void CommandTaskEntry(void* arg);
 
@@ -75,6 +76,8 @@ private:
     int64_t tts_timeout_started_us_ = 0;
     int64_t last_tts_pcm_us_ = 0;
     bool tts_timeout_stop_pending_ = false;
+    // 停止尚未收到首帧的流式 TTS 时，让 HTTP 读取回调尽快结束空等。
+    std::atomic_bool tts_stop_requested_{false};
     bool http_request_ready_emitted_ = false;
     uint32_t tts_http_read_sequence_ = 0;
     std::atomic<void*> tts_http_client_{nullptr};

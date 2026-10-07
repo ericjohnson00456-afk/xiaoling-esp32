@@ -63,6 +63,9 @@ void Application::ProcessButtonClick(uint8_t click_count) {
         return;
     }
     auto& camera_service = CameraService::GetInstance();
+    if (camera_service.CancelVoiceMcpCountdown("用户通过按键取消拍照")) {
+        return;
+    }
     if (camera_service.IsActive()) {
         if (click_count == 1) {
             camera_service.Capture();

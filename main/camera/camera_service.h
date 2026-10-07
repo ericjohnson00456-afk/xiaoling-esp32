@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -15,15 +16,26 @@
 class Application;
 class Camera;
 
-// 拍照业务状态机：协调预览采帧、拍照提示音、云端请求、TTS 播放以及
-// 回到 Home 后的图片和表情清理。未来语音/MCP 拍照可复用该流程，改为
-// 预览三秒后自动触发，并替换云端结果提交策略。耗时采集在独立任务中执行。
+// 拍照业务状态机：按键拍照等待用户单击并通过 WS 识图；语音/MCP 拍照
+// 预览三秒后自动采集，通过 HTTP 上传并异步返回图片 URL。预览采帧、提示音、
+// TTS 衔接以及 Home 图片清理都在这里协调，耗时操作放在独立任务中执行。
 class CameraService {
   public:
+    using VoiceMcpResultCallback =
+        std::function<void(bool success, std::string value)>;
+
     static CameraService& GetInstance();
 
     void Initialize(Application& application);
     bool StartButtonCapture();
+    // MCP 拍照异步返回图片 URL；失败或取消时 value 为错误说明。
+    bool StartVoiceMcpCapture(VoiceMcpResultCallback callback);
+    // 按键或唤醒词只在三秒预览倒计时阶段取消语音拍照。
+    bool CancelVoiceMcpCountdown(const char* reason);
+    // 提前到达的拍照 TTS URL 要等 MCP 响应发出后才交给播放器。
+    bool DeferVoiceMcpTtsUrl(const std::string& url);
+    // 按键拍照拥有独立的 TTS 收尾；语音拍照沿用普通语音会话策略。
+    bool OwnsStandaloneTtsLifecycle() const;
     bool Capture();
     bool Exit();
     bool IsActive() const;
@@ -39,7 +51,7 @@ class CameraService {
         Starting,   // Intent 正在抢占资源，尚未创建预览任务
         Preview,    // 实时预览并等待单击
         Processing, // 已冻结照片，等待提示音或图片编码
-        WaitingTts, // 图片已通过 WS 提交，等待云端 TTS
+        WaitingTts, // 图片已提交且工具已响应，等待云端 TTS
         Speaking,   // 正在播放图片识别结果
         Exiting,    // 等待当前采帧安全结束后退出
     };
@@ -53,10 +65,17 @@ class CameraService {
     CameraService() = default;
     ~CameraService();
 
-    bool Start(Origin origin, uint32_t auto_capture_delay_ms);
+    bool Start(Origin origin, uint32_t auto_capture_delay_ms,
+               VoiceMcpResultCallback callback = {},
+               std::string* error = nullptr);
     static void TaskEntry(void* arg);
     void TaskLoop(uint32_t generation);
     void RequestCloudDescription(uint32_t generation, Camera& camera);
+    void UploadMcpPhoto(uint32_t generation, Camera& camera);
+    void CompleteVoiceMcp(uint32_t generation, bool success,
+                          std::string value, bool keep_until_tts);
+    void ReleaseVoiceMcpTtsGate();
+    void ReleaseCameraIntent();
     void HandlePlaybackEvent(const PlaybackEvent& event);
     void HandleIntentPreempted();
     void Fail(uint32_t generation, const char* message);
@@ -70,12 +89,19 @@ class CameraService {
     std::atomic_bool capture_requested_{false};
     std::atomic_bool exit_requested_{false};
     std::atomic_bool preempted_exit_{false};
+    std::atomic_bool camera_intent_active_{false};
     TaskHandle_t task_handle_ = nullptr;
     uint32_t tts_session_id_ = 0;
     uint32_t capture_tone_session_id_ = 0;
     std::atomic_bool capture_tone_finished_{false};
-    Origin origin_ = Origin::Button;
-    // 按键模式为 0，等待用户单击；未来语音/MCP 模式设置为 3000 后自动拍照。
+    std::atomic<Origin> origin_{Origin::Button};
+    // 按键模式为 0，等待用户单击；语音/MCP 模式设置为 3000 后自动拍照。
     uint32_t auto_capture_delay_ms_ = 0;
+    VoiceMcpResultCallback voice_mcp_result_callback_;
+    bool voice_tts_gate_active_ = false;
+    std::string deferred_voice_tts_url_;
+    // 云端可能先下发 TTS URL、数秒后才下发 take_photo；保留最近候选供接管。
+    std::string recent_tts_url_;
+    int64_t recent_tts_url_at_us_ = 0;
     std::vector<AppEvent::SubscriptionId> subscriptions_;
 };

@@ -66,11 +66,13 @@ public:
     void SendWakeWordDetected(const std::string& wake_word);
     void SendStartListening(ListeningMode mode);
     void SendStopListening();
+    bool StopListeningForTts();
     bool EndSession();
     bool CancelSession();
     void PrepareAbortSpeaking(AbortReason reason);
     void SendAbortSpeaking(AbortReason reason);
     void HandleIatBargeIn();
+    void PrepareTtsReplay();
     void SendMcpMessage(const std::string& message);
     bool ResolveKuwoMusicUrl(const std::string& item_id, std::string& url);
     // 返回可直接用于普通 HTTP 请求的 Authorization 请求头值。

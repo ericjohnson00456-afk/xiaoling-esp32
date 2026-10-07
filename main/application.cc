@@ -158,6 +158,12 @@ void Application::HandlePlaybackEvent(const PlaybackEvent& event) {
     const bool active_session = active_tts_session_id_ == event.session_id;
     const bool pending_session = pending_tts_session_id_ == event.session_id;
     if (!active_session && !pending_session) {
+        ESP_LOGI(TAG,
+                 "忽略旧 TTS 终态: session=%lu, active=%lu, pending=%lu, state=%u",
+                 static_cast<unsigned long>(event.session_id),
+                 static_cast<unsigned long>(active_tts_session_id_),
+                 static_cast<unsigned long>(pending_tts_session_id_),
+                 static_cast<unsigned>(event.state));
         return;
     }
     const char* reason_text = "interrupted";
@@ -178,8 +184,8 @@ void Application::HandlePlaybackEvent(const PlaybackEvent& event) {
     if (active_session) {
         session_controller_.EndTts(event.session_id);
     }
-    if (CameraService::GetInstance().IsActive()) {
-        // 拍照 TTS 是一次性事务，由拍照控制器负责收尾；若此处按普通
+    if (CameraService::GetInstance().OwnsStandaloneTtsLifecycle()) {
+        // 按键拍照 TTS 是一次性事务，由拍照控制器负责收尾；若此处按普通
         // 半双工会话重启上行，会遗留语音会话并吞掉下一次照片识别结果。
         ESP_LOGI(TAG, "拍照 TTS 已结束，跳过半双工上行重启");
         return;
@@ -236,8 +242,18 @@ void Application::HandleVadChangedEvent() {
 void Application::HandlePlayerOutputStartedEvent(
         const PlaybackOutputEvent& event) {
     // tone、music 和 alarm 也会经过同一个物理输出任务，不能当成 TTS。
-    if (event.channel != PlaybackChannel::kTts ||
-        !tts_waiting_for_playback_.load()) {
+    if (event.channel != PlaybackChannel::kTts) {
+        return;
+    }
+
+    ESP_LOGI(TAG,
+             "收到 TTS 扬声器首帧: session=%lu, waiting=%d, active=%lu, pending=%lu",
+             static_cast<unsigned long>(event.session_id),
+             tts_waiting_for_playback_.load() ? 1 : 0,
+             static_cast<unsigned long>(active_tts_session_id_),
+             static_cast<unsigned long>(pending_tts_session_id_));
+    if (!tts_waiting_for_playback_.load()) {
+        ESP_LOGW(TAG, "TTS 首帧未进入字幕时钟：当前没有待播放 URL");
         return;
     }
 
@@ -947,6 +963,10 @@ void Application::HandleWakeWordDetectedEvent() {
     if (alarm_flow_.on_wake_word) {
         alarm_flow_.on_wake_word();
     }
+    if (CameraService::GetInstance().CancelVoiceMcpCountdown(
+            "用户通过语音唤醒取消拍照")) {
+        return;
+    }
     if (CameraService::GetInstance().IsActive()) {
         ESP_LOGI(TAG, "拍照流程期间忽略唤醒词");
         return;
@@ -1353,6 +1373,10 @@ void Application::ScheduleUrgent(std::function<void()>&& callback) {
     xEventGroupSetBits(event_group_, MAIN_EVENT_SCHEDULE);
 }
 void Application::WakeWordInvoke(const std::string& wake_word) {
+    if (CameraService::GetInstance().CancelVoiceMcpCountdown(
+            "用户通过语音唤醒取消拍照")) {
+        return;
+    }
     if (SdMusicService::GetInstance().IsBusy()) {
         ESP_LOGI(TAG, "TF 卡文件同步期间忽略外部唤醒词：%s", wake_word.c_str());
         return;

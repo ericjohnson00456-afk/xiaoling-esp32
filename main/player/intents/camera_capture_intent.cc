@@ -28,7 +28,7 @@ void CameraCaptureIntent::SetCancelCallback(CancelCallback callback) {
   cancel_callback_ = std::move(callback);
 }
 
-bool CameraCaptureIntent::Enter() {
+bool CameraCaptureIntent::Enter(bool preserve_voice_session) {
   if (app_ == nullptr || intent_manager_ == nullptr) {
     return false;
   }
@@ -40,20 +40,25 @@ bool CameraCaptureIntent::Enter() {
 
   exit_pending_ = false;
   cancel_pending_ = false;
+  preserve_voice_session_ = preserve_voice_session;
   active_ = true;
   if (!intent_manager_->Push(PlaybackIntentId::kCameraCapture)) {
     active_ = false;
+    preserve_voice_session_ = false;
     return false;
   }
   if (intent_manager_->Top() != PlaybackIntentId::kCameraCapture) {
     intent_manager_->Pop(PlaybackIntentId::kCameraCapture);
     active_ = false;
+    preserve_voice_session_ = false;
     return false;
   }
 
-  // 拍照是一次性流程，结束后应回到待命而不是恢复此前的语音会话；音乐
-  // 则继续留在栈底，由拍照 Intent 退出时自动恢复。
-  intent_manager_->Pop(PlaybackIntentId::kVoiceSession);
+  if (!preserve_voice_session) {
+    // 按键拍照是一次性流程，结束后应回到待命而不是恢复此前的语音会话；
+    // 音乐继续留在栈底，由拍照 Intent 退出时自动恢复。
+    intent_manager_->Pop(PlaybackIntentId::kVoiceSession);
+  }
   return true;
 }
 
@@ -76,6 +81,12 @@ void CameraCaptureIntent::Exit() {
 
 void CameraCaptureIntent::OnEnter() {
   if (app_ == nullptr) {
+    return;
+  }
+  if (preserve_voice_session_.load()) {
+    // 语音拍照属于当前问答的一部分，只临时取得拍照资源；底层语音会话
+    // 负责在工具响应后的 TTS 结束时执行双工策略和音乐恢复。
+    ESP_LOGI(kTag, "语音拍照事件进入，保留当前语音会话");
     return;
   }
   const DeviceState state = app_->GetDeviceState();
@@ -104,6 +115,7 @@ void CameraCaptureIntent::OnResumed() {
 void CameraCaptureIntent::OnExit() {
   active_ = false;
   cancel_pending_ = false;
+  preserve_voice_session_ = false;
   ESP_LOGI(kTag, "拍照事件退出，允许恢复低优先级播放");
 }
 

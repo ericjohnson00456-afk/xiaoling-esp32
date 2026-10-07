@@ -50,6 +50,8 @@ public:
     void PrepareTextSession(std::string session_id);
     void SendStartListening(ListeningMode mode);
     void SendStopListening();
+    // 半双工收到 TTS 后只结束上行，保留当前回复的音频和字幕状态。
+    bool StopListeningForTts();
     bool EndSession();
     bool CancelSession();
     // 在停止本地 TTS 前冻结实际 PCM 播放位置对应的 timeline 游标。
@@ -57,6 +59,8 @@ public:
     void SendAbortSpeaking(AbortReason reason);
     // 非空 IAT 触发的全双工打断：停止字幕并上报播放点，但保持会话和上行。
     void HandleIatBargeIn();
+    // MCP 拍照会停止早到的空 TTS 流并在工具响应后重播；期间保留字幕状态。
+    void PrepareTtsReplay();
 
     void HandleMessage(const cJSON* root);
     void HandleBinary(std::vector<uint8_t> payload);
