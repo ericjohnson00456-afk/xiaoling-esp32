@@ -35,9 +35,10 @@ if(BOARD_TYPE)
 endif()
 
 set(XIAOLING_VER ${PROJECT_VER})
+set(XIAOLING_PROJECT_NAME "xiaoling_v${XIAOLING_VER}")
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-project(xiaoling)
+project(${XIAOLING_PROJECT_NAME})
 
 # 普通 idf.py build 同时生成供量产工具使用的全量烧录包，以及后台 OTA
 # 上传所需的版本/MD5 信息。merge-bin 会读取 flash_args，因此包含 bootloader、

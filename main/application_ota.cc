@@ -58,7 +58,7 @@ void Application::StartOtaFlow() {
     ota_flow_.resource_restart_pending.store(false);
     ota_flow_.confirmation_pending.store(false);
     ota_flow_.confirmation_decision.store(0);
-    SetDeviceState(kDeviceStateActivating);
+    SetDeviceState(kDeviceStateCheckingUpdate);
     const BaseType_t result = xTaskCreate([](void* arg) {
         auto* app = static_cast<Application*>(arg);
         app->OtaTask();
@@ -397,7 +397,7 @@ bool Application::UpgradeFirmware(const std::string& url, const std::string& ver
         Ui::SetChatMessage("system", Lang::Strings::UPGRADE_FAILED);
         PlayOtaTone(92);
         Ui::SetEmotion("microchip_ai");
-        SetDeviceState(kDeviceStateActivating);
+        SetDeviceState(kDeviceStateCheckingUpdate);
         return false;
     }
 

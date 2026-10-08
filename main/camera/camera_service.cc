@@ -205,6 +205,7 @@ bool CameraService::Start(Origin origin,
 
     const DeviceState state = application_->GetDeviceState();
     if (state == kDeviceStateStarting || state == kDeviceStateWifiConfiguring ||
+        state == kDeviceStateCheckingUpdate || state == kDeviceStateActivating ||
         state == kDeviceStateUpgrading || state == kDeviceStateFatalError) {
         ESP_LOGW(kTag, "当前状态不能进入拍照预览: %s",
                  DeviceStatus::GetStateName(state));

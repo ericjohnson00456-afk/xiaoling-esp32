@@ -221,6 +221,7 @@ void CircularStrip::OnStateChanged() {
             Blink(color, 100);
             break;
         }
+        case kDeviceStateCheckingUpdate:
         case kDeviceStateActivating: {
             StripColor color = { low_brightness_, default_brightness_, low_brightness_ };
             Blink(color, 500);

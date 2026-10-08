@@ -21,6 +21,7 @@ enum DeviceState {
     kDeviceStateListening,
     kDeviceStateSpeaking,
     kDeviceStateUpgrading,
+    kDeviceStateCheckingUpdate,
     kDeviceStateActivating,
     kDeviceStateAudioTesting,
     kDeviceStateFatalError
@@ -81,6 +82,7 @@ public:
             "listening",
             "speaking",
             "upgrading",
+            "checking_update",
             "activating",
             "audio_testing",
             "fatal_error",
@@ -130,35 +132,43 @@ private:
                 return to == kDeviceStateStarting;
 
             case kDeviceStateStarting:
-                // Can go to wifi configuring or activating
+                // Can go to Wi-Fi provisioning or startup OTA checks.
                 return to == kDeviceStateWifiConfiguring ||
-                       to == kDeviceStateActivating;
+                       to == kDeviceStateCheckingUpdate;
 
             case kDeviceStateWifiConfiguring:
-                // Can go to activating (after wifi connected) or audio testing
-                return to == kDeviceStateActivating ||
+                // Can check OTA after connecting, or enter audio testing.
+                return to == kDeviceStateCheckingUpdate ||
                        to == kDeviceStateAudioTesting;
 
             case kDeviceStateAudioTesting:
                 // Can go back to wifi configuring
                 return to == kDeviceStateWifiConfiguring;
 
-            case kDeviceStateActivating:
-                // Can go to upgrading, idle, or back to wifi configuring (on error)
+            case kDeviceStateCheckingUpdate:
+                // OTA/startup checks can enter upgrading, activation, idle,
+                // or return to Wi-Fi configuration on error.
                 return to == kDeviceStateUpgrading ||
+                       to == kDeviceStateActivating ||
                        to == kDeviceStateIdle ||
                        to == kDeviceStateWifiConfiguring;
 
-            case kDeviceStateUpgrading:
-                // Can go to idle (upgrade failed) or activating
+            case kDeviceStateActivating:
+                // Device activation completes into idle, or may return to provisioning.
                 return to == kDeviceStateIdle ||
-                       to == kDeviceStateActivating;
+                       to == kDeviceStateWifiConfiguring;
+
+            case kDeviceStateUpgrading:
+                // Can go to idle or resume update checks after an upgrade failure.
+                return to == kDeviceStateIdle ||
+                       to == kDeviceStateCheckingUpdate;
 
             case kDeviceStateIdle:
-                // Can go to connecting, listening (manual mode), speaking, activating, upgrading, or wifi configuring
+                // Can enter normal interaction, OTA, activation, upgrade, or provisioning states.
                 return to == kDeviceStateConnecting ||
                        to == kDeviceStateListening ||
                        to == kDeviceStateSpeaking ||
+                       to == kDeviceStateCheckingUpdate ||
                        to == kDeviceStateActivating ||
                        to == kDeviceStateUpgrading ||
                        to == kDeviceStateWifiConfiguring;

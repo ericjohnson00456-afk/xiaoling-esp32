@@ -22,6 +22,11 @@ constexpr uint16_t kDeviceConfigToneId = 104;
 // 板级按键回调可能运行在非应用主任务中，这里只投递短击事件，
 // 具体业务统一回到 Application 主任务串行执行。
 void Application::HandleButtonClick(uint8_t click_count) {
+    if (GetDeviceState() == kDeviceStateActivating) {
+        ESP_LOGI(kTag, "激活期间忽略 %u 击按键",
+                 static_cast<unsigned>(click_count));
+        return;
+    }
     Schedule([this, click_count]() {
         ProcessButtonClick(click_count);
     });
@@ -30,6 +35,10 @@ void Application::HandleButtonClick(uint8_t click_count) {
 // 将板级长按回调切换到 Application 主任务，避免在按键回调中直接
 // 操作闹钟、播放器和 OTA 状态。
 void Application::HandleButtonLongPress() {
+    if (GetDeviceState() == kDeviceStateActivating) {
+        ESP_LOGI(kTag, "激活期间忽略长按按键");
+        return;
+    }
     Schedule([this]() {
         ProcessButtonLongPress();
     });
@@ -37,6 +46,17 @@ void Application::HandleButtonLongPress() {
 
 // 长按优先停止正在响铃的闹钟；如果正在等待固件升级确认，则跳过本次升级。
 void Application::ProcessButtonLongPress() {
+    const auto state = GetDeviceState();
+    if (state == kDeviceStateActivating) {
+        ESP_LOGI(kTag, "激活期间忽略长按按键");
+        return;
+    }
+    if (state == kDeviceStateCheckingUpdate) {
+        if (!HandleOtaConfirmation(false)) {
+            ESP_LOGI(kTag, "OTA 检查期间忽略长按按键");
+        }
+        return;
+    }
     if (AlarmService::GetInstance().IsRinging()) {
         ESP_LOGI(kTag, "Long press: stop alarm");
         AlarmService::GetInstance().Stop(true);
@@ -52,6 +72,19 @@ void Application::ProcessButtonLongPress() {
 // 在应用主任务中处理短击次数，优先响应闹钟和 OTA 确认，
 // 然后再执行各个击次对应的常规功能。
 void Application::ProcessButtonClick(uint8_t click_count) {
+    const auto state = GetDeviceState();
+    if (state == kDeviceStateActivating) {
+        ESP_LOGI(kTag, "激活期间忽略 %u 击按键",
+                 static_cast<unsigned>(click_count));
+        return;
+    }
+    if (state == kDeviceStateCheckingUpdate) {
+        if (click_count != 1 || !HandleOtaConfirmation(true)) {
+            ESP_LOGI(kTag, "OTA 检查期间忽略 %u 击按键",
+                     static_cast<unsigned>(click_count));
+        }
+        return;
+    }
     // 闹钟响铃时，任意短击只用于贪睡或停止闹钟，不再执行其他按键功能。
     if (AlarmService::GetInstance().IsRinging()) {
         ESP_LOGI(kTag, "Click: %s alarm", AlarmService::GetInstance().CanSnooze() ? "snooze" : "stop");
@@ -73,10 +106,6 @@ void Application::ProcessButtonClick(uint8_t click_count) {
             ESP_LOGI(kTag, "相机预览期间忽略 %u 击",
                      static_cast<unsigned>(click_count));
         }
-        return;
-    }
-    // 固件 OTA 等待用户选择时，单击表示确认升级。
-    if (click_count == 1 && HandleOtaConfirmation(true)) {
         return;
     }
     if (SdMusicService::GetInstance().IsBusy()) {

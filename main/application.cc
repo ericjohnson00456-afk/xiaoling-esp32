@@ -564,6 +564,7 @@ void Application::HandleNetworkDisconnectedEvent() {
 }
 
 void Application::RunXiaolingActivation() {
+    SetDeviceState(kDeviceStateActivating);
     XiaolingConnActivation activation;
     while (true) {
         if (!activation.Fetch()) {
@@ -868,8 +869,8 @@ void Application::HandleToggleChatEvent() {
     }
     auto state = GetDeviceState();
 
-    if (state == kDeviceStateActivating) {
-        SetDeviceState(kDeviceStateIdle);
+    if (state == kDeviceStateCheckingUpdate ||
+        state == kDeviceStateActivating) {
         return;
     } else if (state == kDeviceStateWifiConfiguring) {
         audio_service_.EnableAudioTesting(true);
@@ -918,8 +919,8 @@ void Application::HandleStartListeningEvent() {
     }
     auto state = GetDeviceState();
 
-    if (state == kDeviceStateActivating) {
-        SetDeviceState(kDeviceStateIdle);
+    if (state == kDeviceStateCheckingUpdate ||
+        state == kDeviceStateActivating) {
         return;
     } else if (state == kDeviceStateWifiConfiguring) {
         audio_service_.EnableAudioTesting(true);
