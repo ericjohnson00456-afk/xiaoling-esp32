@@ -205,6 +205,11 @@ private:
     std::deque<std::vector<int16_t>> processed_wake_queue_;
     // true 时 MicroWakeWord 消费 AEC 输出，false 时采集任务直接喂麦克风 PCM。
     std::atomic_bool wake_uses_processor_output_{false};
+    // 扬声器输出期间使用 AEC PCM；最后一块 PCM 送出后延迟切回原始 MIC，
+    // 覆盖 I2S DMA 中尚未播放完的尾音。
+    esp_timer_handle_t wake_input_idle_timer_ = nullptr;
+    std::atomic_bool speaker_output_active_{false};
+    std::atomic<int64_t> speaker_output_last_activity_us_{0};
 #endif
 
     // ===== 3. Opus 编解码器与重采样器 =====
@@ -304,6 +309,9 @@ private:
     void ProcessedWakeTask();
     void SetWakeInputFromProcessor(bool enable);
     void ClearProcessedWakeQueue();
+    void NotifySpeakerOutputStarted();
+    void NotifySpeakerOutputCompleted();
+    void HandleWakeInputIdleTimer();
 #endif
     void PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t>&& pcm);
     void SetDecodeSampleRate(int sample_rate, int frame_duration);

@@ -60,6 +60,8 @@ constexpr TickType_t kAudioInputYieldTicks = 1;
 // 唤醒推理不能和 ADC/AFE feed 共同挤占 CPU0；移到 CPU1 后与 AFE fetch
 // 和播放器任务按同优先级时间片运行。
 constexpr BaseType_t kProcessedWakeTaskCore = 1;
+// 最后一块 PCM 写入后继续使用 AEC 200 ms，覆盖 DAC DMA 中的扬声器尾音。
+constexpr int64_t kWakeInputPlaybackTailUs = 200 * 1000;
 #endif
 
 #if CONFIG_USE_MICRO_WAKE_WORD
@@ -209,6 +211,20 @@ void AudioService::Initialize(AudioCodec* codec) {
     };
     esp_timer_create(&audio_power_timer_args, &audio_power_timer_);
 
+#if CONFIG_USE_MICRO_WAKE_WORD
+    esp_timer_create_args_t wake_input_idle_timer_args = {
+        .callback = [](void* arg) {
+            static_cast<AudioService*>(arg)->HandleWakeInputIdleTimer();
+        },
+        .arg = this,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "wake_input_idle",
+        .skip_unhandled_events = true,
+    };
+    ESP_ERROR_CHECK(esp_timer_create(
+        &wake_input_idle_timer_args, &wake_input_idle_timer_));
+#endif
+
 }
 
 // 启动服务循环；AFE 内部任务已在 Initialize() 创建，Start() 使其开始取帧。
@@ -223,7 +239,12 @@ void AudioService::Start() {
     audio_processor_->SetAecEnabled(aec_enabled_);
     audio_processor_->Start();
 #if CONFIG_USE_MICRO_WAKE_WORD
-    SetWakeInputFromProcessor(aec_enabled_ && SupportsAec());
+    speaker_output_active_.store(false);
+    speaker_output_last_activity_us_.store(0);
+    if (wake_input_idle_timer_ != nullptr) {
+        esp_timer_stop(wake_input_idle_timer_);
+    }
+    SetWakeInputFromProcessor(false);
 #endif
 
     esp_timer_start_periodic(audio_power_timer_, 1000000);
@@ -333,6 +354,10 @@ void AudioService::Stop() {
         audio_processor_->Stop();
     }
 #if CONFIG_USE_MICRO_WAKE_WORD
+    if (wake_input_idle_timer_ != nullptr) {
+        esp_timer_stop(wake_input_idle_timer_);
+    }
+    speaker_output_active_.store(false);
     SetWakeInputFromProcessor(false);
 #endif
     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
@@ -398,7 +423,7 @@ bool AudioService::ReadAudioData(std::vector<int16_t>& data, int sample_rate, in
     }
 
     // Amplify the microphone before it is split to the wake-word and AFE pipelines.
-    constexpr int32_t kMicPcmGain = 5;
+    constexpr int32_t kMicPcmGain = 3;
     const size_t input_channels = codec_->input_channels();
     for (size_t i = 0; i < data.size(); i += input_channels) {
         const int32_t amplified = static_cast<int32_t>(data[i]) * kMicPcmGain;
@@ -565,6 +590,46 @@ void AudioService::SetWakeInputFromProcessor(bool enable) {
     ESP_LOGI(TAG, "Wake word input source: %s",
              enable ? "AFE post-AEC output" : "amplified microphone PCM");
 }
+
+// 扬声器开始输出时立即切到 AEC PCM，并取消尚未触发的空闲切换。
+void AudioService::NotifySpeakerOutputStarted() {
+    speaker_output_last_activity_us_.store(esp_timer_get_time());
+    if (wake_input_idle_timer_ != nullptr) {
+        esp_timer_stop(wake_input_idle_timer_);
+    }
+    speaker_output_active_.store(true);
+    SetWakeInputFromProcessor(aec_enabled_ && SupportsAec());
+}
+
+// 每块 PCM 写入完成后重新计时；连续播放时下一块会取消本次计时。
+void AudioService::NotifySpeakerOutputCompleted() {
+    speaker_output_last_activity_us_.store(esp_timer_get_time());
+    if (wake_input_idle_timer_ == nullptr) {
+        return;
+    }
+    esp_timer_stop(wake_input_idle_timer_);
+    const esp_err_t err = esp_timer_start_once(
+        wake_input_idle_timer_, kWakeInputPlaybackTailUs);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "启动唤醒输入空闲定时器失败: %s", esp_err_to_name(err));
+    }
+}
+
+// 定时器可能与下一块 PCM 同时触发，因此再次核对最近输出时间。
+void AudioService::HandleWakeInputIdleTimer() {
+    const int64_t elapsed_us =
+        esp_timer_get_time() - speaker_output_last_activity_us_.load();
+    if (elapsed_us < kWakeInputPlaybackTailUs) {
+        const esp_err_t err = esp_timer_start_once(
+            wake_input_idle_timer_, kWakeInputPlaybackTailUs - elapsed_us);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "重启唤醒输入空闲定时器失败: %s", esp_err_to_name(err));
+        }
+        return;
+    }
+    speaker_output_active_.store(false);
+    SetWakeInputFromProcessor(false);
+}
 #endif
 
 // ============================================================================
@@ -664,7 +729,13 @@ void AudioService::AudioOutputTask() {
             esp_timer_start_periodic(audio_power_timer_, AUDIO_POWER_CHECK_INTERVAL_MS * 1000);
             codec_->EnableOutput(true);
         }
+#if CONFIG_USE_MICRO_WAKE_WORD
+        NotifySpeakerOutputStarted();
+#endif
         codec_->OutputData(task->PlaybackData(), task->PlaybackSamples());
+#if CONFIG_USE_MICRO_WAKE_WORD
+        NotifySpeakerOutputCompleted();
+#endif
         if (task->type == kAudioTaskTypePlayerToPlaybackQueue) {
             if (player_output_started && output_callbacks_.on_output_started) {
                 ESP_LOGI(TAG, "播放器首个 PCM 已交给 codec: samples=%u",
@@ -1312,7 +1383,8 @@ void AudioService::SetAecEnabled(bool enable) {
         audio_processor_->SetAecEnabled(aec_enabled_);
 #if CONFIG_USE_MICRO_WAKE_WORD
         if (!service_stopped_.load()) {
-            SetWakeInputFromProcessor(aec_enabled_);
+            SetWakeInputFromProcessor(
+                aec_enabled_ && speaker_output_active_.load());
         }
 #endif
     }
