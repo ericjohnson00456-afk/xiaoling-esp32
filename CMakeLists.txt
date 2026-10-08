@@ -64,7 +64,8 @@ if(TARGET generated_default_assets)
 endif()
 
 # 保留 ESP-IDF 原始产物名供 flash/merge-bin 等内置目标使用，同时额外生成带
-# 版型前缀的发布文件，并将四个发布文件打包到同名 zip 中。BOARD_NAME 在发布
+# 版型前缀的发布文件，并生成完整 zip 和仅含应用、OTA 信息、合并固件的
+# _test.zip。BOARD_NAME 在发布
 # 构建中代表具体版型；普通 idf.py build 未传入时，脚本会从编译命令中读取。
 add_custom_target(xiaoling_release_artifacts ALL
     COMMAND "${PYTHON}" "${CMAKE_CURRENT_LIST_DIR}/scripts/package_release_artifacts.py"

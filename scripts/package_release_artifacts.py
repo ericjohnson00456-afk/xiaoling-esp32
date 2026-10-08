@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create board-prefixed Xiaoling firmware artifacts and a release zip."""
+"""Create board-prefixed Xiaoling artifacts, a release zip and a test zip."""
 
 from __future__ import annotations
 
@@ -105,6 +105,17 @@ def main() -> int:
 
     print(f"Generated release package: {zip_path}")
     for artifact in artifacts:
+        print(f"  {artifact.name}")
+
+    test_artifacts = [
+        build_dir / f"{board}-{project_name}.bin",
+        build_dir / f"{board}-{project_name}_ota_info.txt",
+        build_dir / f"{board}-merged-binary.bin",
+    ]
+    test_zip_path = build_dir / f"{board}-{project_name}_test.zip"
+    _write_zip(test_zip_path, test_artifacts)
+    print(f"Generated test package: {test_zip_path}")
+    for artifact in test_artifacts:
         print(f"  {artifact.name}")
     return 0
 
