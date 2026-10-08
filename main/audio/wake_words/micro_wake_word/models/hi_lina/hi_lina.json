@@ -3,8 +3,9 @@
   "wake_word": "hi lina",
   "author": "microwakeword.com",
   "website": "https://microwakeword.com",
-  "model": "hi_lina.tflite",
+  "model": "./hi_lina.tflite",
   "trained_languages": [
+    "zh",
     "en"
   ],
   "version": 2,
@@ -12,7 +13,7 @@
     "probability_cutoff": 0.5,
     "sliding_window_size": 5,
     "feature_step_size": 10,
-    "tensor_arena_size": 32768,
+    "tensor_arena_size": 32000,
     "minimum_esphome_version": "2024.7.0"
   }
 }
