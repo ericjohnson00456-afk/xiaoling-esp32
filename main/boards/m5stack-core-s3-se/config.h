@@ -1,0 +1,61 @@
+#ifndef _M5STACK_CORE_S3_SE_CONFIG_H_
+#define _M5STACK_CORE_S3_SE_CONFIG_H_
+
+// M5Stack CoreS3 SE Board configuration
+
+#include <driver/gpio.h>
+#include <driver/spi_common.h>
+
+#define AUDIO_INPUT_REFERENCE    true
+#define AUDIO_INPUT_SAMPLE_RATE  16000
+#define AUDIO_OUTPUT_SAMPLE_RATE 16000
+
+#define AUDIO_I2S_GPIO_MCLK GPIO_NUM_0
+#define AUDIO_I2S_GPIO_WS GPIO_NUM_33
+#define AUDIO_I2S_GPIO_BCLK GPIO_NUM_34
+// ESP32 input from ES7210 is GPIO14; output to AW88298 is GPIO13.
+// The SE web pin table swaps these signals; follow the schematic.
+#define AUDIO_I2S_GPIO_DIN  GPIO_NUM_14
+#define AUDIO_I2S_GPIO_DOUT GPIO_NUM_13
+
+#define AUDIO_CODEC_I2C_SDA_PIN  GPIO_NUM_12
+#define AUDIO_CODEC_I2C_SCL_PIN  GPIO_NUM_11
+#define AUDIO_CODEC_AW88298_ADDR AW88298_CODEC_DEFAULT_ADDR
+#define AUDIO_CODEC_ES7210_ADDR  ES7210_CODEC_DEFAULT_ADDR
+
+#define BUILTIN_LED_GPIO        GPIO_NUM_NC
+#define BOOT_BUTTON_GPIO        GPIO_NUM_NC // CoreS3 SE 的电源键接入 AXP2101 PWRON，并未连接到 ESP32 GPIO。
+#define VOLUME_UP_BUTTON_GPIO   GPIO_NUM_NC
+#define VOLUME_DOWN_BUTTON_GPIO GPIO_NUM_NC
+
+#define DISPLAY_SDA_PIN GPIO_NUM_NC
+#define DISPLAY_SCL_PIN GPIO_NUM_NC
+// Verified against the SE v1.0 schematic; see README.md for sources.
+#define DISPLAY_SPI_HOST     SPI3_HOST
+#define DISPLAY_SPI_MOSI_PIN GPIO_NUM_37
+#define DISPLAY_SPI_SCLK_PIN GPIO_NUM_36
+#define DISPLAY_SPI_CS_PIN   GPIO_NUM_3
+#define DISPLAY_SPI_DC_PIN   GPIO_NUM_35
+
+#define DISPLAY_WIDTH   320
+#define DISPLAY_HEIGHT  240
+#define DISPLAY_MIRROR_X true
+#define DISPLAY_MIRROR_Y true
+#define DISPLAY_SWAP_XY false
+
+#define DISPLAY_OFFSET_X  0
+#define DISPLAY_OFFSET_Y  0
+
+#define DISPLAY_BACKLIGHT_PIN GPIO_NUM_NC
+#define DISPLAY_BACKLIGHT_OUTPUT_INVERT true
+
+// CoreS3 SE 内置 MicroSD 卡与 LCD 共用 SPI3 总线。GPIO35 在 LCD
+// 事务中作为 D/C，在 SD 事务中作为 MISO，两个设备由独立 CS 分时访问。
+#define SD_CARD_SPI_HOST      SPI3_HOST
+#define SD_CARD_SPI_MOSI      GPIO_NUM_37
+#define SD_CARD_SPI_MISO      GPIO_NUM_35
+#define SD_CARD_SPI_SCLK      GPIO_NUM_36
+#define SD_CARD_SPI_CS        GPIO_NUM_4
+#define SD_CARD_POWER         GPIO_NUM_NC
+
+#endif // _M5STACK_CORE_S3_SE_CONFIG_H_

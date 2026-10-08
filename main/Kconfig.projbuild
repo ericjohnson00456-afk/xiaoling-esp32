@@ -294,6 +294,12 @@ choice BOARD_TYPE
     config BOARD_TYPE_M5STACK_CORE_S3
         bool "M5Stack CoreS3"
         depends on IDF_TARGET_ESP32S3
+    config BOARD_TYPE_M5STACK_CORE_S3_SE
+        bool "M5Stack CoreS3 SE"
+        depends on IDF_TARGET_ESP32S3
+        help
+            CoreS3 SE with 16 MB Flash and 8 MB Quad PSRAM. Shares the
+            CoreS3 display/audio/SD pin map, but has no onboard camera.
     config BOARD_TYPE_M5STACK_CORE_TAB5
         bool "M5Stack Tab5"
         depends on IDF_TARGET_ESP32P4
