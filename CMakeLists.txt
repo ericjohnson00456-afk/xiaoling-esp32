@@ -62,7 +62,18 @@ endif()
 if(TARGET generated_default_assets)
     add_dependencies(merge-bin generated_default_assets)
 endif()
-add_custom_target(xiaoling_release_artifacts ALL)
+
+# 保留 ESP-IDF 原始产物名供 flash/merge-bin 等内置目标使用，同时额外生成带
+# 版型前缀的发布文件，并将四个发布文件打包到同名 zip 中。BOARD_NAME 在发布
+# 构建中代表具体版型；普通 idf.py build 未传入时，脚本会从编译命令中读取。
+add_custom_target(xiaoling_release_artifacts ALL
+    COMMAND "${PYTHON}" "${CMAKE_CURRENT_LIST_DIR}/scripts/package_release_artifacts.py"
+            --build-dir "${CMAKE_BINARY_DIR}"
+            --project-name "${PROJECT_NAME}"
+            --board "${BOARD_NAME}"
+    DEPENDS "${CMAKE_CURRENT_LIST_DIR}/scripts/package_release_artifacts.py"
+    COMMENT "Packaging board-specific Xiaoling release artifacts"
+    VERBATIM)
 add_dependencies(xiaoling_release_artifacts merge-bin xiaoling_ota_info)
 
 # esp_asrc 1.0.1 的内存分配日志仍用 %d 打印 uint32_t。
