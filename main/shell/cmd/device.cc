@@ -22,7 +22,8 @@ void PrintUsage() {
         "  device set_pid <product_id>\n"
         "  device set_sid <secret_id>\n"
         "  device get_pid\n"
-        "  device get_sid\n");
+        "  device get_sid\n"
+        "  device get_device_id\n");
 }
 
 int HandleDeviceCommand(int argc, char** argv) {
@@ -61,6 +62,15 @@ int HandleDeviceCommand(int argc, char** argv) {
         return 0;
     }
 
+    if (std::strcmp(argv[1], "get_device_id") == 0) {
+        if (argc != 2) {
+            PrintUsage();
+            return 1;
+        }
+        std::printf("device_id=%s\n", SystemInfo::GetCloudDeviceId().c_str());
+        return 0;
+    }
+
     PrintUsage();
     return 1;
 }
@@ -70,8 +80,8 @@ int HandleDeviceCommand(int argc, char** argv) {
 esp_err_t RegisterDeviceCommands() {
     const esp_console_cmd_t command = {
         .command = "device",
-        .help = "Set runtime product and secret IDs",
-        .hint = "<set_pid|set_sid|get_pid|get_sid|help> ...",
+        .help = "Set or inspect runtime device identity",
+        .hint = "<set_pid|set_sid|get_pid|get_sid|get_device_id|help> ...",
         .func = HandleDeviceCommand,
         .argtable = nullptr,
         .func_w_context = nullptr,
