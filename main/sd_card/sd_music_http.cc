@@ -19,6 +19,7 @@ constexpr char kFilesImportPath[] = "/v1/media/tf-card/files/import";
 constexpr int kTimeoutMs = 10000;
 constexpr int kFileReportRetries = 3;
 constexpr uint32_t kRetryDelayBaseMs = 300;
+constexpr size_t kRequestLogPreviewBytes = 4096;
 
 bool MatchUtf8Sequence(const uint8_t* data, size_t remaining, size_t& length) {
     length = 0;
@@ -117,6 +118,17 @@ bool WriteChunk(Http& http, const std::string& chunk) {
     return chunk.empty() || http.Write(chunk.data(), chunk.size()) > 0;
 }
 
+void AppendRequestLogPreview(std::string& preview, const std::string& chunk,
+                             bool& truncated) {
+    if (preview.size() >= kRequestLogPreviewBytes) {
+        truncated = true;
+        return;
+    }
+    const size_t remaining = kRequestLogPreviewBytes - preview.size();
+    preview.append(chunk, 0, std::min(remaining, chunk.size()));
+    if (chunk.size() > remaining) truncated = true;
+}
+
 }  // namespace
 
 SdMusicHttp::SdMusicHttp(std::string authorization)
@@ -213,18 +225,37 @@ SdMusicHttpResult SdMusicHttp::PostFiles(
     prefix += is_last_batch ? "true" : "false";
     prefix += ",\"files\":[";
 
+    std::string request_log_preview;
+    request_log_preview.reserve(kRequestLogPreviewBytes);
+    bool request_log_truncated = false;
+    AppendRequestLogPreview(request_log_preview, prefix, request_log_truncated);
     bool write_ok = WriteChunk(*http, prefix);
     for (size_t i = 0; write_ok && i < tracks.size(); ++i) {
-        if (i != 0) write_ok = WriteChunk(*http, ",");
-        if (write_ok) write_ok = WriteChunk(*http, BuildFileJson(tracks[i]));
+        if (i != 0) {
+            AppendRequestLogPreview(request_log_preview, ",", request_log_truncated);
+            write_ok = WriteChunk(*http, ",");
+        }
+        if (write_ok) {
+            const std::string file_json = BuildFileJson(tracks[i]);
+            AppendRequestLogPreview(request_log_preview, file_json,
+                                    request_log_truncated);
+            write_ok = WriteChunk(*http, file_json);
+        }
     }
-    if (write_ok) write_ok = WriteChunk(*http, "]}");
+    if (write_ok) {
+        AppendRequestLogPreview(request_log_preview, "]}", request_log_truncated);
+        write_ok = WriteChunk(*http, "]}");
+    }
     if (write_ok) write_ok = http->Write("", 0) >= 0;
     if (!write_ok) {
         ESP_LOGW(kTag, "发送 TF 卡文件批次失败");
         http->Close();
         return {ESP_FAIL, 0};
     }
+
+    ESP_LOGI(kTag, "TF 卡文件列表请求体%s: %s",
+             request_log_truncated ? "(前4096字节)" : "",
+             request_log_preview.c_str());
 
     const int status = http->GetStatusCode();
     const std::string response = http->ReadAll();

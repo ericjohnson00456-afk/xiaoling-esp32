@@ -15,6 +15,8 @@ namespace TimeSync {
 namespace {
 
 constexpr uint32_t kSyncIntervalMs = 60U * 60U * 1000U;
+constexpr uint32_t kInitialSyncAttempts = 4;
+constexpr uint32_t kInitialSyncWaitMs = 5000;
 std::mutex s_sync_mutex;
 bool s_sntp_initialized = false;
 
@@ -36,7 +38,10 @@ bool SyncSystemTime() {
     bool first_start = false;
     if (!s_sntp_initialized) {
         esp_sntp_set_sync_interval(kSyncIntervalMs);
-        esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG("ntp.aliyun.com");
+        esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG_MULTIPLE(
+            4, ESP_SNTP_SERVER_LIST(
+                   "ntp.aliyun.com", "ntp.tencent.com", "time.cloudflare.com",
+                   "time.google.com"));
         config.sync_cb = OnTimeSynchronized;
         const auto init_result = esp_netif_sntp_init(&config);
         if (init_result != ESP_OK && init_result != ESP_ERR_INVALID_STATE) {
@@ -45,7 +50,9 @@ bool SyncSystemTime() {
         }
         s_sntp_initialized = true;
         first_start = true;
-        ESP_LOGI(TAG, "SNTP 常驻校时已启动，周期=%u ms",
+        ESP_LOGI(TAG,
+                 "SNTP 常驻校时已启动，周期=%u ms，候选节点=ntp.aliyun.com, "
+                 "ntp.tencent.com, time.cloudflare.com, time.google.com",
                  static_cast<unsigned>(kSyncIntervalMs));
     }
 
@@ -53,11 +60,18 @@ bool SyncSystemTime() {
         return true;
     }
 
-    const auto sync_result = esp_netif_sntp_sync_wait(pdMS_TO_TICKS(10000));
-    if (sync_result != ESP_OK) {
-        ESP_LOGE(TAG, "SNTP 校时失败: %s", esp_err_to_name(sync_result));
-        // 服务保持运行并会自动重试；RTC 已有可信时间时不阻断启动链路。
-        return IsSystemTimeValid();
+    for (uint32_t attempt = 1; attempt <= kInitialSyncAttempts; ++attempt) {
+        const auto sync_result = esp_netif_sntp_sync_wait(
+            pdMS_TO_TICKS(kInitialSyncWaitMs));
+        if (sync_result == ESP_OK) break;
+        ESP_LOGW(TAG, "SNTP 校时重试 %u/%u 超时，等待切换候选节点",
+                 static_cast<unsigned>(attempt),
+                 static_cast<unsigned>(kInitialSyncAttempts));
+        if (attempt == kInitialSyncAttempts) {
+            ESP_LOGE(TAG, "SNTP 校时失败: %s", esp_err_to_name(sync_result));
+            // 服务保持运行并会自动重试；RTC 已有可信时间时不阻断启动链路。
+            return IsSystemTimeValid();
+        }
     }
     if (!IsSystemTimeValid()) {
         ESP_LOGE(TAG, "SNTP 返回成功，但系统时间仍无效");

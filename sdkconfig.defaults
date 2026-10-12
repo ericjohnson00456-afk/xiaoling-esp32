@@ -89,3 +89,5 @@ CONFIG_LV_USE_WIN=n
 
 CONFIG_LV_BUILD_EXAMPLES=n
 CONFIG_LV_BUILD_DEMOS=n
+# Use multiple fallback servers for initial SNTP synchronization.
+CONFIG_LWIP_SNTP_MAX_SERVERS=4
