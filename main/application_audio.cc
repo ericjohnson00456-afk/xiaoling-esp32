@@ -202,8 +202,7 @@ void Application::BindAudioEventPublishers() {
             audio_service_.EnableWakeWordDetection(false);
         }
         Schedule([this]() {
-            const bool has_music =
-                intent_manager_.Contains(PlaybackIntentId::kMusic);
+            const bool has_music = intent_manager_.HasUnpausedMusic();
             const bool was_listening = GetDeviceState() == kDeviceStateListening;
             // URL 到达后先更新等待文案，真正出声后再切换到讲话状态。
             if (was_listening || GetDeviceState() == kDeviceStateSpeaking) {

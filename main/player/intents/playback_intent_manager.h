@@ -21,6 +21,10 @@ public:
   bool Reenter(PlaybackIntentId id);
   bool Pop(PlaybackIntentId id);
   bool Contains(PlaybackIntentId id) const;
+  // 只有未被用户暂停的音乐才参与语音会话的抢占和自动恢复策略。
+  bool HasUnpausedMusic() const {
+    return Contains(PlaybackIntentId::kMusic) && !music_.IsUserPaused();
+  }
   PlaybackIntentId Top() const;
   void Clear();
 

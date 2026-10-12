@@ -202,7 +202,7 @@ void Application::HandlePlaybackEvent(const PlaybackEvent& event) {
         exit_requested_.store(false);
         return;
     }
-    if (intent_manager_.Contains(PlaybackIntentId::kMusic)) {
+    if (intent_manager_.HasUnpausedMusic()) {
         // 音乐仍在栈中时，TTS 结束就是退出本轮录音并恢复音乐的屏障。
         ESP_LOGI(TAG, "TTS 播放结束，退出语音会话并恢复音乐");
         iat_utterance_active_ = false;
@@ -783,8 +783,7 @@ void Application::InitializeXiaolingConn() {
             strcmp(action->valuestring, "closed") == 0) {
             const bool natural_finish = strcmp(action->valuestring, "finish") == 0;
             Schedule([this, natural_finish]() {
-                const bool has_music =
-                    intent_manager_.Contains(PlaybackIntentId::kMusic);
+                const bool has_music = intent_manager_.HasUnpausedMusic();
                 const bool tts_active = active_tts_session_id_ != 0 ||
                                         pending_tts_session_id_ != 0 ||
                                         tts_waiting_for_playback_.load();
@@ -1337,7 +1336,7 @@ void Application::HandleStateChangedEvent() {
 
             // 音乐位于语音事件下层时停止录音；其他情况下仅在实时会话有效时
             // 保持 AEC 后的上行链路运行。
-            if (intent_manager_.Contains(PlaybackIntentId::kMusic) ||
+            if (intent_manager_.HasUnpausedMusic() ||
                 !session_controller_.KeepListeningDuringTts()) {
                 audio_service_.EnableAudioUpload(false);
 #ifdef CONFIG_LSPLATFORM
