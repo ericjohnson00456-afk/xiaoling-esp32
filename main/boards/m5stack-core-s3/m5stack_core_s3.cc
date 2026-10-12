@@ -515,7 +515,9 @@ public:
 
     virtual bool GetBatteryLevel(int &level, bool& charging, bool& discharging) override {
         static bool last_discharging = false;
-        charging = pmic_->IsCharging();
+        // AXP2101 会将充电完成单独报告，不再保持正在充电状态。
+        // 电池充满但仍连接 USB 电源时，继续显示充电闪电图标。
+        charging = pmic_->IsCharging() || pmic_->IsChargingDone();
         discharging = pmic_->IsDischarging();
         if (discharging != last_discharging) {
             power_save_timer_->SetEnabled(discharging);
