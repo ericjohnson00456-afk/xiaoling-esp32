@@ -213,8 +213,9 @@ private:
 #endif
 
     // ===== 3. Opus 编解码器与重采样器 =====
-    // Opus 编码用于上行，解码用于下行。
+    // Opus 编码用于上行，测试录音使用独立编码状态，解码用于下行。
     std::unique_ptr<OpusWbEncoder> opus_encoder_;
+    std::unique_ptr<OpusWbEncoder> audio_testing_encoder_;
     std::unique_ptr<OpusDecoderWrapper> opus_decoder_;
     // ADC 麦克风与参考声道分别重采样到 16 kHz，保留声道顺序供 AEC 使用。
     OpusResampler input_resampler_;
@@ -242,6 +243,9 @@ private:
     /* 固定长度的最新 Opus 窗口；生产者永不等待业务消费者。 */
     std::deque<std::unique_ptr<AudioStreamPacket>> opus_packet_queue_;
     std::deque<std::unique_ptr<AudioStreamPacket>> audio_testing_queue_;
+    size_t audio_testing_encode_pending_ = 0;
+    std::mutex audio_testing_pcm_mutex_;
+    std::vector<int16_t> audio_testing_pcm_buffer_;
     // AFE 输出的 PCM 待编码；下行解码或播放器 PCM 待送 DAC。
     std::deque<std::unique_ptr<AudioTask>> audio_encode_queue_;
     std::deque<std::unique_ptr<AudioTask>> audio_playback_queue_;
@@ -304,6 +308,7 @@ private:
     void AudioInputTask();
     void AudioOutputTask();
     void OpusCodecTask();
+    void CaptureWakeInputForTesting(const std::vector<int16_t>& data);
     void ResetPlayerPlaybackState(bool clear_suspended_queue);
 #if CONFIG_USE_MICRO_WAKE_WORD
     void ProcessedWakeTask();

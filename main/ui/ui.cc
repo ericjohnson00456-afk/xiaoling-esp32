@@ -287,6 +287,12 @@ void SetMusicTrack(MusicTrack track) {
     });
 }
 
+void SetMusicPaused(bool paused) {
+    UiManager::GetInstance().Dispatch([paused]() {
+        HomePresenter::GetInstance().SetMusicPaused(paused);
+    });
+}
+
 void SetAlarmActive(bool active) {
     UiManager::GetInstance().Dispatch([active]() {
         HomePresenter::GetInstance().SetAlarmActive(active);

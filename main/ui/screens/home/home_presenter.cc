@@ -219,9 +219,16 @@ void HomePresenter::SetMusicTrack(MusicTrack track) {
     RenderMusicTrack();
 }
 
+void HomePresenter::SetMusicPaused(bool paused) {
+    music_paused_ = paused;
+    RenderMusicTrack();
+}
+
 void HomePresenter::RenderMusicTrack() {
     if (view_ != nullptr) {
-        view_->SetMusicTrack(music_track_, standby_ && !music_track_.name.empty());
+        view_->SetMusicTrack(
+            music_track_,
+            standby_ && !music_paused_ && !music_track_.name.empty());
     }
 }
 
@@ -324,7 +331,7 @@ void HomePresenter::SetBanners(std::vector<std::string> texts, uint32_t interval
         banner_texts_ = std::move(texts);
         banner_index_ = 0;
         has_banners = !banner_texts_.empty();
-        if (has_banners && music_track_.name.empty() &&
+        if (has_banners && (music_paused_ || music_track_.name.empty()) &&
             DeviceStatus::GetState() == kDeviceStateIdle) {
             first_text = banner_texts_[banner_index_];
             banner_index_ = (banner_index_ + 1) % banner_texts_.size();
@@ -374,7 +381,7 @@ void HomePresenter::OnBannerTick() {
         // 歌曲名称占用待命内容区域时暂停 Banner。这里在 UI 队列中再次
         // 判断，避免定时器投递后、命令执行前恰好发生曲目切换。
         if (home.view_ == nullptr || !home.standby_ ||
-            !home.music_track_.name.empty() ||
+            (!home.music_paused_ && !home.music_track_.name.empty()) ||
             DeviceStatus::GetState() != kDeviceStateIdle) {
             return;
         }

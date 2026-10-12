@@ -148,6 +148,8 @@ void AudioService::Initialize(AudioCodec* codec) {
     /* Setup the audio codec */
     opus_decoder_ = std::make_unique<OpusDecoderWrapper>(codec->output_sample_rate(), 1, OPUS_FRAME_DURATION_MS);
     opus_encoder_ = std::make_unique<OpusWbEncoder>(16000, 1, OPUS_FRAME_DURATION_MS);
+    audio_testing_encoder_ =
+        std::make_unique<OpusWbEncoder>(16000, 1, OPUS_FRAME_DURATION_MS);
 
     if (codec->input_sample_rate() != 16000) {
         input_resampler_.Configure(codec->input_sample_rate(), 16000);
@@ -360,10 +362,15 @@ void AudioService::Stop() {
     speaker_output_active_.store(false);
     SetWakeInputFromProcessor(false);
 #endif
+    {
+        std::lock_guard<std::mutex> testing_lock(audio_testing_pcm_mutex_);
+        audio_testing_pcm_buffer_.clear();
+    }
     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
     audio_upload_enabled_ = false;
     ++upload_generation_;
     audio_encode_queue_.clear();
+    audio_testing_encode_pending_ = 0;
     opus_packet_queue_.clear();
     audio_decode_queue_.clear();
     audio_playback_queue_.clear();
@@ -423,7 +430,7 @@ bool AudioService::ReadAudioData(std::vector<int16_t>& data, int sample_rate, in
     }
 
     // Amplify the microphone before it is split to the wake-word and AFE pipelines.
-    constexpr int32_t kMicPcmGain = 3;
+    constexpr int32_t kMicPcmGain = 5;
     const size_t input_channels = codec_->input_channels();
     for (size_t i = 0; i < data.size(); i += input_channels) {
         const int32_t amplified = static_cast<int32_t>(data[i]) * kMicPcmGain;
@@ -441,22 +448,12 @@ bool AudioService::ReadAudioData(std::vector<int16_t>& data, int sample_rate, in
 void AudioService::AudioInputTask() {
     std::vector<int16_t> wake_pending;
     std::vector<int16_t> processor_pending;
-    std::vector<int16_t> testing_pending;
     while (!service_stopped_.load()) {
         /* I2S input and synchronous AFE/AEC feed can form a continuously-ready
          * loop while full-duplex upload is active. Block for one scheduler tick
          * on every iteration so CPU0's Idle task and lower-priority application
          * work continue to run even when DSP processing is saturated. */
         vTaskDelay(kAudioInputYieldTicks);
-
-        const bool testing_running = audio_testing_running_.load();
-        if (testing_running) {
-            if (audio_testing_queue_.size() >= AUDIO_TESTING_MAX_DURATION_MS / OPUS_FRAME_DURATION_MS) {
-                ESP_LOGW(TAG, "Audio testing queue is full, stopping audio testing");
-                EnableAudioTesting(false);
-                continue;
-            }
-        } else testing_pending.clear();
 
         const bool wake_running = wake_word_running_.load();
 #if CONFIG_USE_MICRO_WAKE_WORD
@@ -471,9 +468,8 @@ void AudioService::AudioInputTask() {
         const size_t wake_samples = wake_running && !use_processed_wake
             ? wake_word_->GetFeedSize() : 0;
         const size_t processor_samples = audio_processor_->GetFeedSize();
-        const size_t testing_samples = testing_running ? OPUS_FRAME_DURATION_MS * 16000 / 1000 : 0;
         size_t samples = 0;
-        for (const size_t feed_size : {wake_samples, processor_samples, testing_samples}) {
+        for (const size_t feed_size : {wake_samples, processor_samples}) {
             if (feed_size > 0 && (samples == 0 || feed_size < samples)) samples = feed_size;
         }
         if (samples == 0) {
@@ -487,17 +483,6 @@ void AudioService::AudioInputTask() {
         }
 
         const size_t channels = codec_->input_channels();
-        if (testing_samples > 0 && audio_testing_running_.load()) {
-            for (size_t i = 0; i < data.size(); i += channels) {
-                testing_pending.push_back(data[i]);
-            }
-            while (testing_pending.size() >= testing_samples) {
-                std::vector<int16_t> frame(testing_pending.begin(), testing_pending.begin() + testing_samples);
-                testing_pending.erase(testing_pending.begin(), testing_pending.begin() + testing_samples);
-                PushTaskToEncodeQueue(kAudioTaskTypeEncodeToTestingQueue, std::move(frame));
-            }
-        }
-
         if (processor_samples > 0) {
             processor_pending.insert(processor_pending.end(), data.begin(), data.end());
             const size_t processor_frame_size = processor_samples * channels;
@@ -533,12 +518,63 @@ void AudioService::AudioInputTask() {
                                            wake_pending.begin() + wake_frame_size);
                 wake_pending.erase(wake_pending.begin(),
                                    wake_pending.begin() + wake_frame_size);
+                CaptureWakeInputForTesting(frame);
                 wake_word_->Feed(frame);
             }
         }
     }
 
     ESP_LOGW(TAG, "Audio input task stopped");
+}
+
+// 测试录音只从真正送入唤醒模型的 PCM 旁路取样。唤醒帧长可能
+// 不是 20 ms，这里重新分块为 Opus-WB 要求的 320 样本。
+void AudioService::CaptureWakeInputForTesting(const std::vector<int16_t>& data) {
+    if (!audio_testing_running_.load() || data.empty()) {
+        return;
+    }
+
+    constexpr size_t kTestingFrameSamples =
+        OPUS_FRAME_DURATION_MS * 16000 / 1000;
+    constexpr size_t kMaxTestingFrames =
+        AUDIO_TESTING_MAX_DURATION_MS / OPUS_FRAME_DURATION_MS;
+    bool testing_full = false;
+    {
+        std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+        testing_full =
+            audio_testing_queue_.size() + audio_testing_encode_pending_ >=
+            kMaxTestingFrames;
+    }
+    if (testing_full) {
+        ESP_LOGW(TAG, "Audio testing queue is full, stopping audio testing");
+        EnableAudioTesting(false);
+        return;
+    }
+
+    std::vector<std::vector<int16_t>> frames;
+    {
+        std::lock_guard<std::mutex> lock(audio_testing_pcm_mutex_);
+        if (!audio_testing_running_.load()) {
+            return;
+        }
+        audio_testing_pcm_buffer_.insert(audio_testing_pcm_buffer_.end(),
+                                         data.begin(), data.end());
+        while (audio_testing_pcm_buffer_.size() >= kTestingFrameSamples) {
+            frames.emplace_back(audio_testing_pcm_buffer_.begin(),
+                                audio_testing_pcm_buffer_.begin() +
+                                    kTestingFrameSamples);
+            audio_testing_pcm_buffer_.erase(
+                audio_testing_pcm_buffer_.begin(),
+                audio_testing_pcm_buffer_.begin() + kTestingFrameSamples);
+        }
+    }
+    for (auto& frame : frames) {
+        if (!audio_testing_running_.load()) {
+            break;
+        }
+        PushTaskToEncodeQueue(kAudioTaskTypeEncodeToTestingQueue,
+                              std::move(frame));
+    }
 }
 
 // ============================================================================
@@ -561,6 +597,7 @@ void AudioService::ProcessedWakeTask() {
         lock.unlock();
 
         if (wake_uses_processor_output_.load() && IsWakeWordRunning()) {
+            CaptureWakeInputForTesting(data);
             wake_word_->Feed(data);
         }
         // 队列为空时上面的条件变量会阻塞；队列不为空时直接连续消费，
@@ -830,6 +867,10 @@ void AudioService::OpusCodecTask() {
             auto packet = std::make_unique<AudioStreamPacket>();
             packet->frame_duration = OPUS_FRAME_DURATION_MS;
             packet->sample_rate = 16000;
+            const bool testing_packet =
+                task->type == kAudioTaskTypeEncodeToTestingQueue;
+            auto* encoder = testing_packet ? audio_testing_encoder_.get()
+                                           : opus_encoder_.get();
 #ifdef CONFIG_LSPLATFORM
             const bool raw_uplink = task->type == kAudioTaskTypeEncodeToOpusQueue &&
                                     std::strcmp(XiaolingConfig::kUplinkAudioEncoding, "raw") == 0;
@@ -842,11 +883,21 @@ void AudioService::OpusCodecTask() {
                     packet->payload[i * 2 + 1] = static_cast<uint8_t>(sample >> 8);
                 }
             }
-            if (!raw_uplink && !opus_encoder_->Encode(std::move(task->pcm), packet->payload)) {
+            if (!raw_uplink &&
+                (encoder == nullptr ||
+                 !encoder->Encode(std::move(task->pcm), packet->payload))) {
 #else
-            if (!opus_encoder_->Encode(std::move(task->pcm), packet->payload)) {
+            if (encoder == nullptr ||
+                !encoder->Encode(std::move(task->pcm), packet->payload)) {
 #endif // CONFIG_LSPLATFORM
                 ESP_LOGE(TAG, "Failed to encode audio");
+                if (testing_packet) {
+                    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+                    if (audio_testing_encode_pending_ > 0) {
+                        --audio_testing_encode_pending_;
+                    }
+                    audio_queue_cv_.notify_all();
+                }
                 continue;
             }
 
@@ -873,6 +924,10 @@ void AudioService::OpusCodecTask() {
             } else if (task->type == kAudioTaskTypeEncodeToTestingQueue) {
                 std::lock_guard<std::mutex> lock(audio_queue_mutex_);
                 audio_testing_queue_.push_back(std::move(packet));
+                if (audio_testing_encode_pending_ > 0) {
+                    --audio_testing_encode_pending_;
+                }
+                audio_queue_cv_.notify_all();
             }
             lock.lock();
         }
@@ -937,6 +992,12 @@ void AudioService::PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t
                audio_encode_queue_.size() < MAX_ENCODE_TASKS_IN_QUEUE;
     });
     if (service_stopped_) return;
+    if (type == kAudioTaskTypeEncodeToTestingQueue) {
+        if (!audio_testing_running_.load()) {
+            return;
+        }
+        ++audio_testing_encode_pending_;
+    }
     audio_encode_queue_.push_back(std::move(task));
     audio_queue_cv_.notify_all();
 }
@@ -1359,17 +1420,53 @@ bool AudioService::SupportsAec() const {
 #endif
 }
 
-// 录音测试从增益处理后的麦克风取帧，停止时把测试 Opus 送去回放。
+// 录音测试从实际送入唤醒模型的 PCM 取帧，停止时把独立编码的
+// 测试 Opus 送去回放。
 void AudioService::EnableAudioTesting(bool enable) {
     ESP_LOGI(TAG, "%s audio testing", enable ? "Enabling" : "Disabling");
     if (enable) {
+        if (audio_testing_running_.load()) {
+            return;
+        }
+        {
+            std::lock_guard<std::mutex> lock(audio_testing_pcm_mutex_);
+            audio_testing_pcm_buffer_.clear();
+        }
+        {
+            std::unique_lock<std::mutex> lock(audio_queue_mutex_);
+            audio_queue_cv_.wait(lock, [this]() {
+                return service_stopped_ || audio_testing_encode_pending_ == 0;
+            });
+            audio_testing_queue_.clear();
+        }
+        if (audio_testing_encoder_ != nullptr) {
+            audio_testing_encoder_->ResetState();
+        }
         audio_testing_running_.store(true);
     } else {
-        audio_testing_running_.store(false);
-        /* Copy audio_testing_queue_ to audio_decode_queue_ */
-        std::lock_guard<std::mutex> lock(audio_queue_mutex_);
-        audio_decode_queue_ = std::move(audio_testing_queue_);
-        audio_queue_cv_.notify_all();
+        if (!audio_testing_running_.exchange(false)) {
+            return;
+        }
+        {
+            std::lock_guard<std::mutex> lock(audio_testing_pcm_mutex_);
+            audio_testing_pcm_buffer_.clear();
+        }
+        std::deque<std::unique_ptr<AudioStreamPacket>> testing_packets;
+        {
+            std::unique_lock<std::mutex> lock(audio_queue_mutex_);
+            audio_queue_cv_.wait(lock, [this]() {
+                return service_stopped_ || audio_testing_encode_pending_ == 0;
+            });
+            testing_packets = std::move(audio_testing_queue_);
+        }
+        if (opus_decoder_ != nullptr) {
+            opus_decoder_->ResetState();
+        }
+        {
+            std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+            audio_decode_queue_ = std::move(testing_packets);
+            audio_queue_cv_.notify_all();
+        }
     }
 }
 

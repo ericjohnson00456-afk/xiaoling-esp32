@@ -34,6 +34,12 @@ void Application::InitializeSdCard() {
                 return;
             }
             music_service.OnCardRemoved();
+            Application::GetInstance().Schedule([]() {
+                Application::GetInstance()
+                    .GetIntentManager()
+                    .Music()
+                    .OnTfCardRemoved();
+            });
             if (!music_service.WaitForFileAccessToStop(12000)) {
                 ESP_LOGW(TAG, "拔卡后等待 TF 卡扫描停止超时");
             }

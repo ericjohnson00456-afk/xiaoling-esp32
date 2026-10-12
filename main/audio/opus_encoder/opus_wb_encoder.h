@@ -20,6 +20,7 @@ public:
     bool Encode(std::vector<int16_t>&& pcm, std::vector<uint8_t>& opus);
     void Encode(std::vector<int16_t>&& pcm,
                 std::function<void(std::vector<uint8_t>&& opus)> handler);
+    void ResetState();
 
 private:
     static constexpr int kMaxPacketBytes = 1000;

@@ -27,6 +27,8 @@ public:
   void ReturnToStandby();
   // 用户主动暂停时禁止 Intent 自动恢复；清除后恢复当前列表索引。
   void SetUserPaused(bool paused);
+  // TF 卡拔出时终止本地音乐 Intent，避免后续交互结束后恢复失效曲目。
+  void OnTfCardRemoved();
   void Exit();
 
 private:
@@ -54,5 +56,6 @@ private:
   std::vector<std::string> pending_list_;
   std::vector<MusicTrack> pending_tracks_;
   std::size_t pending_start_index_ = 0;
+  MusicSource source_ = MusicSource::kUnknown;
   bool user_paused_ = false;
 };

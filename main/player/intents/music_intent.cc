@@ -44,6 +44,8 @@ bool MusicIntent::SubmitKuwoList(std::vector<MusicTrack> tracks) {
     ClearPendingList();
     return false;
   }
+  source_ = MusicSource::kKuwoOnline;
+  Ui::SetMusicPaused(false);
   ReturnToStandby();
   ESP_LOGI(kTag, "酷我音乐列表已排队，等待当前 TTS 播放完成");
   return true;
@@ -62,6 +64,8 @@ bool MusicIntent::SubmitTfCardList(std::vector<MusicTrack> tracks,
     ClearPendingList();
     return false;
   }
+  source_ = MusicSource::kTfCard;
+  Ui::SetMusicPaused(false);
   ReturnToStandby();
   ESP_LOGI(kTag, "TF 卡音乐列表已排队，从第 %u 首开始播放",
            static_cast<unsigned>(effective_start_index));
@@ -78,6 +82,8 @@ bool MusicIntent::SubmitUrlList(std::vector<std::string> urls) {
     ClearPendingList();
     return false;
   }
+  source_ = MusicSource::kUnknown;
+  Ui::SetMusicPaused(false);
   ReturnToStandby();
   ESP_LOGI(kTag, "音乐 URL 列表已排队，等待当前 TTS 播放完成");
   return true;
@@ -112,6 +118,15 @@ void MusicIntent::SetUserPaused(bool paused) {
   if (should_resume && intent_manager_->Top() == PlaybackIntentId::kMusic) {
     OnResumed();
   }
+  Ui::SetMusicPaused(paused);
+}
+
+void MusicIntent::OnTfCardRemoved() {
+  if (source_ != MusicSource::kTfCard) {
+    return;
+  }
+  ESP_LOGI(kTag, "TF 卡已拔出，退出本地音乐事件");
+  Exit();
 }
 
 void MusicIntent::SetPendingList(PendingListType type,
@@ -251,6 +266,8 @@ void MusicIntent::OnResumed() {
 void MusicIntent::OnExit() {
   app_->audio_player_.ClearMusicList();
   ClearPendingList();
+  source_ = MusicSource::kUnknown;
   user_paused_ = false;
+  Ui::SetMusicPaused(false);
   ESP_LOGI(kTag, "音乐事件退出，播放列表已清除");
 }

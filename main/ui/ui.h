@@ -83,6 +83,8 @@ void SetEmotion(std::string emotion);
 void ShowEmotionOnce(std::string emotion);
 // 保存当前曲目；首页仅在待命状态显示音乐图标和歌曲名。空曲目表示清除。
 void SetMusicTrack(MusicTrack track);
+// 用户主动暂停时隐藏歌曲栏，但保留曲目信息以便恢复播放。
+void SetMusicPaused(bool paused);
 // 在 Home 页电池图标旁显示倒计时运行标记。
 void SetAlarmActive(bool active);
 void ShowAlarmRing(const AlarmSnapshot& alarm);

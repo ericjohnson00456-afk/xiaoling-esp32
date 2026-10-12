@@ -81,3 +81,11 @@ void OpusWbEncoder::Encode(
         input_buffer_.erase(input_buffer_.begin(), input_buffer_.begin() + frame_size_);
     }
 }
+
+void OpusWbEncoder::ResetState() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    input_buffer_.clear();
+    if (encoder_ != nullptr) {
+        opus_encoder_ctl(encoder_, OPUS_RESET_STATE);
+    }
+}

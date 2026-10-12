@@ -38,6 +38,7 @@ public:
     void UpdateBattery();
     void SetStatus(std::string status, bool standby = false);
     void SetMusicTrack(MusicTrack track);
+    void SetMusicPaused(bool paused);
     void SetTime(std::string time);
     void SetDuplexMode(DuplexMode mode);
     void SetDuplexVisible(bool visible);
@@ -83,6 +84,7 @@ private:
     bool battery_charging_ = false;
     std::string status_text_;
     MusicTrack music_track_;
+    bool music_paused_ = false;
     bool standby_ = false;
     std::string time_text_;
     DuplexMode duplex_mode_ = DuplexMode::kHalfDuplex;

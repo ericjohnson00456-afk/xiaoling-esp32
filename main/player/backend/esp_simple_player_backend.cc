@@ -19,6 +19,7 @@
 #include <cerrno>
 #include <array>
 #include <limits>
+#include <memory>
 #include <strings.h>
 #include <sys/socket.h>
 #include <utility>
@@ -59,7 +60,7 @@ constexpr uint64_t kTtsPcmStallTimeoutUs = 5ULL * 1000ULL * 1000ULL;
 // 稀疏的实时 TTS 数据一到达就返回部分正文，同时保留 GMF 对请求头和连接阶段
 // 的默认超时设置。
 constexpr int kStreamingHttpBodyReadTimeoutMs = 50;
-constexpr size_t kPlayerCommandStackSize = 4096;
+constexpr size_t kPlayerCommandStackSize = 8 * 1024;
 // AudioPlayer 的控制、网络拉流和解码任务统一使用优先级 8。
 constexpr UBaseType_t kPlayerCommandPriority = 8;
 constexpr UBaseType_t kPlayerInputPriority = 8;
@@ -177,7 +178,22 @@ int EspSimplePlayerBackend::ConfigureInputIo(esp_asp_handle_t handle, void* ctx)
     if (input_tag == nullptr || strcasecmp(input_tag, "io_embed_flash") != 0) {
         return ESP_GMF_ERR_OK;
     }
-    std::array<embed_item_info_t, Resource::kToneCount> items{};
+    // 300 项索引约占 2.4 KiB，不能放在 player_ctl 的调用栈上。
+    // 优先放入 PSRAM；无 PSRAM 的板型回退到普通堆。
+    auto* raw_items = static_cast<embed_item_info_t*>(heap_caps_calloc(
+        Resource::kToneCount, sizeof(embed_item_info_t),
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    if (raw_items == nullptr) {
+        raw_items = static_cast<embed_item_info_t*>(heap_caps_calloc(
+            Resource::kToneCount, sizeof(embed_item_info_t), MALLOC_CAP_8BIT));
+    }
+    if (raw_items == nullptr) {
+        ESP_LOGE(TAG, "分配 Tone 索引失败: count=%u",
+                 static_cast<unsigned>(Resource::kToneCount));
+        return ESP_GMF_ERR_MEMORY_LACK;
+    }
+    std::unique_ptr<embed_item_info_t, decltype(&heap_caps_free)> items(
+        raw_items, heap_caps_free);
     for (uint16_t id = 0; id < Resource::kToneCount; ++id) {
         ResourceData resource;
         if (!Resource::GetTone(id, resource)) {
@@ -188,13 +204,13 @@ int EspSimplePlayerBackend::ConfigureInputIo(esp_asp_handle_t handle, void* ctx)
                      static_cast<unsigned>(id), static_cast<unsigned>(resource.size));
             return ESP_GMF_ERR_INVALID_ARG;
         }
-        items[id] = {
+        items.get()[id] = {
             .address = resource.address,
             .size = static_cast<int>(resource.size),
         };
     }
     return esp_gmf_io_embed_flash_set_context(
-        input, items.data(), static_cast<int>(items.size()));
+        input, items.get(), static_cast<int>(Resource::kToneCount));
 }
 
 EspSimplePlayerBackend::~EspSimplePlayerBackend() {
@@ -657,6 +673,9 @@ void EspSimplePlayerBackend::CommandLoop() {
             switch (command.type) {
                 case CommandType::kPlay:
                     DoPlay(command.request);
+                    ESP_LOGI(TAG, "播放器控制任务最小剩余栈: %u bytes",
+                             static_cast<unsigned>(
+                                 uxTaskGetStackHighWaterMark(nullptr)));
                     break;
                 case CommandType::kPause: {
                     const bool result = DoPause();
