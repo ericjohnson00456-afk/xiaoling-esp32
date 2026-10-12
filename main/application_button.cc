@@ -13,16 +13,22 @@
 
 namespace {
 constexpr char kTag[] = "ApplicationButton";
+constexpr uint8_t kFactoryResetClickCount = 8;
 // 设备尚未取得角色配置时，播放通用配网提示音。
 constexpr uint16_t kProvisioningToneId = 70;
 // 设备已取得角色配置时，播放设备配置二维码提示音。
 constexpr uint16_t kDeviceConfigToneId = 104;
 }
 
-// 板级按键回调可能运行在非应用主任务中，这里只投递短击事件，
-// 具体业务统一回到 Application 主任务串行执行。
+// 板级按键回调可能运行在非应用主任务中，常规短击业务投递到
+// Application 主任务串行执行；激活期间的恢复出厂例外。
 void Application::HandleButtonClick(uint8_t click_count) {
     if (GetDeviceState() == kDeviceStateActivating) {
+        // 激活请求会阻塞 Application 主任务，不能等待调度队列。
+        if (click_count >= kFactoryResetClickCount) {
+            StartFactoryReset();
+            return;
+        }
         ESP_LOGI(kTag, "激活期间忽略 %u 击按键",
                  static_cast<unsigned>(click_count));
         return;
@@ -74,6 +80,10 @@ void Application::ProcessButtonLongPress() {
 void Application::ProcessButtonClick(uint8_t click_count) {
     const auto state = GetDeviceState();
     if (state == kDeviceStateActivating) {
+        if (click_count >= kFactoryResetClickCount) {
+            StartFactoryReset();
+            return;
+        }
         ESP_LOGI(kTag, "激活期间忽略 %u 击按键",
                  static_cast<unsigned>(click_count));
         return;
@@ -149,7 +159,7 @@ void Application::ProcessButtonClick(uint8_t click_count) {
             break;
         default:
             // 八击及以上：恢复出厂设置。六击和七击当前不定义功能。
-            if (click_count >= 8) {
+            if (click_count >= kFactoryResetClickCount) {
                 StartFactoryReset();
             }
             break;
