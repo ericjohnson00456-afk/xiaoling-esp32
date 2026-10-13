@@ -2,6 +2,9 @@
 #define AFE_AUDIO_PROCESSOR_H
 
 #include <esp_afe_sr_models.h>
+#include <esp_ns.h>
+#include <esp_agc.h>
+#include <esp_vad.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/event_groups.h>
@@ -42,8 +45,17 @@ private:
     int frame_samples_ = 0;
     bool is_speaking_ = false;
     std::vector<int16_t> output_buffer_;
+    // ESP-SR 2.2 的 VC AFE 不安全地接入 WebRTC NS；在 AEC 输出后独立处理。
+    ns_handle_t output_ns_ = nullptr;
+    // 与会话 VAD 分离，在 NS 后判断人声，避免 AEC 模式关闭 VAD 时丢失判断。
+    vad_handle_t gain_vad_ = nullptr;
+    void* output_agc_ = nullptr;
+    float agc_mix_ = 0.0f;
+    uint32_t agc_frames_ = 0;
 
     void AudioProcessorTask();
+    void EmitOutput(std::vector<int16_t>&& data);
+    void ApplySpeechAgc(std::vector<int16_t>& data);
 };
 
 #endif

@@ -31,8 +31,8 @@
  * 2. 播放 PCM/下行 Opus -> PCM -> DAC
  *
  * Application 持有唯一实例。Initialize() 装配 codec 和算法，Start() 后
- * 采集、算法和 Opus 编码持续运行；OTA 可用 Stop()/Start() 暂停服务。
- * EnableAudioUpload() 只决定网络是否消费新 Opus。
+ * 采集和算法持续运行；OTA 可用 Stop()/Start() 暂停服务。
+ * EnableAudioUpload() 控制上行 Opus 编码/消费，不停止 AFE/NS/唤醒。
  */
 
 // lschat 的 opus-wb 使用 20 ms 分包，每包包含 320 个 16 kHz 样本。
@@ -48,12 +48,11 @@
  * on this board. Short clips bypass the gate when the stream finishes. */
 #define MAX_PLAYER_PLAYBACK_TASKS_IN_QUEUE 192
 #define MAX_DECODE_PACKETS_IN_QUEUE (2400 / OPUS_FRAME_DURATION_MS)
-/* AudioService 始终生产 Opus，只保留最近 2.4 秒，业务未上报时覆盖旧包。 */
+/* 上报期间只保留最近 2.4 秒 Opus；关闭上报时不进行无消费者的编码。 */
 #define MAX_OPUS_PACKETS_IN_QUEUE (2400 / OPUS_FRAME_DURATION_MS)
-// Wake inference must never build a stale backlog while AEC/TTS are active.
+// Wake inference must never build a stale backlog or block ADC acquisition.
 // Keep a short scheduling buffer; overflow drops the oldest frame.
-// AFE 输出和唤醒推理运行在同一核心，允许短时调度抖动积累约 160 ms
-// 音频，避免一次 AEC/播放器抢占就立即丢弃唤醒帧。
+// 允许短时调度抖动积累约 160 ms 音频，避免短时抢占就立即丢弃唤醒帧。
 #define MAX_PROCESSED_WAKE_FRAMES_IN_QUEUE 8
 #define AUDIO_TESTING_MAX_DURATION_MS 10000
 
@@ -68,7 +67,7 @@ struct AudioServiceCallbacks {
 
 // 上行 Opus 是实时数据通知，不经过 AppEvent，也不属于音频业务事件。
 struct AudioServiceUploadCallbacks {
-    /* 只在业务打开音频上报后通知；Opus 的生产本身不受此开关影响。 */
+    /* 只在业务打开音频上报并产生新 Opus 后通知。 */
     std::function<void(void)> on_opus_packet_available;
 };
 
@@ -84,7 +83,6 @@ struct AudioServiceOutputCallbacks {
 
 enum AudioTaskType {
     kAudioTaskTypeEncodeToOpusQueue,
-    kAudioTaskTypeEncodeToTestingQueue,
     kAudioTaskTypeDecodeToPlaybackQueue,
     kAudioTaskTypePlayerToPlaybackQueue,
 };
@@ -99,6 +97,8 @@ struct AudioTask {
     size_t player_pcm_samples = 0;
     uint32_t upload_generation = 0;
     AudioOutputEvent player_output;
+    // A/B 回放专用：输出任务临时使用最大音量，播完/取消后恢复。
+    bool testing_playback = false;
 
     AudioTask() = default;
     ~AudioTask();
@@ -198,22 +198,22 @@ private:
     // 唤醒模型列表传给 AFE/WakeWord；具体来源由资源装载路径决定。
     srmodel_list_t* models_list_ = nullptr;
 #if CONFIG_USE_MICRO_WAKE_WORD
-    // AEC 输出到唤醒推理任务的短队列；切输入源时清空。
+    // 唤醒始终消费处理器输出（BOX3 为 AEC -> NS -> AGC），不走原始 MIC。
     TaskHandle_t processed_wake_task_handle_ = nullptr;
     std::mutex processed_wake_mutex_;
     std::condition_variable processed_wake_cv_;
-    std::deque<std::vector<int16_t>> processed_wake_queue_;
-    // true 时 MicroWakeWord 消费 AEC 输出，false 时采集任务直接喂麦克风 PCM。
-    std::atomic_bool wake_uses_processor_output_{false};
-    // 扬声器输出期间使用 AEC PCM；最后一块 PCM 送出后延迟切回原始 MIC，
-    // 覆盖 I2S DMA 中尚未播放完的尾音。
-    esp_timer_handle_t wake_input_idle_timer_ = nullptr;
-    std::atomic_bool speaker_output_active_{false};
-    std::atomic<int64_t> speaker_output_last_activity_us_{0};
+    struct WakeInputFrame {
+        std::vector<int16_t> pcm;
+        uint32_t generation;
+    };
+    std::deque<WakeInputFrame> processed_wake_queue_;
+    std::atomic<uint32_t> wake_input_generation_{0};
+    // 推理和启停串行化；不在持有队列锁时等待此锁。
+    std::mutex wake_inference_mutex_;
 #endif
 
     // ===== 3. Opus 编解码器与重采样器 =====
-    // Opus 编码用于上行，测试录音使用独立编码状态，解码用于下行。
+    // 上行和本地对比测试使用参数相同但状态独立的 Opus 编码器；解码用于下行。
     std::unique_ptr<OpusWbEncoder> opus_encoder_;
     std::unique_ptr<OpusWbEncoder> audio_testing_encoder_;
     std::unique_ptr<OpusDecoderWrapper> opus_decoder_;
@@ -232,20 +232,33 @@ private:
     TaskHandle_t audio_input_task_handle_ = nullptr;
     TaskHandle_t audio_output_task_handle_ = nullptr;
     TaskHandle_t opus_codec_task_handle_ = nullptr;
+    TaskHandle_t audio_testing_task_handle_ = nullptr;
     // Opus 任务优先使用 PSRAM 栈；退出时选用匹配的 FreeRTOS 删除函数。
     bool opus_codec_task_stack_external_ = false;
     // ===== 5. 音频队列 =====
     // 共用 mutex/cv 保护以下编码、解码和播放队列及非原子状态。
     std::mutex audio_queue_mutex_;
     std::condition_variable audio_queue_cv_;
-    // 服务端 Opus 等待解码；编码后的上行 Opus 保留最新窗口；测试包用于回放。
+    // 服务端 Opus 等待解码；编码后的上行 Opus 保留最新窗口。
     std::deque<std::unique_ptr<AudioStreamPacket>> audio_decode_queue_;
     /* 固定长度的最新 Opus 窗口；生产者永不等待业务消费者。 */
     std::deque<std::unique_ptr<AudioStreamPacket>> opus_packet_queue_;
-    std::deque<std::unique_ptr<AudioStreamPacket>> audio_testing_queue_;
-    size_t audio_testing_encode_pending_ = 0;
+    // 测试模式保存实际送入云端编码器的 AFE/AEC PCM，最大 10 秒。
     std::mutex audio_testing_pcm_mutex_;
     std::vector<int16_t> audio_testing_pcm_buffer_;
+    struct TestingInputStats {
+        size_t samples = 0;
+        int32_t peak = 0;
+        int64_t sum = 0;
+        uint64_t square_sum = 0;
+    };
+    TestingInputStats audio_testing_mic_stats_;
+    TestingInputStats audio_testing_ref_stats_;
+    // 与 PCM/ADC 统计共用 audio_testing_pcm_mutex_；停止时冻结墙钟和溢出增量。
+    int64_t audio_testing_start_us_ = 0;
+    int64_t audio_testing_elapsed_us_ = 0;
+    int64_t audio_testing_input_overflows_start_ = -1;
+    int64_t audio_testing_input_overflows_ = -1;
     // AFE 输出的 PCM 待编码；下行解码或播放器 PCM 待送 DAC。
     std::deque<std::unique_ptr<AudioTask>> audio_encode_queue_;
     std::deque<std::unique_ptr<AudioTask>> audio_playback_queue_;
@@ -286,6 +299,7 @@ private:
     std::atomic_bool voice_detected_{false};
     std::atomic_bool wake_word_running_{false};
     std::atomic_bool audio_testing_running_{false};
+    std::atomic_bool audio_testing_processing_{false};
     // Start/Stop 控制采集、播放、Opus 服务循环的退出条件。
     std::atomic_bool service_stopped_{true};
     // 硬件支持时默认打开，可由会话策略切换。
@@ -295,7 +309,7 @@ private:
     AudioServiceCallbacks callbacks_;
     AudioServiceUploadCallbacks upload_callbacks_;
     AudioServiceOutputCallbacks output_callbacks_;
-    // 上报会话代数用于剔除跨会话编码帧；业务开关不控制编码任务。
+    // 上报会话代数用于剔除跨会话编码帧；开关不启停工作任务本身。
     uint32_t upload_generation_ = 0;
     bool audio_upload_enabled_ = false;
     // codec 空闲关电计时；新读写会按需重新打开对应方向。
@@ -308,15 +322,13 @@ private:
     void AudioInputTask();
     void AudioOutputTask();
     void OpusCodecTask();
-    void CaptureWakeInputForTesting(const std::vector<int16_t>& data);
+    void CaptureUplinkPcmForTesting(const std::vector<int16_t>& data);
+    void PrepareAudioTestingPlayback();
     void ResetPlayerPlaybackState(bool clear_suspended_queue);
 #if CONFIG_USE_MICRO_WAKE_WORD
     void ProcessedWakeTask();
-    void SetWakeInputFromProcessor(bool enable);
+    void QueueWakeFrame(std::vector<int16_t> data, uint32_t generation);
     void ClearProcessedWakeQueue();
-    void NotifySpeakerOutputStarted();
-    void NotifySpeakerOutputCompleted();
-    void HandleWakeInputIdleTimer();
 #endif
     void PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t>&& pcm);
     void SetDecodeSampleRate(int sample_rate, int frame_duration);

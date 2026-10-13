@@ -1,5 +1,10 @@
 #include "afe_audio_processor.h"
+#include "speech_agc_guard.h"
 #include <esp_log.h>
+#include <esp_heap_caps.h>
+#include <freertos/idf_additions.h>
+#include <algorithm>
+#include <cmath>
 
 #define PROCESSOR_RUNNING 0x01
 
@@ -53,9 +58,33 @@ void AfeAudioProcessor::Initialize(AudioCodec* codec, int frame_duration_ms, srm
         afe_config->afe_ns_mode = AFE_NS_MODE_NET;
     } else {
         afe_config->ns_init = false;
+#if CONFIG_SR_NSN_WEBRTC
+        // 此版本 VC AFE 的 WebRTC NS 初始化会解引用空接口。使用独立的
+        // 10 ms NS 放在 AEC 后，避免非线性降噪影响回声滤波器收敛。
+        output_ns_ = ns_pro_create(10, 1, 16000);
+        ESP_LOGI(TAG, "AEC 后置 WebRTC NS: %s, mode=medium, frame=10ms",
+                 output_ns_ != nullptr ? "enabled" : "allocation failed");
+#endif
     }
 
+    // AFE 内部 AGC 保持关闭，独立 AGC 位于 NS 后面。
     afe_config->agc_init = false;
+#if CONFIG_BOARD_TYPE_ESP_BOX_3
+    gain_vad_ = vad_create_with_param(VAD_MODE_1, 16000, 20, 60, 200);
+    output_agc_ = esp_agc_open(AGC_MODE_2, 16000);
+    if (gain_vad_ != nullptr && output_agc_ != nullptr) {
+        // 数字自适应增益，目标包络 -6 dBFS，内部 limiter 开启。
+        // 输出还会限制相对 NS PCM 的额外增益，并在非人声时旁路。
+        set_agc_config(output_agc_, 18, 1, 6);
+        ESP_LOGI(TAG, "NS 后人声 AGC: enabled, extra_gain<=12dB, limiter=on");
+    } else {
+        if (gain_vad_ != nullptr) vad_destroy(gain_vad_);
+        if (output_agc_ != nullptr) esp_agc_close(output_agc_);
+        gain_vad_ = nullptr;
+        output_agc_ = nullptr;
+        ESP_LOGW(TAG, "人声 AGC 初始化失败，保留 AEC/NS 输出");
+    }
+#endif
     afe_config->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
     afe_config->afe_perferred_core = 1;
     afe_config->afe_perferred_priority = kTaskPriority;
@@ -73,15 +102,32 @@ void AfeAudioProcessor::Initialize(AudioCodec* codec, int frame_duration_ms, srm
     afe_iface_ = esp_afe_handle_from_config(afe_config);
     afe_data_ = afe_iface_->create_from_config(afe_config);
     
-    // AFE 取帧任务和 AudioService 其他任务统一使用同一优先级。
-    xTaskCreatePinnedToCore([](void* arg) {
+    // 后置 NS 需要额外 DSP 栈；优先放入 PSRAM，保留内部 SRAM 给 DMA/网络。
+    const uint32_t stack_bytes =
+        (output_ns_ != nullptr || output_agc_ != nullptr) ? 16384 : 4096;
+    const BaseType_t result = xTaskCreatePinnedToCoreWithCaps([](void* arg) {
         auto this_ = (AfeAudioProcessor*)arg;
         this_->AudioProcessorTask();
-        vTaskDelete(NULL);
-    }, "audio_communication", 4096, this, kTaskPriority, NULL, kTaskCore);
+        vTaskDeleteWithCaps(nullptr);
+    }, "audio_communication", stack_bytes, this, kTaskPriority, nullptr, kTaskCore,
+       MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (result != pdPASS) {
+        ESP_LOGW(TAG, "AFE/NS PSRAM 栈分配失败，回退内部 SRAM");
+        xTaskCreatePinnedToCore([](void* arg) {
+            static_cast<AfeAudioProcessor*>(arg)->AudioProcessorTask();
+            vTaskDelete(nullptr);
+        }, "audio_communication", stack_bytes, this, kTaskPriority, nullptr, kTaskCore);
+    }
+    ESP_LOGI(TAG, "AFE/NS 取帧任务栈: %lu bytes", static_cast<unsigned long>(stack_bytes));
+#if CONFIG_BOARD_TYPE_ESP_BOX_3
+    ESP_LOGI(TAG, "BOX3 处理顺序: 前置 PCM x2 -> AEC -> NS -> 人声自适应 AGC");
+#endif
 }
 
 AfeAudioProcessor::~AfeAudioProcessor() {
+    if (gain_vad_ != nullptr) vad_destroy(gain_vad_);
+    if (output_agc_ != nullptr) esp_agc_close(output_agc_);
+    if (output_ns_ != nullptr) ns_destroy(output_ns_);
     if (afe_data_ != nullptr) {
         afe_iface_->destroy(afe_data_);
     }
@@ -125,7 +171,70 @@ void AfeAudioProcessor::OnVadStateChange(std::function<void(bool speaking)> call
     vad_state_change_callback_ = callback;
 }
 
+void AfeAudioProcessor::EmitOutput(std::vector<int16_t>&& data) {
+    constexpr size_t kNsFrameSamples = 160;
+    if (output_ns_ != nullptr && data.size() % kNsFrameSamples == 0) {
+        std::vector<int16_t> cleaned(data.size());
+        for (size_t offset = 0; offset < data.size(); offset += kNsFrameSamples) {
+            ns_process(output_ns_, data.data() + offset, cleaned.data() + offset);
+        }
+        data = std::move(cleaned);
+    }
+    ApplySpeechAgc(data);
+    output_callback_(std::move(data));
+}
+
+void AfeAudioProcessor::ApplySpeechAgc(std::vector<int16_t>& data) {
+    constexpr size_t kFrameSamples = 320;
+    constexpr size_t kAgcFrameSamples = 160;
+    if (output_agc_ == nullptr || gain_vad_ == nullptr ||
+        data.size() != kFrameSamples) return;
+
+    double input_power = 0.0;
+    for (const int16_t value : data) {
+        input_power += static_cast<double>(value) * value;
+    }
+    const double input_rms = std::sqrt(input_power / data.size());
+    const bool speech =
+        vad_process_with_trigger(gain_vad_, data.data()) == VAD_SPEECH &&
+        input_rms >= 64.0;  // 极低电平即使误判为人声也不额外放大。
+
+    std::vector<int16_t> gained(data.size());
+    for (size_t offset = 0; offset < data.size(); offset += kAgcFrameSamples) {
+        const int result = esp_agc_process(
+            output_agc_, data.data() + offset, gained.data() + offset,
+            kAgcFrameSamples, 16000);
+        if (result < 0) {
+            ESP_LOGW(TAG, "后置 AGC 处理失败: %d，保留 NS PCM", result);
+            return;
+        }
+    }
+
+    const float previous_mix = agc_mix_;
+    // VAD 已有 200 ms 尾音保持；非人声/极低电平帧在一帧内平滑回到
+    // 旁路，不再叠加慢回落，避免停顿段拖着高增益。
+    if (speech) {
+        agc_mix_ += (1.0f - agc_mix_) * 0.25f;
+    } else {
+        agc_mix_ = 0.0f;
+    }
+    SpeechAgcGuard::Apply(data, gained, previous_mix, agc_mix_);
+    if (++agc_frames_ % 300 == 0) {
+        const double output_rms = std::sqrt(SpeechAgcGuard::Power(data) / data.size());
+        const double input_db = input_rms > 0.0
+            ? 20.0 * std::log10(input_rms / 32768.0) : -120.0;
+        const double output_db = output_rms > 0.0
+            ? 20.0 * std::log10(output_rms / 32768.0) : -120.0;
+        ESP_LOGI(TAG,
+                 "人声 AGC: speech=%d, NS=%.1fdBFS, out=%.1fdBFS, "
+                 "gain=%.1fdB, mix=%.2f",
+                 speech ? 1 : 0, input_db, output_db,
+                 output_db - input_db, static_cast<double>(agc_mix_));
+    }
+}
+
 void AfeAudioProcessor::AudioProcessorTask() {
+    size_t processed_frames = 0;
     auto fetch_size = afe_iface_->get_fetch_chunksize(afe_data_);
     auto feed_size = afe_iface_->get_feed_chunksize(afe_data_);
     ESP_LOGI(TAG, "Audio communication task started, feed size: %d fetch size: %d",
@@ -143,6 +252,10 @@ void AfeAudioProcessor::AudioProcessorTask() {
                 ESP_LOGI(TAG, "Error code: %d", res->ret_value);
             }
             continue;
+        }
+        if (++processed_frames % 300 == 0) {
+            ESP_LOGI(TAG, "AFE/NS 最小剩余栈: %u bytes",
+                     static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
         }
 
         // VAD state change
@@ -166,12 +279,12 @@ void AfeAudioProcessor::AudioProcessorTask() {
             while (output_buffer_.size() >= frame_samples_) {
                 if (output_buffer_.size() == frame_samples_) {
                     // If buffer size equals frame size, move the entire buffer
-                    output_callback_(std::move(output_buffer_));
+                    EmitOutput(std::move(output_buffer_));
                     output_buffer_.clear();
                     output_buffer_.reserve(frame_samples_);
                 } else {
                     // If buffer size exceeds frame size, copy one frame and remove it
-                    output_callback_(std::vector<int16_t>(output_buffer_.begin(), output_buffer_.begin() + frame_samples_));
+                    EmitOutput(std::vector<int16_t>(output_buffer_.begin(), output_buffer_.begin() + frame_samples_));
                     output_buffer_.erase(output_buffer_.begin(), output_buffer_.begin() + frame_samples_);
                 }
             }

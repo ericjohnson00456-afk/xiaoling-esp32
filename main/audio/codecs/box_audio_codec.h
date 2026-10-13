@@ -6,6 +6,7 @@
 #include <esp_codec_dev.h>
 #include <esp_codec_dev_defaults.h>
 #include <mutex>
+#include <atomic>
 
 
 class BoxAudioCodec : public AudioCodec {
@@ -20,6 +21,10 @@ private:
     esp_codec_dev_handle_t output_dev_ = nullptr;
     esp_codec_dev_handle_t input_dev_ = nullptr;
     std::mutex data_if_mutex_;
+    // I2S0 只有一组 BOX 双工通道；ISR 统计放内部 RAM，不访问 PSRAM 对象。
+    static std::atomic<uint32_t> input_overflows_;
+    static bool IRAM_ATTR OnInputOverflow(i2s_chan_handle_t handle,
+                                         i2s_event_data_t* event, void* user_data);
 
     void CreateDuplexChannels(gpio_num_t mclk, gpio_num_t bclk, gpio_num_t ws, gpio_num_t dout, gpio_num_t din);
 
@@ -36,6 +41,9 @@ public:
     virtual void SetOutputVolume(int volume) override;
     virtual void EnableInput(bool enable) override;
     virtual void EnableOutput(bool enable) override;
+    virtual int64_t input_overflow_count() const override {
+        return input_overflows_.load(std::memory_order_relaxed);
+    }
     // ESP-BOX-3 gates the microphone in hardware. Re-open the ES7210 after the
     // mute latch is released so recording resumes without a board reset.
     bool ReinitializeInput();

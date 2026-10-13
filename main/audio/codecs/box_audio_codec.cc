@@ -6,6 +6,14 @@
 
 #define TAG "BoxAudioCodec"
 
+DRAM_ATTR std::atomic<uint32_t> BoxAudioCodec::input_overflows_{0};
+
+bool IRAM_ATTR BoxAudioCodec::OnInputOverflow(i2s_chan_handle_t,
+                                             i2s_event_data_t*, void*) {
+    input_overflows_.fetch_add(1, std::memory_order_relaxed);
+    return false;
+}
+
 BoxAudioCodec::BoxAudioCodec(void* i2c_master_handle, int input_sample_rate, int output_sample_rate,
     gpio_num_t mclk, gpio_num_t bclk, gpio_num_t ws, gpio_num_t dout, gpio_num_t din,
     gpio_num_t pa_pin, uint8_t es8311_addr, uint8_t es7210_addr, bool input_reference,
@@ -177,6 +185,9 @@ void BoxAudioCodec::CreateDuplexChannels(gpio_num_t mclk, gpio_num_t bclk, gpio_
 
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(tx_handle_, &std_cfg));
     ESP_ERROR_CHECK(i2s_channel_init_tdm_mode(rx_handle_, &tdm_cfg));
+    i2s_event_callbacks_t callbacks = {};
+    callbacks.on_recv_q_ovf = OnInputOverflow;
+    ESP_ERROR_CHECK(i2s_channel_register_event_callback(rx_handle_, &callbacks, nullptr));
     ESP_LOGI(TAG, "Duplex channels created");
 }
 
@@ -278,8 +289,13 @@ int BoxAudioCodec::Read(int16_t* dest, int samples) {
     // The mute button may re-open ES7210 while AudioService is active. Keep the
     // close/open sequence from racing an in-flight codec read.
     std::lock_guard<std::mutex> lock(data_if_mutex_);
-    if (input_enabled_) {
-        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_codec_dev_read(input_dev_, (void*)dest, samples * sizeof(int16_t)));
+    if (!input_enabled_) {
+        return 0;
+    }
+    const int result = esp_codec_dev_read(input_dev_, dest, samples * sizeof(int16_t));
+    if (result != ESP_CODEC_DEV_OK) {
+        ESP_LOGE(TAG, "Input read failed: %d", result);
+        return 0;
     }
     return samples;
 }

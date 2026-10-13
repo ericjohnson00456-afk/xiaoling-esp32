@@ -32,6 +32,8 @@ public:
         return AUDIO_CODEC_DMA_FRAME_NUM * sizeof(int32_t);
     }
     virtual bool InputData(std::vector<int16_t>& data);
+    // 累计硬件接收队列溢出事件；不支持统计的 codec 返回 -1。
+    virtual int64_t input_overflow_count() const { return -1; }
     virtual void Start();
 
     inline bool duplex() const { return duplex_; }

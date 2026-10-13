@@ -6,6 +6,7 @@
 #include <freertos/idf_additions.h>
 #include <algorithm>
 #include <climits>
+#include <cmath>
 #include <cstring>
 #include <cJSON.h>
 
@@ -51,17 +52,19 @@ constexpr UBaseType_t kAudioAfePriority = AfeAudioProcessor::kTaskPriority;
 #else
 constexpr UBaseType_t kAudioAfePriority = kAudioAlgorithmPriority;
 #endif
-// 每次采集周期都主动阻塞一个 tick，给 CPU0 的 Idle、AppEvent 和网络任务
-// 留出调度机会。AFE/AEC 的 feed 计算可能长于一个采集周期，500ms 才让出
-// 一次会让看门狗在连续 DSP 负载下无法得到调度。
+// I2S 无积压时会阻塞采集任务；有积压时仍需定期让 CPU0 Idle 获得调度。
+// 不能每个 10 ms 音频帧都额外等待一 tick（当前也是 10 ms），否则 DSP
+// 开销会使采集持续落后。100 ms 才主动让步，短暂延迟由 DMA 环覆盖。
+constexpr int64_t kAudioInputYieldIntervalUs = 100 * 1000;
 constexpr TickType_t kAudioInputYieldTicks = 1;
 
 #if CONFIG_USE_MICRO_WAKE_WORD
-// 唤醒推理不能和 ADC/AFE feed 共同挤占 CPU0；移到 CPU1 后与 AFE fetch
-// 和播放器任务按同优先级时间片运行。
+// 唤醒推理与 ADC feed 分核；优先级低于实时音频链。
+// IDF 浮点任务会自动绑定核心，因此不依赖 NO_AFFINITY 进行负载均衡。
 constexpr BaseType_t kProcessedWakeTaskCore = 1;
-// 最后一块 PCM 写入后继续使用 AEC 200 ms，覆盖 DAC DMA 中的扬声器尾音。
-constexpr int64_t kWakeInputPlaybackTailUs = 200 * 1000;
+// AFE/NS 和编码必须先获得调度，唤醒是有界旁路，不能反向拖慢上行。
+constexpr UBaseType_t kAudioWakePriority = kAudioAlgorithmPriority - 1;
+constexpr int64_t kWakeYieldIntervalUs = 50 * 1000;
 #endif
 
 #if CONFIG_USE_MICRO_WAKE_WORD
@@ -165,18 +168,14 @@ void AudioService::Initialize(AudioCodec* codec) {
     // 处理器（AFE/AEC 或直通）每输出一帧，可选地复制给唤醒旁路，原帧交给编码。
     audio_processor_->OnOutput([this](std::vector<int16_t>&& data) {
 #if CONFIG_USE_MICRO_WAKE_WORD
-        if (wake_uses_processor_output_.load() && IsWakeWordRunning()) {
-            std::lock_guard<std::mutex> lock(processed_wake_mutex_);
-            if (processed_wake_queue_.size() >= MAX_PROCESSED_WAKE_FRAMES_IN_QUEUE) {
-                processed_wake_queue_.pop_front();
-                static uint32_t dropped_frames = 0;
-                if ((++dropped_frames % 100) == 1) {
-                    ESP_LOGW(TAG, "Processed wake queue full, dropped frames: %lu",
-                             static_cast<unsigned long>(dropped_frames));
-                }
-            }
-            processed_wake_queue_.push_back(data);
-            processed_wake_cv_.notify_one();
+        const uint32_t wake_generation = wake_input_generation_.load();
+#endif
+        // 测试模式从云端编码器的同一输入点旁路取样，保证 A/B 对比包含
+        // AFE/AEC 的影响，而不是录到空闲时的原始麦克风旁路。
+        CaptureUplinkPcmForTesting(data);
+#if CONFIG_USE_MICRO_WAKE_WORD
+        if (IsWakeWordRunning()) {
+            QueueWakeFrame(data, wake_generation);
         }
 #endif
         PushTaskToEncodeQueue(kAudioTaskTypeEncodeToOpusQueue, std::move(data));
@@ -190,8 +189,8 @@ void AudioService::Initialize(AudioCodec* codec) {
     });
 
     /*
-     * 音频处理链只初始化一次。Start() 之后 ADC -> AFE/AEC -> Opus 始终运行，
-     * 业务层只决定是否消费 Opus，不再负责反复创建或停止算法任务。
+     * 音频处理链只初始化一次。ADC -> AFE/AEC 常驻；上报开启才编码 Opus。
+     * 业务层不再负责反复创建或停止算法任务。
      */
     audio_processor_->Initialize(codec_, OPUS_FRAME_DURATION_MS, models_list_);
     audio_processor_initialized_ = true;
@@ -213,20 +212,6 @@ void AudioService::Initialize(AudioCodec* codec) {
     };
     esp_timer_create(&audio_power_timer_args, &audio_power_timer_);
 
-#if CONFIG_USE_MICRO_WAKE_WORD
-    esp_timer_create_args_t wake_input_idle_timer_args = {
-        .callback = [](void* arg) {
-            static_cast<AudioService*>(arg)->HandleWakeInputIdleTimer();
-        },
-        .arg = this,
-        .dispatch_method = ESP_TIMER_TASK,
-        .name = "wake_input_idle",
-        .skip_unhandled_events = true,
-    };
-    ESP_ERROR_CHECK(esp_timer_create(
-        &wake_input_idle_timer_args, &wake_input_idle_timer_));
-#endif
-
 }
 
 // 启动服务循环；AFE 内部任务已在 Initialize() 创建，Start() 使其开始取帧。
@@ -241,12 +226,8 @@ void AudioService::Start() {
     audio_processor_->SetAecEnabled(aec_enabled_);
     audio_processor_->Start();
 #if CONFIG_USE_MICRO_WAKE_WORD
-    speaker_output_active_.store(false);
-    speaker_output_last_activity_us_.store(0);
-    if (wake_input_idle_timer_ != nullptr) {
-        esp_timer_stop(wake_input_idle_timer_);
-    }
-    SetWakeInputFromProcessor(false);
+    ClearProcessedWakeQueue();
+    ESP_LOGI(TAG, "Wake word input source: processed PCM (BOX3: AEC -> NS -> AGC), always");
 #endif
 
     esp_timer_start_periodic(audio_power_timer_, 1000000);
@@ -321,7 +302,7 @@ void AudioService::Start() {
         AudioService* audio_service = (AudioService*)arg;
         audio_service->ProcessedWakeTask();
         vTaskDeleteWithCaps(nullptr);
-    }, "processed_wake", 2048 * 3, this, kAudioAlgorithmPriority,
+    }, "processed_wake", 2048 * 3, this, kAudioWakePriority,
        &processed_wake_task_handle_, kProcessedWakeTaskCore,
        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (wake_task_result != pdPASS) {
@@ -330,7 +311,7 @@ void AudioService::Start() {
             AudioService* audio_service = (AudioService*)arg;
             audio_service->ProcessedWakeTask();
             vTaskDelete(nullptr);
-        }, "processed_wake", 2048 * 3, this, kAudioAlgorithmPriority,
+        }, "processed_wake", 2048 * 3, this, kAudioWakePriority,
            &processed_wake_task_handle_, kProcessedWakeTaskCore);
     }
 #endif
@@ -340,7 +321,11 @@ void AudioService::Start() {
              static_cast<unsigned>(kAudioCodecPriority),
              static_cast<unsigned>(kAudioCodecPriority),
              static_cast<unsigned>(kAudioAlgorithmPriority),
+#if CONFIG_USE_MICRO_WAKE_WORD
+             static_cast<unsigned>(kAudioWakePriority),
+#else
              static_cast<unsigned>(kAudioAlgorithmPriority),
+#endif
              static_cast<unsigned>(kAudioAfePriority));
 }
 
@@ -351,17 +336,16 @@ void AudioService::Stop() {
     }
     esp_timer_stop(audio_power_timer_);
     audio_testing_running_.store(false);
+    // A/B 编解码任务会使用测试 PCM 和播放队列；系统停止前先让它安全退出，
+    // 避免 OTA 清队列时与其并发写入。
+    while (audio_testing_processing_.load() &&
+           xTaskGetCurrentTaskHandle() != audio_testing_task_handle_) {
+        vTaskDelay(1);
+    }
     wake_word_running_.store(false);
     if (audio_processor_initialized_) {
         audio_processor_->Stop();
     }
-#if CONFIG_USE_MICRO_WAKE_WORD
-    if (wake_input_idle_timer_ != nullptr) {
-        esp_timer_stop(wake_input_idle_timer_);
-    }
-    speaker_output_active_.store(false);
-    SetWakeInputFromProcessor(false);
-#endif
     {
         std::lock_guard<std::mutex> testing_lock(audio_testing_pcm_mutex_);
         audio_testing_pcm_buffer_.clear();
@@ -370,13 +354,11 @@ void AudioService::Stop() {
     audio_upload_enabled_ = false;
     ++upload_generation_;
     audio_encode_queue_.clear();
-    audio_testing_encode_pending_ = 0;
     opus_packet_queue_.clear();
     audio_decode_queue_.clear();
     audio_playback_queue_.clear();
     suspended_player_playback_queue_.clear();
     suspended_player_pcm_bytes_ = 0;
-    audio_testing_queue_.clear();
     audio_queue_cv_.notify_all();
 #if CONFIG_USE_MICRO_WAKE_WORD
     ClearProcessedWakeQueue();
@@ -429,14 +411,56 @@ bool AudioService::ReadAudioData(std::vector<int16_t>& data, int sample_rate, in
         }
     }
 
+    // 同期统计 ADC 原始 MIC/REF，区分采集噪声与增益、AFE 处理的影响。
+    if (audio_testing_running_.load()) {
+        std::lock_guard<std::mutex> lock(audio_testing_pcm_mutex_);
+        if (audio_testing_running_.load()) {
+            auto update = [](TestingInputStats& stats, int16_t sample) {
+                constexpr size_t kMaxSamples =
+                    AUDIO_TESTING_MAX_DURATION_MS * 16000 / 1000;
+                if (stats.samples >= kMaxSamples) return;
+                const int32_t value = sample;
+                ++stats.samples;
+                stats.peak = std::max(stats.peak, value < 0 ? -value : value);
+                stats.sum += value;
+                stats.square_sum += static_cast<uint64_t>(value * value);
+            };
+            const size_t channels = codec_->input_channels();
+            for (size_t i = 0; i < data.size(); i += channels) {
+                update(audio_testing_mic_stats_, data[i]);
+                if (codec_->input_reference() && channels > 1) {
+                    update(audio_testing_ref_stats_, data[i + channels - 1]);
+                }
+            }
+        }
+    }
+
     // Amplify the microphone before it is split to the wake-word and AFE pipelines.
+#if CONFIG_BOARD_TYPE_ESP_BOX_3
+    // BOX3 只在 AEC 前放大 MIC，参考声道保持原幅度。
+    constexpr int32_t kMicPcmGain = 2;
+#else
     constexpr int32_t kMicPcmGain = 5;
+#endif
     const size_t input_channels = codec_->input_channels();
+    size_t clipped = 0;
     for (size_t i = 0; i < data.size(); i += input_channels) {
         const int32_t amplified = static_cast<int32_t>(data[i]) * kMicPcmGain;
+        if (amplified < INT16_MIN || amplified > INT16_MAX) ++clipped;
         data[i] = static_cast<int16_t>(std::clamp(amplified,
             static_cast<int32_t>(INT16_MIN), static_cast<int32_t>(INT16_MAX)));
     }
+#if CONFIG_BOARD_TYPE_ESP_BOX_3
+    if (clipped > 0) {
+        static uint32_t clipping_frames = 0;
+        if (++clipping_frames % 100 == 1) {
+            ESP_LOGW(TAG, "BOX3 AEC 前 x2 削波: %u/%u samples, frames=%lu",
+                     static_cast<unsigned>(clipped),
+                     static_cast<unsigned>(data.size() / input_channels),
+                     static_cast<unsigned long>(clipping_frames));
+        }
+    }
+#endif
 
     /* Update the last input time */
     last_input_time_ = std::chrono::steady_clock::now();
@@ -446,32 +470,39 @@ bool AudioService::ReadAudioData(std::vector<int16_t>& data, int sample_rate, in
 // 常驻采集入口：取各消费者所需的最小帧长读 ADC，再分别拼成测试、AFE、唤醒帧。
 // 处理器总是接收输入；wake_running 只决定是否向唤醒算法喂帧。
 void AudioService::AudioInputTask() {
+#if !CONFIG_USE_MICRO_WAKE_WORD
     std::vector<int16_t> wake_pending;
-    std::vector<int16_t> processor_pending;
-    while (!service_stopped_.load()) {
-        /* I2S input and synchronous AFE/AEC feed can form a continuously-ready
-         * loop while full-duplex upload is active. Block for one scheduler tick
-         * on every iteration so CPU0's Idle task and lower-priority application
-         * work continue to run even when DSP processing is saturated. */
-        vTaskDelay(kAudioInputYieldTicks);
-
-        const bool wake_running = wake_word_running_.load();
-#if CONFIG_USE_MICRO_WAKE_WORD
-        const bool use_processed_wake = wake_uses_processor_output_.load();
-#else
-        const bool use_processed_wake = false;
 #endif
-        if (!wake_running) wake_pending.clear();
-        if (use_processed_wake) wake_pending.clear();
+    std::vector<int16_t> processor_pending;
+    int64_t last_yield_us = esp_timer_get_time();
+    while (!service_stopped_.load()) {
+        if (esp_timer_get_time() - last_yield_us >= kAudioInputYieldIntervalUs) {
+            vTaskDelay(kAudioInputYieldTicks);
+            // 不追赶已经错过的让步时间，避免负载高时反复睡眠无法清空 DMA。
+            last_yield_us = esp_timer_get_time();
+        }
 
-        // 开启 AEC 的 MicroWakeWord 从处理后输出取帧，不再从此处喂麦克风帧。
-        const size_t wake_samples = wake_running && !use_processed_wake
-            ? wake_word_->GetFeedSize() : 0;
+#if CONFIG_USE_MICRO_WAKE_WORD
+        // MicroWakeWord 始终从处理器输出取样；这里仅采集/喂 AFE。
+        constexpr size_t wake_samples = 0;
+#else
+        const bool wake_running = wake_word_running_.load();
+        if (!wake_running) wake_pending.clear();
+        const size_t wake_samples = wake_running ? wake_word_->GetFeedSize() : 0;
+#endif
         const size_t processor_samples = audio_processor_->GetFeedSize();
         size_t samples = 0;
         for (const size_t feed_size : {wake_samples, processor_samples}) {
             if (feed_size > 0 && (samples == 0 || feed_size < samples)) samples = feed_size;
         }
+#if CONFIG_BOARD_TYPE_ESP_BOX_3
+        // BOX3 的 DMA 每块 240 点，而 AFE 需要 256 点。IDF 在 RX 队列
+        // 接近满时会跳过当前 DMA 块未读完的尾部，即使没有队列溢出事件。
+        // 整块读取保证没有未读尾部；下面的 pending 再拼成 AFE 所需帧长。
+        if (samples > 0 && codec_->input_sample_rate() == 16000) {
+            samples = AUDIO_CODEC_DMA_FRAME_NUM;
+        }
+#endif
         if (samples == 0) {
             vTaskDelay(pdMS_TO_TICKS(20));
             continue;
@@ -496,84 +527,54 @@ void AudioService::AudioInputTask() {
             }
         }
 
+#if !CONFIG_USE_MICRO_WAKE_WORD
         if (wake_samples > 0 && IsWakeWordRunning()) {
-#if CONFIG_USE_MICRO_WAKE_WORD
-            if (channels == 2) {
-                for (size_t i = 0; i < data.size(); i += 2) {
-                    wake_pending.push_back(data[i]);
-                }
-            } else
-#endif // CONFIG_USE_MICRO_WAKE_WORD
-            {
-                wake_pending.insert(wake_pending.end(), data.begin(), data.end());
-            }
-#if CONFIG_USE_MICRO_WAKE_WORD
-            const size_t wake_channels = 1;
-#else
+            wake_pending.insert(wake_pending.end(), data.begin(), data.end());
             const size_t wake_channels = channels;
-#endif
             const size_t wake_frame_size = wake_samples * wake_channels;
             while (wake_pending.size() >= wake_frame_size && IsWakeWordRunning()) {
                 std::vector<int16_t> frame(wake_pending.begin(),
                                            wake_pending.begin() + wake_frame_size);
                 wake_pending.erase(wake_pending.begin(),
                                    wake_pending.begin() + wake_frame_size);
-                CaptureWakeInputForTesting(frame);
                 wake_word_->Feed(frame);
             }
         }
+#endif
     }
 
     ESP_LOGW(TAG, "Audio input task stopped");
 }
 
-// 测试录音只从真正送入唤醒模型的 PCM 旁路取样。唤醒帧长可能
-// 不是 20 ms，这里重新分块为 Opus-WB 要求的 320 样本。
-void AudioService::CaptureWakeInputForTesting(const std::vector<int16_t>& data) {
+// 测试录音从真正送入云端 Opus 编码器的 AFE/AEC PCM 旁路取样。
+// 达到上限后保持测试状态，等待用户再次按键再开始两段对比回放。
+void AudioService::CaptureUplinkPcmForTesting(const std::vector<int16_t>& data) {
     if (!audio_testing_running_.load() || data.empty()) {
         return;
     }
 
-    constexpr size_t kTestingFrameSamples =
-        OPUS_FRAME_DURATION_MS * 16000 / 1000;
-    constexpr size_t kMaxTestingFrames =
-        AUDIO_TESTING_MAX_DURATION_MS / OPUS_FRAME_DURATION_MS;
-    bool testing_full = false;
-    {
-        std::lock_guard<std::mutex> lock(audio_queue_mutex_);
-        testing_full =
-            audio_testing_queue_.size() + audio_testing_encode_pending_ >=
-            kMaxTestingFrames;
-    }
-    if (testing_full) {
-        ESP_LOGW(TAG, "Audio testing queue is full, stopping audio testing");
-        EnableAudioTesting(false);
-        return;
-    }
-
-    std::vector<std::vector<int16_t>> frames;
+    constexpr size_t kMaxTestingSamples =
+        AUDIO_TESTING_MAX_DURATION_MS * 16000 / 1000;
+    bool reached_limit = false;
     {
         std::lock_guard<std::mutex> lock(audio_testing_pcm_mutex_);
         if (!audio_testing_running_.load()) {
             return;
         }
-        audio_testing_pcm_buffer_.insert(audio_testing_pcm_buffer_.end(),
-                                         data.begin(), data.end());
-        while (audio_testing_pcm_buffer_.size() >= kTestingFrameSamples) {
-            frames.emplace_back(audio_testing_pcm_buffer_.begin(),
-                                audio_testing_pcm_buffer_.begin() +
-                                    kTestingFrameSamples);
-            audio_testing_pcm_buffer_.erase(
-                audio_testing_pcm_buffer_.begin(),
-                audio_testing_pcm_buffer_.begin() + kTestingFrameSamples);
+        const size_t remaining = kMaxTestingSamples -
+                                 audio_testing_pcm_buffer_.size();
+        const size_t copy_samples = std::min(remaining, data.size());
+        if (copy_samples > 0) {
+            audio_testing_pcm_buffer_.insert(
+                audio_testing_pcm_buffer_.end(), data.begin(),
+                data.begin() + copy_samples);
+            reached_limit =
+                audio_testing_pcm_buffer_.size() >= kMaxTestingSamples;
         }
     }
-    for (auto& frame : frames) {
-        if (!audio_testing_running_.load()) {
-            break;
-        }
-        PushTaskToEncodeQueue(kAudioTaskTypeEncodeToTestingQueue,
-                              std::move(frame));
+    if (reached_limit) {
+        ESP_LOGI(TAG, "Audio testing reached %d ms; waiting for stop to compare",
+                 AUDIO_TESTING_MAX_DURATION_MS);
     }
 }
 
@@ -581,9 +582,33 @@ void AudioService::CaptureWakeInputForTesting(const std::vector<int16_t>& data) 
 // 3. 唤醒词输入链
 // ============================================================================
 #if CONFIG_USE_MICRO_WAKE_WORD
-// 只处理 AFE 后的最新唤醒帧；队列在 OnOutput 中限长，推理慢时丢旧帧。
+// 唤醒旁路的有界队列；推理慢时仅丢唤醒帧，不能拖慢 ADC/AEC/云端录音。
+void AudioService::QueueWakeFrame(std::vector<int16_t> data, uint32_t generation) {
+    std::lock_guard<std::mutex> lock(processed_wake_mutex_);
+    if (!IsWakeWordRunning() || service_stopped_.load() ||
+        generation != wake_input_generation_.load()) {
+        return;
+    }
+    if (processed_wake_queue_.size() >= MAX_PROCESSED_WAKE_FRAMES_IN_QUEUE) {
+        processed_wake_queue_.pop_front();
+        static uint32_t dropped_frames = 0;
+        if ((++dropped_frames % 100) == 1) {
+            ESP_LOGW(TAG, "Wake queue full, dropped frames: %lu (ADC unaffected)",
+                     static_cast<unsigned long>(dropped_frames));
+        }
+    }
+    processed_wake_queue_.push_back({std::move(data), generation});
+    processed_wake_cv_.notify_one();
+}
+
+// 始终使用处理器输出，在 CPU1 独立推理；generation 排除启停前的旧帧。
 void AudioService::ProcessedWakeTask() {
+    int64_t last_yield_us = esp_timer_get_time();
     while (true) {
+        if (esp_timer_get_time() - last_yield_us >= kWakeYieldIntervalUs) {
+            vTaskDelay(kAudioInputYieldTicks);
+            last_yield_us = esp_timer_get_time();
+        }
         std::unique_lock<std::mutex> lock(processed_wake_mutex_);
         processed_wake_cv_.wait(lock, [this]() {
             return service_stopped_ || !processed_wake_queue_.empty();
@@ -596,77 +621,21 @@ void AudioService::ProcessedWakeTask() {
         processed_wake_queue_.pop_front();
         lock.unlock();
 
-        if (wake_uses_processor_output_.load() && IsWakeWordRunning()) {
-            CaptureWakeInputForTesting(data);
-            wake_word_->Feed(data);
+        std::lock_guard<std::mutex> inference_lock(wake_inference_mutex_);
+        if (!service_stopped_.load() && IsWakeWordRunning() &&
+            data.generation == wake_input_generation_.load()) {
+            wake_word_->Feed(data.pcm);
         }
-        // 队列为空时上面的条件变量会阻塞；队列不为空时直接连续消费，
-        // 避免人为增加 10 ms 延迟导致唤醒推理反而跟不上 AFE 输出。
     }
     ESP_LOGW(TAG, "Processed wake task stopped");
 }
 
 void AudioService::ClearProcessedWakeQueue() {
     std::lock_guard<std::mutex> lock(processed_wake_mutex_);
+    ++wake_input_generation_;
     processed_wake_queue_.clear();
 }
 
-// 切换唤醒输入源时清掉旧源的缓存，并复位模型的连续输入状态。
-void AudioService::SetWakeInputFromProcessor(bool enable) {
-    const bool previous = wake_uses_processor_output_.exchange(enable);
-    if (previous == enable) {
-        return;
-    }
-
-    ClearProcessedWakeQueue();
-    if (wake_word_initialized_ && IsWakeWordRunning()) {
-        if (!static_cast<MicroWakeWord*>(wake_word_.get())->ResetInputState()) {
-            ESP_LOGE(TAG, "Failed to reset wake word after changing input source");
-        }
-    }
-    ESP_LOGI(TAG, "Wake word input source: %s",
-             enable ? "AFE post-AEC output" : "amplified microphone PCM");
-}
-
-// 扬声器开始输出时立即切到 AEC PCM，并取消尚未触发的空闲切换。
-void AudioService::NotifySpeakerOutputStarted() {
-    speaker_output_last_activity_us_.store(esp_timer_get_time());
-    if (wake_input_idle_timer_ != nullptr) {
-        esp_timer_stop(wake_input_idle_timer_);
-    }
-    speaker_output_active_.store(true);
-    SetWakeInputFromProcessor(aec_enabled_ && SupportsAec());
-}
-
-// 每块 PCM 写入完成后重新计时；连续播放时下一块会取消本次计时。
-void AudioService::NotifySpeakerOutputCompleted() {
-    speaker_output_last_activity_us_.store(esp_timer_get_time());
-    if (wake_input_idle_timer_ == nullptr) {
-        return;
-    }
-    esp_timer_stop(wake_input_idle_timer_);
-    const esp_err_t err = esp_timer_start_once(
-        wake_input_idle_timer_, kWakeInputPlaybackTailUs);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "启动唤醒输入空闲定时器失败: %s", esp_err_to_name(err));
-    }
-}
-
-// 定时器可能与下一块 PCM 同时触发，因此再次核对最近输出时间。
-void AudioService::HandleWakeInputIdleTimer() {
-    const int64_t elapsed_us =
-        esp_timer_get_time() - speaker_output_last_activity_us_.load();
-    if (elapsed_us < kWakeInputPlaybackTailUs) {
-        const esp_err_t err = esp_timer_start_once(
-            wake_input_idle_timer_, kWakeInputPlaybackTailUs - elapsed_us);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "重启唤醒输入空闲定时器失败: %s", esp_err_to_name(err));
-        }
-        return;
-    }
-    speaker_output_active_.store(false);
-    SetWakeInputFromProcessor(false);
-}
 #endif
 
 // ============================================================================
@@ -674,11 +643,39 @@ void AudioService::HandleWakeInputIdleTimer() {
 // ============================================================================
 // DAC 的唯一写入者。服务端解码 PCM 与本地播放器 PCM 在此串行输出。
 void AudioService::AudioOutputTask() {
+    int testing_previous_volume = -1;
+    auto restore_testing_volume = [&]() {
+        if (testing_previous_volume >= 0) {
+            codec_->SetOutputVolumeTemporary(testing_previous_volume);
+            ESP_LOGI(TAG, "音频测试回放结束，恢复音量: %d%%",
+                     testing_previous_volume);
+            testing_previous_volume = -1;
+        }
+    };
     while (true) {
         std::unique_lock<std::mutex> lock(audio_queue_mutex_);
-        audio_queue_cv_.wait(lock, [this]() { return !audio_playback_queue_.empty() || service_stopped_; });
+        audio_queue_cv_.wait(lock, [this, &testing_previous_volume]() {
+            return !audio_playback_queue_.empty() || service_stopped_ ||
+                   testing_previous_volume >= 0;
+        });
         if (service_stopped_) {
             break;
+        }
+        if (testing_previous_volume >= 0 &&
+            (audio_playback_queue_.empty() ||
+             !audio_playback_queue_.front()->testing_playback)) {
+            // 最后一块 PCM 被接收后，等待 I2S DMA 尾音实际播完再恢复。
+            // 清队列取消测试也会进入这里，避免临时音量残留。
+            const int sample_rate = codec_->output_sample_rate();
+            lock.unlock();
+            if (sample_rate > 0) {
+                const int drain_ms =
+                    (AUDIO_CODEC_DMA_DESC_NUM * AUDIO_CODEC_DMA_FRAME_NUM * 1000 +
+                     sample_rate - 1) / sample_rate;
+                vTaskDelay(pdMS_TO_TICKS(drain_ms));
+            }
+            restore_testing_volume();
+            continue;
         }
 
         /* TTS starts with two seconds of actual PCM. Other player sources use
@@ -766,13 +763,13 @@ void AudioService::AudioOutputTask() {
             esp_timer_start_periodic(audio_power_timer_, AUDIO_POWER_CHECK_INTERVAL_MS * 1000);
             codec_->EnableOutput(true);
         }
-#if CONFIG_USE_MICRO_WAKE_WORD
-        NotifySpeakerOutputStarted();
-#endif
+        if (task->testing_playback && testing_previous_volume < 0) {
+            testing_previous_volume = codec_->output_volume();
+            codec_->SetOutputVolumeTemporary(100);
+            ESP_LOGI(TAG, "音频测试临时音量: %d%% -> 100%% (不保存)",
+                     testing_previous_volume);
+        }
         codec_->OutputData(task->PlaybackData(), task->PlaybackSamples());
-#if CONFIG_USE_MICRO_WAKE_WORD
-        NotifySpeakerOutputCompleted();
-#endif
         if (task->type == kAudioTaskTypePlayerToPlaybackQueue) {
             if (player_output_started && output_callbacks_.on_output_started) {
                 ESP_LOGI(TAG, "播放器首个 PCM 已交给 codec: samples=%u",
@@ -808,6 +805,7 @@ void AudioService::AudioOutputTask() {
         last_output_time_ = std::chrono::steady_clock::now();
     }
 
+    restore_testing_volume();
     ESP_LOGW(TAG, "Audio output task stopped");
 }
 
@@ -815,8 +813,10 @@ void AudioService::AudioOutputTask() {
 // 5. Opus 编解码任务与采样率配置
 // ============================================================================
 // 同一工作任务兼顾下行 Opus 解码和上行 PCM 编码；两侧共享队列锁。
-// 上行即使未开启网络上报仍编码，产物以有限长度的最新窗口保存。
+// 上报关闭时不做无消费者的上行编码；下行解码不受影响。
 void AudioService::OpusCodecTask() {
+    bool encoder_has_generation = false;
+    uint32_t encoder_generation = 0;
     while (true) {
         std::unique_lock<std::mutex> lock(audio_queue_mutex_);
         audio_queue_cv_.wait(lock, [this]() {
@@ -862,15 +862,22 @@ void AudioService::OpusCodecTask() {
             auto task = std::move(audio_encode_queue_.front());
             audio_encode_queue_.pop_front();
             audio_queue_cv_.notify_all();
+            if (task->type == kAudioTaskTypeEncodeToOpusQueue &&
+                (!audio_upload_enabled_ || task->upload_generation != upload_generation_)) {
+                continue;
+            }
             lock.unlock();
 
+            // 编码器由此任务独占复位，防止停止/重开上报时携带旧会话状态。
+            if (opus_encoder_ != nullptr &&
+                (!encoder_has_generation || encoder_generation != task->upload_generation)) {
+                opus_encoder_->ResetState();
+                encoder_generation = task->upload_generation;
+                encoder_has_generation = true;
+            }
             auto packet = std::make_unique<AudioStreamPacket>();
             packet->frame_duration = OPUS_FRAME_DURATION_MS;
             packet->sample_rate = 16000;
-            const bool testing_packet =
-                task->type == kAudioTaskTypeEncodeToTestingQueue;
-            auto* encoder = testing_packet ? audio_testing_encoder_.get()
-                                           : opus_encoder_.get();
 #ifdef CONFIG_LSPLATFORM
             const bool raw_uplink = task->type == kAudioTaskTypeEncodeToOpusQueue &&
                                     std::strcmp(XiaolingConfig::kUplinkAudioEncoding, "raw") == 0;
@@ -884,20 +891,13 @@ void AudioService::OpusCodecTask() {
                 }
             }
             if (!raw_uplink &&
-                (encoder == nullptr ||
-                 !encoder->Encode(std::move(task->pcm), packet->payload))) {
+                (opus_encoder_ == nullptr ||
+                 !opus_encoder_->Encode(std::move(task->pcm), packet->payload))) {
 #else
-            if (encoder == nullptr ||
-                !encoder->Encode(std::move(task->pcm), packet->payload)) {
+            if (opus_encoder_ == nullptr ||
+                !opus_encoder_->Encode(std::move(task->pcm), packet->payload)) {
 #endif // CONFIG_LSPLATFORM
                 ESP_LOGE(TAG, "Failed to encode audio");
-                if (testing_packet) {
-                    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
-                    if (audio_testing_encode_pending_ > 0) {
-                        --audio_testing_encode_pending_;
-                    }
-                    audio_queue_cv_.notify_all();
-                }
                 continue;
             }
 
@@ -907,7 +907,7 @@ void AudioService::OpusCodecTask() {
                     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
                     /* 开始上报时会推进 generation 并清空旧窗口。若一帧刚好
                      * 跨过这个边界，则丢弃它，避免把会话开始前的声音上报。 */
-                    if (audio_upload_enabled_ &&
+                    if (!audio_upload_enabled_ ||
                         task->upload_generation != upload_generation_) {
                         packet.reset();
                     } else {
@@ -921,13 +921,6 @@ void AudioService::OpusCodecTask() {
                 if (notify_consumer && upload_callbacks_.on_opus_packet_available) {
                     upload_callbacks_.on_opus_packet_available();
                 }
-            } else if (task->type == kAudioTaskTypeEncodeToTestingQueue) {
-                std::lock_guard<std::mutex> lock(audio_queue_mutex_);
-                audio_testing_queue_.push_back(std::move(packet));
-                if (audio_testing_encode_pending_ > 0) {
-                    --audio_testing_encode_pending_;
-                }
-                audio_queue_cv_.notify_all();
             }
             lock.lock();
         }
@@ -955,14 +948,18 @@ void AudioService::SetDecodeSampleRate(int sample_rate, int frame_duration) {
 // ============================================================================
 // 6. 上行编码队列与下行播放队列入口
 // ============================================================================
-// AFE 的实时帧满队列时丢旧帧，不阻塞采集；音频测试帧则允许等待空位。
+// AFE 的实时帧满队列时丢旧帧，不阻塞采集。
 void AudioService::PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t>&& pcm) {
+    std::unique_lock<std::mutex> lock(audio_queue_mutex_);
+    if (service_stopped_ ||
+        (type == kAudioTaskTypeEncodeToOpusQueue && !audio_upload_enabled_)) {
+        return;
+    }
     auto task = std::make_unique<AudioTask>();
     task->type = type;
     task->pcm = std::move(pcm);
 
     /* Push the task to the encode queue */
-    std::unique_lock<std::mutex> lock(audio_queue_mutex_);
     task->upload_generation = upload_generation_;
 
     if (type == kAudioTaskTypeEncodeToOpusQueue &&
@@ -992,12 +989,6 @@ void AudioService::PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t
                audio_encode_queue_.size() < MAX_ENCODE_TASKS_IN_QUEUE;
     });
     if (service_stopped_) return;
-    if (type == kAudioTaskTypeEncodeToTestingQueue) {
-        if (!audio_testing_running_.load()) {
-            return;
-        }
-        ++audio_testing_encode_pending_;
-    }
     audio_encode_queue_.push_back(std::move(task));
     audio_queue_cv_.notify_all();
 }
@@ -1295,7 +1286,7 @@ bool AudioService::PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> pa
 // ============================================================================
 // 7. 上行与唤醒结果接口
 // ============================================================================
-// 网络消费入口：关闭上报时不取包，后台编码仍继续更新最新窗口。
+// 网络消费入口：关闭上报时不取包，也不生成无消费者的上行 Opus。
 std::unique_ptr<AudioStreamPacket> AudioService::PopOpusPacket() {
     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
     if (!audio_upload_enabled_ || opus_packet_queue_.empty()) {
@@ -1331,6 +1322,9 @@ void AudioService::EnableWakeWordDetection(bool enable) {
     if (!wake_word_) {
         return;
     }
+#if CONFIG_USE_MICRO_WAKE_WORD
+    std::lock_guard<std::mutex> inference_lock(wake_inference_mutex_);
+#endif
     if (enable && IsWakeWordRunning()) {
         return;
     }
@@ -1365,6 +1359,7 @@ void AudioService::PauseWakeWordDetection() {
     if (!wake_word_) {
         return;
     }
+    std::lock_guard<std::mutex> inference_lock(wake_inference_mutex_);
     wake_word_running_.store(false);
     ClearProcessedWakeQueue();
     static_cast<MicroWakeWord*>(wake_word_.get())->Pause();
@@ -1374,7 +1369,7 @@ void AudioService::PauseWakeWordDetection() {
 }
 
 // 上报会话边界：开启时清掉此前缓存，并用 generation 排除正在编码的旧帧。
-// 关闭时只停止通知/取包；采集、AFE 和 Opus 编码继续运行。
+// 开关只影响上行编码/消费；ADC、AFE/NS、唤醒和下行解码始终常驻。
 void AudioService::EnableAudioUpload(bool enable) {
     bool previous = false;
     size_t encode_before = 0;
@@ -1390,21 +1385,18 @@ void AudioService::EnableAudioUpload(bool enable) {
         opus_before = opus_packet_queue_.size();
         audio_upload_enabled_ = enable;
         generation = ++upload_generation_;
-        if (enable) {
-            /* 离线期间仍持续编码并保存最新窗口；新会话从此刻开始，不能把
-             * 窗口里的历史声音发给服务端。 */
-            audio_encode_queue_.clear();
-            opus_packet_queue_.clear();
-        }
+        // 两个方向的会话边界都清缓存；新会话不能接收旧会话的在途编码帧。
+        audio_encode_queue_.clear();
+        opus_packet_queue_.clear();
         audio_queue_cv_.notify_all();
     }
     ESP_LOGI(TAG,
-             "音频上报: %d->%d, generation=%lu, 开始上报时清理=pcm:%u/opus:%u, "
+             "音频上报: %d->%d, generation=%lu, 清理=pcm:%u/opus:%u, "
              "处理链常驻=%d",
              previous ? 1 : 0, enable ? 1 : 0,
              static_cast<unsigned long>(generation),
-             static_cast<unsigned>(enable ? encode_before : 0),
-             static_cast<unsigned>(enable ? opus_before : 0),
+             static_cast<unsigned>(encode_before),
+             static_cast<unsigned>(opus_before),
              service_stopped_.load() ? 0 : 1);
 }
 
@@ -1420,57 +1412,304 @@ bool AudioService::SupportsAec() const {
 #endif
 }
 
-// 录音测试从实际送入唤醒模型的 PCM 取帧，停止时把独立编码的
-// 测试 Opus 送去回放。
+// 录音测试从云端编码器的 AFE/AEC PCM 输入点取帧。停止后依次播放
+// 原始 PCM、双提示音和同参数 Opus 编解码结果，便于定位音质损伤。
 void AudioService::EnableAudioTesting(bool enable) {
     ESP_LOGI(TAG, "%s audio testing", enable ? "Enabling" : "Disabling");
     if (enable) {
-        if (audio_testing_running_.load()) {
+        if (audio_testing_running_.load() || audio_testing_processing_.load()) {
             return;
         }
         {
             std::lock_guard<std::mutex> lock(audio_testing_pcm_mutex_);
             audio_testing_pcm_buffer_.clear();
-        }
-        {
-            std::unique_lock<std::mutex> lock(audio_queue_mutex_);
-            audio_queue_cv_.wait(lock, [this]() {
-                return service_stopped_ || audio_testing_encode_pending_ == 0;
-            });
-            audio_testing_queue_.clear();
+            audio_testing_mic_stats_ = {};
+            audio_testing_ref_stats_ = {};
+            constexpr size_t kMaxTestingSamples =
+                AUDIO_TESTING_MAX_DURATION_MS * 16000 / 1000;
+            audio_testing_pcm_buffer_.reserve(kMaxTestingSamples);
+            audio_testing_elapsed_us_ = 0;
+            audio_testing_input_overflows_ = -1;
         }
         if (audio_testing_encoder_ != nullptr) {
             audio_testing_encoder_->ResetState();
         }
-        audio_testing_running_.store(true);
+        ESP_LOGI(TAG, "音频测试采样点: AFE/AEC 输出，16 kHz 单声道");
+        {
+            std::lock_guard<std::mutex> lock(audio_testing_pcm_mutex_);
+            // 复位编码器和日志不属于录音时间，与实际取样开关保持同一边界。
+            audio_testing_input_overflows_start_ = codec_->input_overflow_count();
+            audio_testing_start_us_ = esp_timer_get_time();
+            audio_testing_running_.store(true);
+        }
     } else {
         if (!audio_testing_running_.exchange(false)) {
             return;
         }
+        // 先冻结边界，再等待统计锁；CPU 调度/取锁的延迟不能算进录音时长。
+        const int64_t stopped_us = esp_timer_get_time();
+        const int64_t overflows = codec_->input_overflow_count();
         {
             std::lock_guard<std::mutex> lock(audio_testing_pcm_mutex_);
+            audio_testing_elapsed_us_ = stopped_us - audio_testing_start_us_;
+            if (overflows >= 0 && audio_testing_input_overflows_start_ >= 0) {
+                audio_testing_input_overflows_ = static_cast<uint32_t>(overflows) -
+                    static_cast<uint32_t>(audio_testing_input_overflows_start_);
+            }
+        }
+        if (audio_testing_processing_.exchange(true)) {
+            ESP_LOGW(TAG, "音频测试 A/B 回放仍在准备中");
+            return;
+        }
+        BaseType_t result = xTaskCreateWithCaps([](void* arg) {
+            auto* service = static_cast<AudioService*>(arg);
+            service->PrepareAudioTestingPlayback();
+            ESP_LOGI(TAG, "音频测试任务最小剩余栈: %u bytes",
+                     static_cast<unsigned>(
+                         uxTaskGetStackHighWaterMark(nullptr)));
+            service->audio_testing_task_handle_ = nullptr;
+            service->audio_testing_processing_.store(false);
+            vTaskDeleteWithCaps(nullptr);
+        }, "audio_test_ab", 2048 * 16, this, kAudioCodecPriority,
+           &audio_testing_task_handle_, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (result != pdPASS) {
+            audio_testing_task_handle_ = nullptr;
+            audio_testing_processing_.store(false);
+            std::lock_guard<std::mutex> lock(audio_testing_pcm_mutex_);
             audio_testing_pcm_buffer_.clear();
-        }
-        std::deque<std::unique_ptr<AudioStreamPacket>> testing_packets;
-        {
-            std::unique_lock<std::mutex> lock(audio_queue_mutex_);
-            audio_queue_cv_.wait(lock, [this]() {
-                return service_stopped_ || audio_testing_encode_pending_ == 0;
-            });
-            testing_packets = std::move(audio_testing_queue_);
-        }
-        if (opus_decoder_ != nullptr) {
-            opus_decoder_->ResetState();
-        }
-        {
-            std::lock_guard<std::mutex> lock(audio_queue_mutex_);
-            audio_decode_queue_ = std::move(testing_packets);
-            audio_queue_cv_.notify_all();
+            ESP_LOGE(TAG, "创建音频测试 A/B 编解码任务失败");
         }
     }
 }
 
-// 根据硬件能力切换 AEC；MicroWakeWord 随之改用处理后或原始麦克风输入。
+// Opus 编解码的栈需求明显高于 Application 主任务，因此 A/B 回放准备
+// 必须在独立的大栈任务中完成，不能在按键事件回调栈上同步执行。
+void AudioService::PrepareAudioTestingPlayback() {
+        std::deque<std::unique_ptr<AudioTask>> playback_tasks;
+        uint64_t square_sum = 0;
+        int32_t peak = 0;
+        size_t clipped_samples = 0;
+        size_t recorded_samples = 0;
+        size_t comparable_samples = 0;
+        size_t opus_packet_count = 0;
+        size_t opus_payload_bytes = 0;
+        {
+            std::lock_guard<std::mutex> lock(audio_testing_pcm_mutex_);
+            auto log_input = [](const char* label, const TestingInputStats& stats) {
+                if (stats.samples == 0) return;
+                const double mean = static_cast<double>(stats.sum) / stats.samples;
+                const double power = static_cast<double>(stats.square_sum) / stats.samples;
+                const double rms = std::sqrt(power);
+                const double ac_rms = std::sqrt(std::max(0.0, power - mean * mean));
+                ESP_LOGI(TAG,
+                         "音频测试 ADC %s: samples=%u, peak=%ld, dc=%.1f, "
+                         "rms=%.1fdBFS, ac_rms=%.1fdBFS",
+                         label, static_cast<unsigned>(stats.samples),
+                         static_cast<long>(stats.peak), mean,
+                         rms > 0 ? 20.0 * std::log10(rms / 32768.0) : -120.0,
+                         ac_rms > 0 ? 20.0 * std::log10(ac_rms / 32768.0) : -120.0);
+            };
+            log_input("MIC", audio_testing_mic_stats_);
+            log_input("REF", audio_testing_ref_stats_);
+            recorded_samples = audio_testing_pcm_buffer_.size();
+            const double wall_ms = audio_testing_elapsed_us_ / 1000.0;
+            const double adc_ms = audio_testing_mic_stats_.samples / 16.0;
+            const double expected_ms = std::min(
+                wall_ms, static_cast<double>(AUDIO_TESTING_MAX_DURATION_MS));
+            const double coverage = expected_ms > 0 ? adc_ms / expected_ms * 100.0 : 0;
+            ESP_LOGI(TAG,
+                     "音频测试时长: wall=%.1fms, ADC=%.1fms, AFE=%.1fms, "
+                     "coverage=%.1f%%, RX_overflows=%ld (-1=unsupported)",
+                     wall_ms, adc_ms, recorded_samples / 16.0, coverage,
+                     static_cast<long>(audio_testing_input_overflows_));
+            if (expected_ms >= 1000 && coverage < 95.0) {
+                ESP_LOGW(TAG, "音频采集不足: 检查采集调度/DMA，回放可能出现跳字或加速感");
+            }
+            for (const int16_t sample : audio_testing_pcm_buffer_) {
+                const int32_t value = sample;
+                const int32_t magnitude = value < 0 ? -value : value;
+                peak = std::max(peak, magnitude);
+                square_sum += static_cast<uint64_t>(value * value);
+                if (sample == INT16_MIN || sample == INT16_MAX) {
+                    ++clipped_samples;
+                }
+            }
+
+            constexpr size_t kOpusFrameSamples =
+                OPUS_FRAME_DURATION_MS * 16000 / 1000;
+            comparable_samples = recorded_samples -
+                                 recorded_samples % kOpusFrameSamples;
+
+            // 低分位帧电平更适合评估停顿段，避免整段 RMS 被人声或瞬态主导。
+            std::vector<double> frame_levels;
+            for (size_t offset = 0; offset < comparable_samples;
+                 offset += kOpusFrameSamples) {
+                uint64_t frame_power = 0;
+                for (size_t i = 0; i < kOpusFrameSamples; ++i) {
+                    const int32_t value = audio_testing_pcm_buffer_[offset + i];
+                    frame_power += static_cast<uint64_t>(value * value);
+                }
+                const double frame_rms = std::sqrt(
+                    static_cast<double>(frame_power) / kOpusFrameSamples);
+                frame_levels.push_back(frame_rms > 0
+                    ? 20.0 * std::log10(frame_rms / 32768.0) : -120.0);
+            }
+            if (!frame_levels.empty()) {
+                std::sort(frame_levels.begin(), frame_levels.end());
+                const size_t last = frame_levels.size() - 1;
+                ESP_LOGI(TAG,
+                         "音频测试 AFE 帧电平: p10=%.1f, p50=%.1f, p90=%.1f dBFS",
+                         frame_levels[last / 10], frame_levels[last / 2],
+                         frame_levels[last * 9 / 10]);
+            }
+
+            // 100 ms 一块，在保持按键响应的同时减少 PSRAM 小块分配。
+            constexpr size_t kPlaybackChunkSamples = 16000 / 10;
+            auto append_playback_tasks = [&](const int16_t* pcm, size_t total,
+                                             const char* label) {
+                for (size_t offset = 0; offset < total;
+                     offset += kPlaybackChunkSamples) {
+                    const size_t samples = std::min(
+                        kPlaybackChunkSamples, total - offset);
+                    auto task = std::make_unique<AudioTask>();
+                    task->type = kAudioTaskTypeDecodeToPlaybackQueue;
+                    task->testing_playback = true;
+                    if (!task->AllocatePlayerPcm(samples)) {
+                        ESP_LOGE(TAG,
+                                 "音频测试%s回放分配失败: offset=%u, samples=%u",
+                                 label, static_cast<unsigned>(offset),
+                                 static_cast<unsigned>(samples));
+                        return false;
+                    }
+                    std::memcpy(task->player_pcm, pcm + offset,
+                                samples * sizeof(int16_t));
+                    playback_tasks.push_back(std::move(task));
+                }
+                return true;
+            };
+
+            // 第一段：直接回放云端编码器实际收到的 AFE/AEC PCM。
+            const bool pcm_ready = comparable_samples > 0 &&
+                append_playback_tasks(audio_testing_pcm_buffer_.data(),
+                                      comparable_samples, " PCM");
+
+            // 使用独立状态但完全相同参数的编码器进行本地 Opus 往返。
+            std::vector<int16_t> opus_roundtrip_pcm;
+            opus_roundtrip_pcm.reserve(comparable_samples);
+            if (pcm_ready && audio_testing_encoder_ != nullptr) {
+                audio_testing_encoder_->ResetState();
+                OpusDecoderWrapper testing_decoder(
+                    16000, 1, OPUS_FRAME_DURATION_MS);
+                testing_decoder.ResetState();
+                for (size_t offset = 0; offset < comparable_samples;
+                     offset += kOpusFrameSamples) {
+                    if (service_stopped_.load()) break;
+                    // 离线编码整段录音时周期性让出 CPU，保证常驻采集继续运行。
+                    if (offset % (kOpusFrameSamples * 5) == 0) vTaskDelay(1);
+                    std::vector<int16_t> frame(
+                        audio_testing_pcm_buffer_.begin() + offset,
+                        audio_testing_pcm_buffer_.begin() + offset +
+                            kOpusFrameSamples);
+                    std::vector<uint8_t> opus_payload;
+                    if (!audio_testing_encoder_->Encode(
+                            std::move(frame), opus_payload)) {
+                        ESP_LOGE(TAG,
+                                 "音频测试 Opus 编码失败: frame=%u",
+                                 static_cast<unsigned>(opus_packet_count));
+                        break;
+                    }
+                    opus_payload_bytes += opus_payload.size();
+                    ++opus_packet_count;
+                    std::vector<int16_t> decoded;
+                    if (!testing_decoder.Decode(std::move(opus_payload),
+                                                decoded)) {
+                        ESP_LOGE(TAG,
+                                 "音频测试 Opus 解码失败: frame=%u",
+                                 static_cast<unsigned>(opus_packet_count));
+                        break;
+                    }
+                    opus_roundtrip_pcm.insert(opus_roundtrip_pcm.end(),
+                                              decoded.begin(), decoded.end());
+                }
+            }
+
+            if (!opus_roundtrip_pcm.empty()) {
+                // 双短音明确标出第二段开始，前后留白避免与语音粘连。
+                constexpr size_t kMarkerSamples = 16000 * 3 / 5;
+                constexpr size_t kBeepSamples = 16000 / 10;
+                constexpr size_t kGapSamples = 16000 / 20;
+                constexpr size_t kLeadSamples = 16000 * 3 / 20;
+                constexpr double kTwoPi = 6.28318530717958647692;
+                std::vector<int16_t> marker(kMarkerSamples, 0);
+                auto fill_beep = [&](size_t begin) {
+                    for (size_t i = 0; i < kBeepSamples; ++i) {
+                        const size_t fade = std::min(
+                            {i, kBeepSamples - 1 - i,
+                             static_cast<size_t>(80)});
+                        const double envelope =
+                            std::min(1.0, static_cast<double>(fade) / 80.0);
+                        marker[begin + i] = static_cast<int16_t>(
+                            6000.0 * envelope *
+                            std::sin(kTwoPi * 880.0 * i / 16000.0));
+                    }
+                };
+                fill_beep(kLeadSamples);
+                fill_beep(kLeadSamples + kBeepSamples + kGapSamples);
+                append_playback_tasks(marker.data(), marker.size(), "提示音");
+                append_playback_tasks(opus_roundtrip_pcm.data(),
+                                      opus_roundtrip_pcm.size(), " Opus");
+            }
+            audio_testing_pcm_buffer_.clear();
+        }
+
+        const double duration_ms = recorded_samples * 1000.0 / 16000.0;
+        const double rms = recorded_samples == 0
+            ? 0.0
+            : std::sqrt(static_cast<double>(square_sum) / recorded_samples);
+        const double peak_dbfs = peak == 0
+            ? -120.0
+            : 20.0 * std::log10(static_cast<double>(peak) / 32768.0);
+        const double rms_dbfs = rms == 0.0
+            ? -120.0
+            : 20.0 * std::log10(rms / 32768.0);
+        const double clipped_percent = recorded_samples == 0
+            ? 0.0
+            : clipped_samples * 100.0 / recorded_samples;
+        ESP_LOGI(TAG,
+                 "音频测试 A/B: duration=%.0fms, samples=%u/%u, peak=%ld "
+                 "(%.1fdBFS), rms=%.1fdBFS, clipped=%u (%.2f%%), "
+                 "opus_packets=%u, opus_bytes=%u, playback_chunks=%u",
+                 duration_ms, static_cast<unsigned>(recorded_samples),
+                 static_cast<unsigned>(comparable_samples),
+                 static_cast<long>(peak), peak_dbfs, rms_dbfs,
+                 static_cast<unsigned>(clipped_samples), clipped_percent,
+                 static_cast<unsigned>(opus_packet_count),
+                 static_cast<unsigned>(opus_payload_bytes),
+                 static_cast<unsigned>(playback_tasks.size()));
+        if (clipped_samples > 0) {
+            ESP_LOGW(TAG,
+                     "音频测试检测到硬削波；若回放仍有爆音，应降低 PCM 增益");
+        }
+        if (comparable_samples > 0 && opus_packet_count > 0) {
+            ESP_LOGI(TAG,
+                     "音频测试回放顺序: AFE/AEC PCM -> 双提示音 -> 16kbps Opus");
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+            if (service_stopped_.load()) {
+                return;
+            }
+            while (!playback_tasks.empty()) {
+                audio_playback_queue_.push_back(
+                    std::move(playback_tasks.front()));
+                playback_tasks.pop_front();
+            }
+            audio_queue_cv_.notify_all();
+        }
+}
+
+// 根据硬件能力切换 AEC；不改变 MicroWakeWord 的后处理输入点，NS 继续运行。
 void AudioService::SetAecEnabled(bool enable) {
     aec_enabled_ = enable && SupportsAec();
     if (enable && !aec_enabled_) {
@@ -1478,12 +1717,6 @@ void AudioService::SetAecEnabled(bool enable) {
     }
     if (audio_processor_initialized_) {
         audio_processor_->SetAecEnabled(aec_enabled_);
-#if CONFIG_USE_MICRO_WAKE_WORD
-        if (!service_stopped_.load()) {
-            SetWakeInputFromProcessor(
-                aec_enabled_ && speaker_output_active_.load());
-        }
-#endif
     }
 }
 
@@ -1604,9 +1837,10 @@ void AudioService::PlaySound(const std::string_view& ogg) {
 // ============================================================================
 bool AudioService::IsIdle() {
     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
-    return audio_encode_queue_.empty() && audio_decode_queue_.empty() &&
-           audio_playback_queue_.empty() && suspended_player_playback_queue_.empty() &&
-           audio_testing_queue_.empty();
+    return !audio_testing_running_.load() &&
+           !audio_testing_processing_.load() &&
+           audio_encode_queue_.empty() && audio_decode_queue_.empty() &&
+           audio_playback_queue_.empty() && suspended_player_playback_queue_.empty();
 }
 
 // 清理一次下行播放会话的解码器、重采样器、播放队列和首帧统计。
@@ -1643,7 +1877,6 @@ void AudioService::ResetPlayerPlaybackState(bool clear_suspended_queue) {
     player_prebuffer_wait_logged_ = false;
     player_rebuffer_count_ = 0;
     player_stream_active_.store(false);
-    audio_testing_queue_.clear();
     audio_queue_cv_.notify_all();
 }
 

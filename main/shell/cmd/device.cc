@@ -1,5 +1,6 @@
 #include "device.h"
 
+#include "application.h"
 #include "system/settings.h"
 #include "system/system_info.h"
 
@@ -23,12 +24,36 @@ void PrintUsage() {
         "  device set_sid <secret_id>\n"
         "  device get_pid\n"
         "  device get_sid\n"
-        "  device get_device_id\n");
+        "  device get_device_id\n"
+        "  device audio_test <start|stop>\n");
 }
 
 int HandleDeviceCommand(int argc, char** argv) {
     if (argc < 2 || std::strcmp(argv[1], "help") == 0) {
         PrintUsage();
+        return 0;
+    }
+
+    if (std::strcmp(argv[1], "audio_test") == 0) {
+        if (argc != 3 || (std::strcmp(argv[2], "start") != 0 &&
+                          std::strcmp(argv[2], "stop") != 0)) {
+            PrintUsage();
+            return 1;
+        }
+        const bool start = std::strcmp(argv[2], "start") == 0;
+        auto& app = Application::GetInstance();
+        app.Schedule([start, &app]() {
+            const auto state = app.GetDeviceState();
+            if (start && state == kDeviceStateWifiConfiguring) {
+                app.StartListening();
+            } else if (!start && state == kDeviceStateAudioTesting) {
+                app.StopListening();
+            } else {
+                std::printf("Audio test %s ignored in state %s\n",
+                            start ? "start" : "stop",
+                            DeviceStatus::GetStateName(state));
+            }
+        });
         return 0;
     }
 

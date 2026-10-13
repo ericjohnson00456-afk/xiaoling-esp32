@@ -1323,7 +1323,7 @@ void Application::HandleStateChangedEvent() {
                 xiaoling_conn_->SendStartListening(listening_mode_);
             }
 
-            // 采集、AFE/AEC 和 Opus 编码始终运行；进入聆听态只打开网络消费端。
+            // 采集、AFE/AEC 常驻；进入聆听态打开上行编码和网络消费。
             audio_service_.EnableAudioUpload(true);
 #ifdef CONFIG_LSPLATFORM
             uplink_watchdog_.Start();

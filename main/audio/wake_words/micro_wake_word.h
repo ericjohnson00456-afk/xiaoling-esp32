@@ -12,6 +12,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <atomic>
 
 // TensorFlow Lite includes
 #include <tensorflow/lite/core/c/common.h>
@@ -48,12 +49,12 @@ private:
     std::function<void(const std::string&)> detection_callback_;
     
     // State management
-    // 保护 Feed（audio_input 任务）与 Start/Stop（主任务）之间的并发：
+    // 保护 Feed（独立唤醒任务）与 Start/Stop（主任务）之间的并发：
     // Stop() 会释放 tensor arena 并销毁 interpreter，Feed 必须在同一把锁下运行，
     // 否则推理过程会写入已释放的 SPIRAM，踩坏堆空闲链表导致 StoreProhibited。
     std::mutex mutex_;
     bool initialized_ = false;
-    bool running_ = false;
+    std::atomic_bool running_{false};
     bool detected_ = false;
     bool frontend_initialized_ = false;
     bool models_loaded_ = false;  // 添加模型加载状态标志
