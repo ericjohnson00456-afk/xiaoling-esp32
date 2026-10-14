@@ -3,6 +3,7 @@
 #include "playback_stream_policy.h"
 #include "audio_yield_policy.h"
 #include "input_discard_policy.h"
+#include "input_gain_policy.h"
 #include "resource/resource.h"
 #include "xiaoling/conn/xiaoling_config.h"
 #include <esp_log.h>
@@ -440,26 +441,23 @@ bool AudioService::ReadAudioData(std::vector<int16_t>& data, int sample_rate, in
         }
     }
 
-    // Amplify the microphone before it is split to the wake-word and AFE pipelines.
-#if CONFIG_BOARD_TYPE_ESP_BOX_3
-    // BOX3 只在 AEC 前放大 MIC，参考声道保持原幅度。
-    constexpr int32_t kMicPcmGain = 2;
+    // 唤醒与 AFE 分流前按输入能力选增益，不放大 AEC 的参考声道。
+#if CONFIG_IDF_TARGET_ESP32S3
+    constexpr bool kEsp32S3 = true;
 #else
-    constexpr int32_t kMicPcmGain = 5;
+    constexpr bool kEsp32S3 = false;
 #endif
+    const int32_t mic_pcm_gain = SelectMicrophonePcmGain(
+        kEsp32S3, codec_->input_reference());
     const size_t input_channels = codec_->input_channels();
-    size_t clipped = 0;
-    for (size_t i = 0; i < data.size(); i += input_channels) {
-        const int32_t amplified = static_cast<int32_t>(data[i]) * kMicPcmGain;
-        if (amplified < INT16_MIN || amplified > INT16_MAX) ++clipped;
-        data[i] = static_cast<int16_t>(std::clamp(amplified,
-            static_cast<int32_t>(INT16_MIN), static_cast<int32_t>(INT16_MAX)));
-    }
-#if CONFIG_BOARD_TYPE_ESP_BOX_3
+    const size_t clipped = AmplifyMicrophonePcm(data, input_channels,
+                                                 codec_->input_reference(), mic_pcm_gain);
+#if CONFIG_IDF_TARGET_ESP32S3
     if (clipped > 0) {
         static uint32_t clipping_frames = 0;
         if (++clipping_frames % 100 == 1) {
-            ESP_LOGW(TAG, "BOX3 AEC 前 x2 削波: %u/%u samples, frames=%lu",
+            ESP_LOGW(TAG, "S3 处理前 PCM x%ld 削波: %u/%u samples, frames=%lu",
+                     static_cast<long>(mic_pcm_gain),
                      static_cast<unsigned>(clipped),
                      static_cast<unsigned>(data.size() / input_channels),
                      static_cast<unsigned long>(clipping_frames));
@@ -500,14 +498,13 @@ void AudioService::AudioInputTask() {
         for (const size_t feed_size : {wake_samples, processor_samples}) {
             if (feed_size > 0 && (samples == 0 || feed_size < samples)) samples = feed_size;
         }
-#if CONFIG_BOARD_TYPE_ESP_BOX_3
-        // BOX3 的 DMA 每块 240 点，而 AFE 需要 256 点。IDF 在 RX 队列
-        // 接近满时会跳过当前 DMA 块未读完的尾部，即使没有队列溢出事件。
-        // 整块读取保证没有未读尾部；下面的 pending 再拼成 AFE 所需帧长。
-        if (samples > 0 && codec_->input_sample_rate() == 16000) {
-            samples = AUDIO_CODEC_DMA_FRAME_NUM;
+        // 标准 I2S RX 整块取走 DMA 的 240 点，避免下一次读取时跳过本次
+        // DMA 剩余样本；processor_pending / wake_pending 负责拼回模型帧长。
+        // 非 I2S codec 报告 0，继续按消费者帧长读取。
+        const size_t dma_samples = codec_->InputDmaFrameSamples();
+        if (samples > 0 && codec_->input_sample_rate() == 16000 && dma_samples > 0) {
+            samples = dma_samples;
         }
-#endif
         if (samples == 0) {
             vTaskDelay(pdMS_TO_TICKS(20));
             continue;

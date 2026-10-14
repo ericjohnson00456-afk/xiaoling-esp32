@@ -32,6 +32,10 @@ public:
         return AUDIO_CODEC_DMA_FRAME_NUM * sizeof(int32_t);
     }
     virtual bool InputData(std::vector<int16_t>& data);
+    // 本工程使用的 I2S RX 通道以 240 采样点组成 DMA 块；非 I2S 输入返回 0。
+    virtual size_t InputDmaFrameSamples() const {
+        return rx_handle_ != nullptr ? AUDIO_CODEC_DMA_FRAME_NUM : 0;
+    }
     // 累计硬件接收队列溢出事件；不支持统计的 codec 返回 -1。
     virtual int64_t input_overflow_count() const { return -1; }
     virtual void Start();

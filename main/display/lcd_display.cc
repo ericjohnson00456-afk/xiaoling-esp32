@@ -119,8 +119,8 @@ SpiLcdDisplay::SpiLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_h
 
     ESP_LOGI(TAG, "Initialize LVGL port");
     lvgl_port_cfg_t port_cfg = ESP_LVGL_PORT_INIT_CONFIG();
-    // BOX3 与 TTS 解码同级轮转，仍低于 AFE/编码(8)和唤醒(9)。
-#if CONFIG_BOARD_TYPE_ESP_BOX_3
+    // S3 的 SPI LCD 与 TTS 解码同级轮转，仍低于 AFE/编码(8)和唤醒(9)。
+#if CONFIG_IDF_TARGET_ESP32S3
     port_cfg.task_priority = 7;
 #else
     port_cfg.task_priority = 8;
@@ -145,9 +145,9 @@ SpiLcdDisplay::SpiLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_h
         .io_handle = panel_io_,
         .panel_handle = panel_,
         .control_handle = nullptr,
-        // BOX3 将原来的 40 行拆成两块 20 行：DMA 发送上一块时绘制下一块，
+        // S3 SPI LCD 将原来的 40 行拆成两块 20 行：DMA 发送上一块时绘制下一块，
         // RGB565 总计仍为 width*40*2 字节，不挤占更多音频/Wi-Fi 内存。
-#if CONFIG_BOARD_TYPE_ESP_BOX_3
+#if CONFIG_IDF_TARGET_ESP32S3
         .buffer_size = static_cast<uint32_t>(width_ * 20),
         .double_buffer = true,
 #else
@@ -180,7 +180,7 @@ SpiLcdDisplay::SpiLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_h
         return;
     }
 
-#if CONFIG_BOARD_TYPE_ESP_BOX_3
+#if CONFIG_IDF_TARGET_ESP32S3
     flush_ready_ = xSemaphoreCreateBinary();
     ESP_ERROR_CHECK(flush_ready_ != nullptr ? ESP_OK : ESP_ERR_NO_MEM);
     lv_display_set_user_data(display_, this);
@@ -203,7 +203,7 @@ SpiLcdDisplay::SpiLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_h
         ESP_LOGI(TAG, "SPI bus arbiter enabled");
     }
     if (flush_ready_ != nullptr) {
-        ESP_LOGI(TAG, "BOX3 刷新流水线: priority=%d, buffers=2x20 rows, DMA wait=blocking",
+        ESP_LOGI(TAG, "S3 SPI 刷新流水线: priority=%d, buffers=2x20 rows, DMA wait=blocking",
                  port_cfg.task_priority);
     }
 
