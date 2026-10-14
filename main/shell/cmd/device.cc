@@ -1,6 +1,8 @@
 #include "device.h"
 
 #include "application.h"
+#include "xiaoling/session/voice_session_epoch.h"
+#include "event/app_event.h"
 #include "system/settings.h"
 #include "system/system_info.h"
 
@@ -25,12 +27,51 @@ void PrintUsage() {
         "  device get_pid\n"
         "  device get_sid\n"
         "  device get_device_id\n"
-        "  device audio_test <start|stop>\n");
+        "  device audio_test <start|stop>\n"
+        "  device audio_stress <start|stop>\n"
+        "  device wake <wake_word>\n"
+        "  device tts_test <http_url>\n");
 }
 
 int HandleDeviceCommand(int argc, char** argv) {
     if (argc < 2 || std::strcmp(argv[1], "help") == 0) {
         PrintUsage();
+        return 0;
+    }
+    if (std::strcmp(argv[1], "audio_stress") == 0) {
+        if (argc != 3 || (std::strcmp(argv[2], "start") != 0 && std::strcmp(argv[2], "stop") != 0)) {
+            PrintUsage();
+            return 1;
+        }
+        Application::GetInstance().SetAudioStressMode(std::strcmp(argv[2], "start") == 0);
+        return 0;
+    }
+    if (std::strcmp(argv[1], "wake") == 0) {
+        if (argc != 3 || argv[2][0] == '\0') {
+            PrintUsage();
+            return 1;
+        }
+        Application::GetInstance().WakeWordInvoke(argv[2]);
+        return 0;
+    }
+    if (std::strcmp(argv[1], "tts_test") == 0) {
+        if (argc != 3 || (std::strncmp(argv[2], "http://", 7) != 0 &&
+                          std::strncmp(argv[2], "https://", 8) != 0)) {
+            PrintUsage();
+            return 1;
+        }
+        auto& app = Application::GetInstance();
+        const auto generation = Xiaoling::voice_session_epoch.Current();
+        app.Schedule([&app, url = std::string(argv[2]), generation]() {
+            if (!Xiaoling::voice_session_epoch.IsCurrent(generation)) return;
+            if (app.GetDeviceState() != kDeviceStateIdle &&
+                app.GetDeviceState() != kDeviceStateListening) {
+                std::printf("TTS test requires idle/listening state\n");
+                return;
+            }
+            AppEvent::PublishTextScoped(AppEvent::Id::XiaolingTtsUrl, url,
+                                        Xiaoling::voice_session_epoch, generation);
+        });
         return 0;
     }
 

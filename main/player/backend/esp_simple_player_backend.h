@@ -8,11 +8,13 @@
 #include <esp_audio_simple_player.h>
 #include <esp_gmf_io.h>
 #include <esp_gmf_io_http.h>
+#include <esp_gmf_port.h>
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
 #include "playback_backend.h"
+#include "decode_yield_policy.h"
 
 class EspSimplePlayerBackend final : public PlaybackBackend {
 public:
@@ -43,6 +45,9 @@ private:
     };
 
     static int ConfigureInputIo(esp_asp_handle_t handle, void* ctx);
+    static esp_gmf_err_io_t BudgetAcquire(void* ctx, esp_gmf_payload_t* load,
+                                         uint32_t wanted, int wait_ticks);
+    static esp_gmf_err_io_t BudgetRelease(void* ctx, esp_gmf_payload_t* load, int wait_ticks);
     static int HttpIoEventCallback(http_stream_event_msg_t* event);
     static int OutputCallback(uint8_t* data, int data_size, void* ctx);
     static int EventCallbackAdapter(esp_asp_event_pkt_t* event, void* ctx);
@@ -65,6 +70,15 @@ private:
     static void CommandTaskEntry(void* arg);
 
     AudioOutput* audio_output_ = nullptr;
+    // prev 回调在流水线启动前安装端口代理；每个 backend 只有一条解码流水线。
+    port_acquire original_output_acquire_ = nullptr;
+    port_release original_output_release_ = nullptr;
+    void* original_output_ctx_ = nullptr;
+    DecodeYieldPolicy decode_yield_policy_;
+    std::atomic_bool low_latency_prompt_{false};
+    // SimplePlayer 的工作任务从 new 到 destroy 常驻；由端口回调获取真实句柄。
+    std::atomic<TaskHandle_t> decode_task_handle_{nullptr};
+    std::atomic_bool cancelling_decode_{false};
     esp_asp_handle_t handle_ = nullptr;
     EventCallback event_callback_;
     mutable std::mutex mutex_;

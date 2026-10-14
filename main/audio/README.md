@@ -120,15 +120,44 @@ AFE/AEC 输出之后使用独立的 WebRTC NS（10 ms 帧，中等强度）；ES
   原始 MIC。关闭 AEC 不改变取样点，NS 继续运行；没有 AFE/NS 的其它板型
   则使用其现有处理器输出，并不会凭空获得降噪能力。
   ADC 采集任务不执行唤醒模型；队列仅在唤醒旁路丢弃过旧帧。
-  唤醒任务优先级为 7，AFE/NS 与编码任务为 8，优先保证上行音频连续；
+  唤醒任务为 9、AFE/NS 与编码为 8，网络播放器解码/输入为 6，避免高负载播放
+  将唤醒推理持续压到无法及时执行；
   唤醒任务仍每 50 ms 主动让步一次，避免持续推理饿死 Idle。
   启停会清队列并更新 generation，推理与模型启停串行化，避免旧输入污染
   新一轮唤醒检测。
 - ESP-SR 根据芯片和模型包选择 AFE、自定义命令词或直接 Wakenet 实现，
   输入帧均由 `AudioInputTask` 提供。
 
-`AudioService` 只触发唤醒词和 VAD 回调。`Application` 将它们转换为
-`WakeWordDetected` 和 `VadChanged` 事件，再由统一的 `AppEvent` 任务分发。
+`AudioService` 只触发唤醒词和 VAD 回调。唤醒直接投递应用紧急队列；
+VAD 仍由 `AppEvent` 分发。播放器事件经事件队列后也在应用主任务处理，
+避免提示音结束恢复暂存 URL 与新唤醒推进 epoch 并发。
+
+本地模型的唤醒回调只直接投递 Application 紧急队列，不在模型锁内执行业务，
+不等待事件任务分发。独立唤醒推理及运行期应用控制均为 9，高于编码/AFE 的 8。
+启动/OTA/激活阶段的应用任务仍为 5。待命、录音、
+TTS 播放期间均可唤醒替换对话：先推进 epoch、冻结旧回复游标并停止本地声音，
+提交本地 tone，再按协议顺序发送旧会话 event/cancel 和新 rid 的 start。
+旧 IAT/TTS/字幕、迟到 finish 与播放器终态均校验代次；不会关闭新录音。
+started 确认改为异步，音频上报在当前新会话确认后开启，超时由一秒时钟检查。
+本地 ROMFS tone 不等 16 KiB 预缓冲，第一块 PCM 即输出；解码临时升为 8，
+每 10 ms 让步一 tick，仍低于唤醒的 9。后续 TTS/音乐恢复为 6 和 50 ms 预算。
+主动停止 TTS 时中止数据总线和 HTTP socket，取消 IO close 默认的 1000 ms
+自然结束预等待（仍保留任务 deinit/join），并临时提高旧解码关闭任务优先级，
+避免新提示音堵在上一条 HTTP 流退出之后。
+串口 `device wake HiLina` 走同一会话替换控制链（不测试模型识别率）；
+`device tts_test <http_url>` 可在待命/录音态测试真实 HTTP/MP3/DAC TTS 打断。
+
+每 5 秒的「唤醒吞吐」日志报告生产/推理帧率、丢帧、推理耗时与最大排队
+时间。16 kHz/20 ms 链路正常持续输入应约为 50 帧/秒；仅降低模型阈值不能
+补回因调度而丢弃的唤醒词片段。
+播放器在流水线启动前包装最终输出端口，空 PCM 且非 EOF 时阻塞一个 tick，
+有 PCM 时网络媒体每 50 ms、本地 tone 每 10 ms 主动让步；delegate 原 acquire/release、错误和
+EOF 语义，不添加永久运行的 GMF job。HTTP EAGAIN 重试也进行短暂退避。
+在待命/配网状态可执行 `device audio_stress start`，使用同一上行 Opus 编码
+器模拟持续编码负载，但不发送网络音频、不触发业务唤醒。待命状态下再用
+`device tts_test <http_url>` 让测试音频走实际 TTS 通道，检查同时负载的帧率。
+`device audio_stress stop` 停止压力编码并停止该测试播放；正常开启上报会
+自动退出压力模式。压力模式不等于实际云端 ASR 测试，网络发送开销需另测。
 
 ## 播放和下行
 

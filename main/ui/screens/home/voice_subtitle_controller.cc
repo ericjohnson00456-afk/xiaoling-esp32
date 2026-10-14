@@ -134,39 +134,57 @@ void VoiceSubtitleController::Start() {
     if (!event_subscriptions_.empty()) {
         return;
     }
+    event_subscriptions_.push_back(AppEvent::Subscribe(
+        AppEvent::Id::VoiceSessionStarted, [this](const AppEvent::Event& event) {
+            const auto scope = event.Scope();
+            UiManager::GetInstance().Dispatch([this, scope]() {
+                if (!scope.IsCurrent()) return;
+                tts_progress_generation_.fetch_add(1);
+                latest_tts_audio_clock_ms_.store(0);
+                tts_progress_dispatch_pending_.store(false);
+                ResetSubtitles(true);
+                iat_text_visible_ = false;
+            });
+        }));
     auto subscribe_text = [this](AppEvent::Id id) {
         event_subscriptions_.push_back(AppEvent::Subscribe(
             id, [this](const AppEvent::Event& event) {
-                QueueIatText(std::string(event.Text()));
+                QueueIatText(std::string(event.Text()), event.Scope());
             }));
     };
     subscribe_text(AppEvent::Id::XiaolingIatStart);
     subscribe_text(AppEvent::Id::XiaolingIatUpdate);
     subscribe_text(AppEvent::Id::XiaolingIatEnd);
     event_subscriptions_.push_back(AppEvent::Subscribe(
-        AppEvent::Id::XiaolingTtsTextStart, [this](const AppEvent::Event&) {
-            UiManager::GetInstance().Dispatch([this]() { OnTtsTextStart(); });
+        AppEvent::Id::XiaolingTtsTextStart, [this](const AppEvent::Event& event) {
+            const auto scope = event.Scope();
+            UiManager::GetInstance().Dispatch([this, scope]() { if (scope.IsCurrent()) OnTtsTextStart(); });
         }));
     event_subscriptions_.push_back(AppEvent::Subscribe(
         AppEvent::Id::XiaolingTtsTextUpdate, [this](const AppEvent::Event& event) {
             UiManager::GetInstance().Dispatch(
-                [this, text = std::string(event.Text())]() { OnTtsTextUpdate(text); });
+                [this, text = std::string(event.Text()), scope = event.Scope()]() {
+                    if (scope.IsCurrent()) OnTtsTextUpdate(text);
+                });
         }));
     event_subscriptions_.push_back(AppEvent::Subscribe(
-        AppEvent::Id::XiaolingTtsTextEnd, [this](const AppEvent::Event&) {
-            UiManager::GetInstance().Dispatch([this]() { OnTtsTextEnd(); });
+        AppEvent::Id::XiaolingTtsTextEnd, [this](const AppEvent::Event& event) {
+            const auto scope = event.Scope();
+            UiManager::GetInstance().Dispatch([this, scope]() { if (scope.IsCurrent()) OnTtsTextEnd(); });
         }));
     event_subscriptions_.push_back(AppEvent::Subscribe(
-        AppEvent::Id::XiaolingTtsTextInterrupt, [this](const AppEvent::Event&) {
-            UiManager::GetInstance().Dispatch([this]() { OnTtsTextInterrupt(); });
+        AppEvent::Id::XiaolingTtsTextInterrupt, [this](const AppEvent::Event& event) {
+            const auto scope = event.Scope();
+            UiManager::GetInstance().Dispatch([this, scope]() { if (scope.IsCurrent()) OnTtsTextInterrupt(); });
         }));
     event_subscriptions_.push_back(AppEvent::Subscribe(
-        AppEvent::Id::XiaolingTtsStarted, [this](const AppEvent::Event&) {
+        AppEvent::Id::XiaolingTtsStarted, [this](const AppEvent::Event& event) {
+            const auto scope = event.Scope();
             const uint32_t generation = tts_progress_generation_.fetch_add(1) + 1;
             latest_tts_audio_clock_ms_.store(0);
             tts_progress_dispatch_pending_.store(false);
-            UiManager::GetInstance().Dispatch([this, generation]() {
-                if (generation == tts_progress_generation_.load()) {
+            UiManager::GetInstance().Dispatch([this, generation, scope]() {
+                if (scope.IsCurrent() && generation == tts_progress_generation_.load()) {
                     OnTtsPlaying();
                 }
             });
@@ -186,12 +204,13 @@ void VoiceSubtitleController::Start() {
             QueueTtsAudioProgress(audio_clock_ms);
         }));
     event_subscriptions_.push_back(AppEvent::Subscribe(
-        AppEvent::Id::XiaolingTtsStopped, [this](const AppEvent::Event&) {
+        AppEvent::Id::XiaolingTtsStopped, [this](const AppEvent::Event& event) {
+            const auto scope = event.Scope();
             const uint32_t generation = tts_progress_generation_.fetch_add(1) + 1;
             latest_tts_audio_clock_ms_.store(0);
             tts_progress_dispatch_pending_.store(false);
-            UiManager::GetInstance().Dispatch([this, generation]() {
-                if (generation == tts_progress_generation_.load()) {
+            UiManager::GetInstance().Dispatch([this, generation, scope]() {
+                if (scope.IsCurrent() && generation == tts_progress_generation_.load()) {
                     OnTtsStopped();
                 }
             });
@@ -217,12 +236,13 @@ void VoiceSubtitleController::Stop() {
     tts_progress_dispatch_pending_.store(false);
 }
 
-void VoiceSubtitleController::QueueIatText(std::string text) {
+void VoiceSubtitleController::QueueIatText(std::string text, AppEvent::EpochSnapshot scope) {
     if (text.empty()) return;
     bool schedule = false;
     {
         std::lock_guard<std::mutex> lock(iat_text_mutex_);
         pending_iat_text_ = std::move(text);
+        pending_iat_scope_ = scope;
         pending_iat_received_us_ = esp_timer_get_time();
         ++last_voice_text_revision_;
         if (!iat_dispatch_pending_) {
@@ -239,13 +259,15 @@ void VoiceSubtitleController::DrainIatText() {
     std::string text;
     uint32_t revision = 0;
     int64_t received_us = 0;
+    AppEvent::EpochSnapshot scope;
     {
         std::lock_guard<std::mutex> lock(iat_text_mutex_);
         text = pending_iat_text_;
+        scope = pending_iat_scope_;
         revision = last_voice_text_revision_;
         received_us = pending_iat_received_us_;
     }
-    if (!text.empty()) {
+    if (!text.empty() && scope.IsCurrent()) {
         if (subtitle_audio_started_) {
             ResetSubtitles(true);
             presenter_.SetStatus(Lang::Strings::LISTENING);

@@ -25,6 +25,7 @@ class AlarmPlayer;
 class AudioPlayer {
 public:
     using TtsUrlCallback = std::function<void()>;
+    using ControlScheduler = std::function<void(std::function<void()>)>;
     using MusicUrlResolveCallback = MusicPlaylist::MusicUrlResolveCallback;
     using MusicUrlResolver = MusicPlaylist::MusicUrlResolver;
     using MusicTrackCallback = std::function<void(MusicTrack)>;
@@ -35,7 +36,7 @@ public:
     AudioPlayer(const AudioPlayer&) = delete;
     AudioPlayer& operator=(const AudioPlayer&) = delete;
 
-    bool Initialize(AudioService* audio_service);
+    bool Initialize(AudioService* audio_service, ControlScheduler scheduler);
     uint32_t PlayTtsUrl(const std::string& url);
     uint32_t PlayMusicUrl(const std::string& url);
     uint32_t PlayMusicList(const std::vector<std::string>& urls);
@@ -74,18 +75,20 @@ public:
     PlaybackOutputEvent TakeLatestOutputProgress();
 
 private:
-    // 后端线程只复制事件；通道状态和业务事件都在 app_event 任务处理。
+    // 后端线程只复制事件；通道状态通过事件队列转交 Application 主任务。
     void PublishBackendEvent(const PlaybackEvent& event);
     void PublishPlayerOutputStarted(const AudioOutputEvent& event);
     void PublishPlayerOutputProgress(const AudioOutputEvent& event);
     PlaybackOutputEvent ToPlaybackOutputEvent(const AudioOutputEvent& event) const;
     void RememberSession(uint32_t session_id, PlaybackChannel channel);
+    uint32_t TtsSessionGeneration(uint32_t session_id) const;
     void HandleBackendEvent(const PlaybackEvent& event);
     void DispatchPlaybackEvent(const PlaybackEvent& event);
     uint32_t PlayMusicUrlInternal(const std::string& url);
     uint32_t PlayMusicFileInternal(const std::string& path);
 
     AudioService* audio_service_ = nullptr;
+    ControlScheduler control_scheduler_;
     std::unique_ptr<PlaybackBackend> backend_;
     std::unique_ptr<PlaybackBackend> music_backend_;
     std::unique_ptr<TonePlayer> tone_channel_;
@@ -94,6 +97,7 @@ private:
     std::unique_ptr<MusicPlayer> music_channel_;
     std::unique_ptr<MusicPlaylist> music_playlist_;
     std::atomic_bool wakeup_in_progress_{false};
+    std::recursive_mutex wakeup_mutex_;
     std::atomic<uint32_t> next_session_id_{1};
     uint32_t backend_event_subscription_id_ = 0;
     mutable std::mutex callback_mutex_;
@@ -104,4 +108,5 @@ private:
     std::atomic_bool output_progress_event_pending_{false};
     mutable std::mutex session_mutex_;
     std::unordered_map<uint32_t, PlaybackChannel> session_channels_;
+    std::unordered_map<uint32_t, uint32_t> tts_session_generations_;
 };

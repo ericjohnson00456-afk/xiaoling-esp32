@@ -2,6 +2,7 @@
 #define XIAOLING_VOICE_H
 
 #include "xiaoling_types.h"
+#include "voice_session_epoch.h"
 
 #include <atomic>
 #include <cstdint>
@@ -49,6 +50,8 @@ public:
     // 为按键图片识别准备无音频上行的文本会话，并清理上一轮语音结果状态。
     void PrepareTextSession(std::string session_id);
     void SendStartListening(ListeningMode mode);
+    // 使用应用现有的一秒时钟检查，等待 started 不得阻塞唤醒主任务。
+    void CheckStartTimeout();
     void SendStopListening();
     // 半双工收到 TTS 后只结束上行，保留当前回复的音频和字幕状态。
     bool StopListeningForTts();
@@ -62,13 +65,15 @@ public:
     // MCP 拍照会停止早到的空 TTS 流并在工具响应后重播；期间保留字幕状态。
     void PrepareTtsReplay();
 
-    void HandleMessage(const cJSON* root);
+    bool HandleMessage(const cJSON* root, uint32_t* accepted_generation = nullptr);
     void HandleBinary(std::vector<uint8_t> payload);
     void Reset();
 
     int server_sample_rate() const { return kServerSampleRate; }
     int server_frame_duration() const { return kServerFrameDurationMs; }
-    const std::string& session_id() const { return session_id_; }
+    std::string session_id() const;
+    uint32_t event_generation() const { return event_generation_.load(); }
+    bool AcceptsSessionMessage(const std::string& rid) const;
     bool audio_upload_enabled() const { return audio_upload_enabled_.load(); }
 
 private:
@@ -106,6 +111,11 @@ private:
     std::atomic_bool session_active_{false};
     std::atomic_bool audio_upload_enabled_{false};
     std::string session_id_;
+    mutable std::recursive_mutex session_mutex_;
+    std::atomic<uint32_t> event_generation_{Xiaoling::voice_session_epoch.Current()};
+    bool accepting_session_messages_ = false;
+    bool awaiting_started_ = false;
+    int64_t start_deadline_us_ = 0;
     bool text_session_ = false;
     std::string pending_wake_word_;
     std::atomic_bool uplink_audio_format_checked_{false};
@@ -156,7 +166,7 @@ private:
     void OnTtsPlaybackStopped(bool natural_end);
     void StartSubtitleStream(const std::string& url);
     void CancelSubtitleStream(bool notify_interrupt);
-    void HandleSubtitleEvent(int event, const std::string& text);
+    void HandleSubtitleEvent(int event, const std::string& text, uint32_t generation);
     void ResetTimelineStateLocked();
     bool SendFrozenReplyInterruption();
     void EndIat();

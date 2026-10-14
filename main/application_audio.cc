@@ -1,4 +1,5 @@
 #include "application.h"
+#include "xiaoling/session/voice_session_epoch.h"
 
 #include <esp_log.h>
 
@@ -17,7 +18,9 @@ void Application::InitializeAudio() {
     Ui::SetWakeWord(audio_service_.GetWakeWordName());
 
     // 播放器初始化
-    if (!audio_player_.Initialize(&audio_service_)) {
+    if (!audio_player_.Initialize(&audio_service_, [this](std::function<void()> callback) {
+            Schedule(std::move(callback));
+        })) {
         ESP_LOGE(TAG, "音频播放器初始化失败");
     }
     // 播放器事件栈初始化
@@ -47,20 +50,20 @@ void Application::RegisterAudioEventSubscribers() {
         [](const AppEvent::Event& event, void* context) {
             auto* application = static_cast<Application*>(context);
             std::string url(event.Text());
-            if (CameraService::GetInstance().DeferVoiceMcpTtsUrl(url)) {
-                return;
-            }
-            const uint32_t session_id =
-                application->audio_player_.PlayTtsUrl(url);
-            if (session_id == 0) {
-                ESP_LOGW(TAG, "TTS URL 未能立即提交，播放器可能正在暂存");
-            } else {
-                // PlayTtsUrl 返回时已经分配了新 session。立即替换 pending，
-                // 防止上一条被抢占 TTS 的迟到终态清除新 URL 的等待标志。
-                application->pending_tts_session_id_ = session_id;
-                ESP_LOGI(TAG, "TTS URL 已绑定待播放会话: session=%lu",
-                         static_cast<unsigned long>(session_id));
-            }
+            const auto scope = event.Scope();
+            application->Schedule([application, url = std::move(url), scope]() {
+                if (!scope.IsCurrent()) return;
+                if (CameraService::GetInstance().DeferVoiceMcpTtsUrl(url)) return;
+                const uint32_t session_id = application->audio_player_.PlayTtsUrl(url);
+                if (session_id == 0) {
+                    ESP_LOGW(TAG, "TTS URL 未能立即提交，播放器可能正在暂存");
+                } else {
+                    // 提交时即绑定 pending，旧终态不能清除新 URL 的等待标志。
+                    application->pending_tts_session_id_ = session_id;
+                    ESP_LOGI(TAG, "TTS URL 已绑定待播放会话: session=%lu",
+                             static_cast<unsigned long>(session_id));
+                }
+            });
         }, this);
     if (tts_url_subscription_id_ == 0) {
         ESP_LOGE(TAG, "订阅 TTS URL 事件失败");
@@ -73,7 +76,11 @@ void Application::RegisterAudioEventSubscribers() {
             ESP_LOGE(TAG, "播放生命周期事件数据无效");
             return;
         }
-        static_cast<Application*>(context)->HandlePlaybackEvent(*event);
+        auto* application = static_cast<Application*>(context);
+        const auto scope = queued.Scope();
+        application->Schedule([application, playback = *event, scope]() {
+            if (scope.IsCurrent()) application->HandlePlaybackEvent(playback);
+        });
     };
     constexpr AppEvent::Id kPlaybackEvents[] = {
         AppEvent::Id::PlaybackStreamReady,
@@ -98,8 +105,11 @@ void Application::RegisterAudioEventSubscribers() {
         AppEvent::Handler handler;
     } audio_events[] = {
         {AppEvent::Id::WakeWordDetected,
-         [](const AppEvent::Event&, void* context) {
-             static_cast<Application*>(context)->HandleWakeWordDetectedEvent();
+         [](const AppEvent::Event& event, void* context) {
+             auto* app = static_cast<Application*>(context);
+             app->ScheduleUrgent([app, wake_word = std::string(event.Text())]() {
+                 app->HandleWakeWordDetectedEvent(wake_word);
+             });
          }},
         {AppEvent::Id::VadChanged,
          [](const AppEvent::Event&, void* context) {
@@ -128,13 +138,21 @@ void Application::RegisterAudioEventSubscribers() {
                  ESP_LOGE(TAG, "播放器首帧事件数据无效");
                  return;
              }
-             static_cast<Application*>(context)->HandlePlayerOutputStartedEvent(*event);
+             auto* app = static_cast<Application*>(context);
+             const auto scope = queued.Scope();
+             app->Schedule([app, output = *event, scope]() {
+                 if (scope.IsCurrent()) app->HandlePlayerOutputStartedEvent(output);
+             });
          }},
         {AppEvent::Id::PlayerOutputProgress,
          [](const AppEvent::Event&, void* context) {
              auto* application = static_cast<Application*>(context);
-             application->HandlePlayerOutputProgressEvent(
-                 application->audio_player_.TakeLatestOutputProgress());
+             const auto output = application->audio_player_.TakeLatestOutputProgress();
+             const auto scope = AppEvent::EpochSnapshot{
+                 &Xiaoling::voice_session_epoch, Xiaoling::voice_session_epoch.Current()};
+             application->Schedule([application, output, scope]() {
+                 if (scope.IsCurrent()) application->HandlePlayerOutputProgressEvent(output);
+             });
          }},
     };
     for (const auto& registration : playback_output_events) {
@@ -151,11 +169,10 @@ void Application::RegisterAudioEventSubscribers() {
 
 void Application::BindAudioEventPublishers() {
     AudioServiceCallbacks callbacks;
-    callbacks.on_wake_word_detected = [](const std::string&) {
-        if (!AppEvent::Publish(AppEvent::Id::WakeWordDetected, nullptr, 0,
-                               AppEvent::Priority::Urgent)) {
-            ESP_LOGE(TAG, "发布唤醒词事件失败");
-        }
+    callbacks.on_wake_word_detected = [this](const std::string& wake_word) {
+        // 直接投递主任务紧急队列，避开低优先级事件任务及其 ASR/TTS 回调。
+        // 模型锁内只入队，绝不能同步 Stop/重置模型。
+        WakeWordInvoke(wake_word);
     };
     callbacks.on_vad_change = [this](bool speaking) {
         (void)speaking;
@@ -198,10 +215,12 @@ void Application::BindAudioEventPublishers() {
         ESP_LOGI(TAG, "TTS URL 已接纳: generation=%lu",
                  static_cast<unsigned long>(generation));
         if (exit_requested_.load()) {
-            // MCP exit 可能与 URL 通知竞态；退出请求后到达的 URL 也不能重开唤醒检测。
-            audio_service_.EnableWakeWordDetection(false);
+            // 退出只关闭 ASR 上报；告别 TTS 期间仍允许用户唤醒开启新对话。
+            audio_service_.EnableWakeWordDetection(true);
         }
-        Schedule([this]() {
+        const auto voice_generation = Xiaoling::voice_session_epoch.Current();
+        Schedule([this, voice_generation]() {
+            if (!Xiaoling::voice_session_epoch.IsCurrent(voice_generation)) return;
             const bool has_music = intent_manager_.HasUnpausedMusic();
             const bool was_listening = GetDeviceState() == kDeviceStateListening;
             // URL 到达后先更新等待文案，真正出声后再切换到讲话状态。

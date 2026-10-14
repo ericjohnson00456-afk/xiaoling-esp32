@@ -15,6 +15,8 @@
 #include "event/app_event.h"
 #include "sd_card/sd_music_service.h"
 #include "camera/camera_service.h"
+#include "xiaoling/session/voice_session_epoch.h"
+#include "player/types/tts_session_guard.h"
 
 #ifdef CONFIG_LSPLATFORM
 #include "image_fetcher.h"
@@ -127,15 +129,20 @@ void Application::HandlePlaybackEvent(const PlaybackEvent& event) {
     if (event.channel != PlaybackChannel::kTts) {
         return;
     }
+    if (pending_tts_session_id_ != 0 && pending_tts_session_id_ != event.session_id) {
+        return;
+    }
     if (event.state == PlaybackState::kStreamReady) {
         pending_tts_session_id_ = event.session_id;
-        AppEvent::Publish(AppEvent::Id::XiaolingTtsStreamReady);
+        AppEvent::PublishScoped(AppEvent::Id::XiaolingTtsStreamReady, nullptr, 0,
+            Xiaoling::voice_session_epoch, Xiaoling::voice_session_epoch.Current());
         return;
     }
     if (event.state == PlaybackState::kPlaying) {
         pending_tts_session_id_ = 0;
         active_tts_session_id_ = event.session_id;
-        AppEvent::Publish(AppEvent::Id::XiaolingTtsPlaying);
+        AppEvent::PublishScoped(AppEvent::Id::XiaolingTtsPlaying, nullptr, 0,
+            Xiaoling::voice_session_epoch, Xiaoling::voice_session_epoch.Current());
         session_controller_.StartTts(event.session_id);
         // kPlaying 只表示播放器已进入播放态，仍需等待 DAC 首个 PCM 输出。
         if (!exit_requested_.load() &&
@@ -153,11 +160,8 @@ void Application::HandlePlaybackEvent(const PlaybackEvent& event) {
         event.state != PlaybackState::kFailed) {
         return;
     }
-    tts_waiting_for_playback_.store(false);
-    tts_output_started_.store(false);
     const bool active_session = active_tts_session_id_ == event.session_id;
-    const bool pending_session = pending_tts_session_id_ == event.session_id;
-    if (!active_session && !pending_session) {
+    if (!IsCurrentTtsSession(event.session_id, active_tts_session_id_, pending_tts_session_id_)) {
         ESP_LOGI(TAG,
                  "忽略旧 TTS 终态: session=%lu, active=%lu, pending=%lu, state=%u",
                  static_cast<unsigned long>(event.session_id),
@@ -166,6 +170,9 @@ void Application::HandlePlaybackEvent(const PlaybackEvent& event) {
                  static_cast<unsigned>(event.state));
         return;
     }
+    // 确认 session 后才清标志；旧终态不能清掉新 TTS 的待播放状态。
+    tts_waiting_for_playback_.store(false);
+    tts_output_started_.store(false);
     const char* reason_text = "interrupted";
     if (event.reason == PlaybackEndReason::kNaturalEnd) {
         reason_text = "natural";
@@ -178,7 +185,8 @@ void Application::HandlePlaybackEvent(const PlaybackEvent& event) {
         ESP_LOGW(TAG, "TTS 播放中 PCM 断流超时: session=%lu",
                  static_cast<unsigned long>(event.session_id));
     }
-    AppEvent::PublishText(AppEvent::Id::XiaolingTtsStopped, reason_text);
+    AppEvent::PublishTextScoped(AppEvent::Id::XiaolingTtsStopped, reason_text,
+        Xiaoling::voice_session_epoch, Xiaoling::voice_session_epoch.Current());
     pending_tts_session_id_ = 0;
     active_tts_session_id_ = 0;
     if (active_session) {
@@ -191,8 +199,7 @@ void Application::HandlePlaybackEvent(const PlaybackEvent& event) {
         return;
     }
     if (exit_requested_.load()) {
-        // Exit 会结束本轮对话生命周期，但允许当前 TTS 流播放完毕，
-        // 随后才恢复唤醒检测。
+        // Exit 结束本轮上报，但不阻止用户通过新的唤醒打断告别 TTS。
         ESP_LOGI(TAG, "退出请求：TTS 播放结束，恢复唤醒检测但保持待命");
         if (GetDeviceState() != kDeviceStateIdle) {
             SetDeviceState(kDeviceStateIdle);
@@ -245,6 +252,12 @@ void Application::HandlePlayerOutputStartedEvent(
     if (event.channel != PlaybackChannel::kTts) {
         return;
     }
+    if (!IsCurrentTtsSession(event.session_id, active_tts_session_id_, pending_tts_session_id_)) {
+        // 暂存 URL 在提示音结束后才分配 session，首个 PCM 可早于 Playing 事件。
+        if (active_tts_session_id_ == 0 && pending_tts_session_id_ == 0 &&
+            tts_waiting_for_playback_.load()) pending_tts_session_id_ = event.session_id;
+        else return;
+    }
 
     ESP_LOGI(TAG,
              "收到 TTS 扬声器首帧: session=%lu, waiting=%d, active=%lu, pending=%lu",
@@ -258,7 +271,8 @@ void Application::HandlePlayerOutputStartedEvent(
     }
 
     tts_output_started_.store(true);
-    AppEvent::Publish(AppEvent::Id::XiaolingTtsStarted);
+    AppEvent::PublishScoped(AppEvent::Id::XiaolingTtsStarted, nullptr, 0,
+        Xiaoling::voice_session_epoch, Xiaoling::voice_session_epoch.Current());
     if (!exit_requested_.load() && active_tts_session_id_ != 0 &&
         tts_output_started_.exchange(false) &&
         tts_waiting_for_playback_.exchange(false) &&
@@ -276,8 +290,10 @@ void Application::HandlePlayerOutputProgressEvent(
     if (event.channel != PlaybackChannel::kTts) {
         return;
     }
-    AppEvent::PublishText(AppEvent::Id::XiaolingTtsOutputProgress,
-                          std::to_string(event.audio_clock_ms));
+    if (!IsCurrentTtsSession(event.session_id, active_tts_session_id_, pending_tts_session_id_)) return;
+    AppEvent::PublishTextScoped(AppEvent::Id::XiaolingTtsOutputProgress,
+        std::to_string(event.audio_clock_ms), Xiaoling::voice_session_epoch,
+        Xiaoling::voice_session_epoch.Current());
 }
 
 void Application::Initialize() {
@@ -441,6 +457,12 @@ void Application::Initialize() {
 }
 
 void Application::Run() {
+    // 启动/OTA 阶段仍为低优先级。运行期需要及时执行唤醒/打断控制，
+    // 不能让 priority=8 的持续录音编码把紧急队列压在 priority=5 后面。
+    constexpr UBaseType_t kApplicationControlPriority = 9;
+    vTaskPrioritySet(nullptr, kApplicationControlPriority);
+    ESP_LOGI(TAG, "运行期语音控制优先级: %u",
+             static_cast<unsigned>(kApplicationControlPriority));
     while (true) {
         const EventBits_t bits = xEventGroupWaitBits(
             event_group_, kAllMainEvents, pdTRUE, pdFALSE, portMAX_DELAY);
@@ -504,11 +526,19 @@ void Application::ProcessMainEvents(EventBits_t bits) {
             task();
         }
         for (auto& task : tasks) {
+            // 普通任务执行期间新到的唤醒也要抢在剩余普通任务之前。
+            std::deque<std::function<void()>> incoming_urgent;
+            {
+                std::lock_guard<std::mutex> urgent_lock(mutex_);
+                incoming_urgent.swap(main_urgent_tasks_);
+            }
+            for (auto& urgent : incoming_urgent) urgent();
             task();
         }
     }
 
     if (bits & MAIN_EVENT_CLOCK_TICK) {
+        if (xiaoling_conn_) xiaoling_conn_->CheckVoiceStartTimeout();
         clock_ticks_++;
         if (alarm_flow_.on_clock_tick) {
             alarm_flow_.on_clock_tick();
@@ -746,7 +776,7 @@ void Application::InitializeXiaolingConn() {
         });
     });
 
-    xiaoling_conn_->OnIncomingJson([this](const cJSON* root) {
+    xiaoling_conn_->OnIncomingJson([this](const cJSON* root, uint32_t generation) {
         const auto* action = cJSON_GetObjectItemCaseSensitive(root, "action");
         if (!cJSON_IsString(action) || action->valuestring == nullptr) {
             ESP_LOGW(TAG, "lschat message has no valid action");
@@ -764,6 +794,7 @@ void Application::InitializeXiaolingConn() {
         }
 
         if (strcmp(action->valuestring, "result") == 0) {
+            // 普通 result 的 IAT/TTS 在语音层转换为带 epoch 的事件。
             const auto* data = cJSON_GetObjectItemCaseSensitive(root, "data");
             const auto* sub = cJSON_IsObject(data)
                                   ? cJSON_GetObjectItemCaseSensitive(data, "sub")
@@ -779,10 +810,36 @@ void Application::InitializeXiaolingConn() {
             return;
         }
 
+        if (strcmp(action->valuestring, "started") == 0) {
+            const auto request_id = xiaoling_conn_->session_id();
+            ScheduleUrgent([this, generation, request_id]() {
+                if (!Xiaoling::voice_session_epoch.IsCurrent(generation) ||
+                    !xiaoling_conn_ || xiaoling_conn_->session_id() != request_id ||
+                    !xiaoling_conn_->CanUploadAudio()) return;
+                const auto state = GetDeviceState();
+                if (state != kDeviceStateListening &&
+                    !(state == kDeviceStateSpeaking && session_controller_.KeepListeningDuringTts())) return;
+                audio_service_.EnableAudioUpload(true);
+#ifdef CONFIG_LSPLATFORM
+                uplink_watchdog_.Start();
+#endif
+                ESP_LOGI(TAG, "新语音会话确认，开启音频上报: epoch=%lu",
+                         static_cast<unsigned long>(generation));
+            });
+            return;
+        }
+
         if (strcmp(action->valuestring, "finish") == 0 ||
             strcmp(action->valuestring, "closed") == 0) {
             const bool natural_finish = strcmp(action->valuestring, "finish") == 0;
-            Schedule([this, natural_finish]() {
+            const auto request_id = xiaoling_conn_->session_id();
+            Schedule([this, natural_finish, generation, request_id]() {
+                if (!Xiaoling::voice_session_epoch.IsCurrent(generation) ||
+                    !xiaoling_conn_ || xiaoling_conn_->session_id() != request_id) {
+                    ESP_LOGI(TAG, "忽略排队的旧会话结束事件: epoch=%lu",
+                             static_cast<unsigned long>(generation));
+                    return;
+                }
                 const bool has_music = intent_manager_.HasUnpausedMusic();
                 const bool tts_active = active_tts_session_id_ != 0 ||
                                         pending_tts_session_id_ != 0 ||
@@ -966,56 +1023,12 @@ void Application::HandleStopListeningEvent() {
     }
 }
 
-void Application::HandleWakeWordDetectedEvent() {
+void Application::HandleWakeWordDetectedEvent(const std::string& wake_word) {
+    if (audio_service_.IsLocalEncodingBenchmark()) return;
     if (alarm_flow_.on_wake_word) {
         alarm_flow_.on_wake_word();
     }
-    if (CameraService::GetInstance().CancelVoiceMcpCountdown(
-            "用户通过语音唤醒取消拍照")) {
-        return;
-    }
-    if (CameraService::GetInstance().IsActive()) {
-        ESP_LOGI(TAG, "拍照流程期间忽略唤醒词");
-        return;
-    }
-    if (SdMusicService::GetInstance().IsBusy()) {
-        ESP_LOGI(TAG, "TF 卡文件同步期间忽略唤醒词");
-        return;
-    }
-    if (exit_requested_.load() &&
-        (tts_waiting_for_playback_.load() || audio_player_.IsPlaying())) {
-        ESP_LOGI(TAG, "忽略退出期间排队的唤醒词，TTS 尚未播放完成");
-        audio_service_.EnableWakeWordDetection(false);
-        return;
-    }
-    PauseWakeWordDetection();
-
-    auto state = GetDeviceState();
-    if (state != kDeviceStateIdle && state != kDeviceStateSpeaking) {
-        ESP_LOGI(TAG, "Ignoring wake word while device is in %s state",
-                 DeviceStatus::GetStateName(state));
-        return;
-    }
-
-    if (!xiaoling_conn_) {
-        return;
-    }
-
-    if (state == kDeviceStateSpeaking) {
-        // 语音唤醒与按键唤醒走同一条 TTS 打断链路：先冻结 timeline
-        // 游标并停止旧回复，再启动下一轮，避免旧 sid 被新 start 覆盖。
-        AbortSpeaking(kAbortReasonWakeWordDetected);
-        SetDeviceState(kDeviceStateIdle);
-    }
-
-    if (!EnsureXiaolingReadyForWakeup()) {
-        return;
-    }
-
-    auto wake_word = audio_service_.GetLastWakeWord();
-    ESP_LOGI(TAG, "Wake word detected: %s", wake_word.c_str());
-    xiaoling_conn_->SendWakeWordDetected(wake_word);
-    BeginWakeup(listening_mode_);
+    HandleWakeWordInvocation(wake_word);
 }
 
 void Application::PublishWifiIcon() {
@@ -1043,8 +1056,8 @@ void Application::AbortSpeaking(AbortReason reason) {
                                 active_tts_session_id_ != 0 ||
                                 audio_player_.IsPlaying();
         if (tts_active) {
-            audio_service_.EnableWakeWordDetection(false);
-            ESP_LOGI(TAG, "退出请求：TTS 仍在播放，暂时屏蔽唤醒检测");
+            audio_service_.EnableWakeWordDetection(true);
+            ESP_LOGI(TAG, "退出请求：保留 TTS 播放和唤醒检测，允许开启新对话");
         } else {
             exit_requested_.store(false);
         }
@@ -1081,15 +1094,10 @@ void Application::AbortSpeaking(AbortReason reason) {
     }
 }
 
-void Application::BeginWakeup(ListeningMode mode) {
-    if (audio_player_.IsWakeupPending() || !xiaoling_conn_) {
-        return;
-    }
-    // 唤醒提示音沿用 kPromptTone。若通用提示音尚未结束，先移交它持有的
-    // Intent，后续旧 session 的终态事件会因 session 不匹配而被忽略。
-    if (prompt_tone_session_id_.exchange(0) != 0) {
-        intent_manager_.Pop(PlaybackIntentId::kPromptTone);
-    }
+void Application::BeginWakeup(ListeningMode mode, const std::string& wake_word) {
+    bool interrupted_tts = false;
+    if (!xiaoling_conn_ || !ResetVoiceSessionForWakeup(interrupted_tts)) return;
+    // 重开会话继续持有 VoiceSessionIntent，避免两轮对话之间恢复被暂停的音乐。
     intent_manager_.Push(PlaybackIntentId::kVoiceSession);
     exit_requested_.store(false);
     if (!SetDeviceState(kDeviceStateConnecting)) {
@@ -1104,27 +1112,39 @@ void Application::BeginWakeup(ListeningMode mode) {
         intent_manager_.Pop(PlaybackIntentId::kVoiceSession);
         return;
     }
-    audio_player_.PlayWakeup([this](bool proceed) {
-        intent_manager_.Pop(PlaybackIntentId::kPromptTone);
-        if (!proceed) {
-            if (GetDeviceState() == kDeviceStateListening && xiaoling_conn_) {
-                xiaoling_conn_->SendStopListening();
+    const auto generation = Xiaoling::voice_session_epoch.Current();
+    audio_player_.PlayWakeup([this, generation](bool proceed) {
+        Schedule([this, generation, proceed]() {
+            if (!Xiaoling::voice_session_epoch.IsCurrent(generation)) return;
+            intent_manager_.Pop(PlaybackIntentId::kPromptTone);
+            if (!proceed) {
+                if (GetDeviceState() == kDeviceStateListening && xiaoling_conn_) {
+                    xiaoling_conn_->SendStopListening();
+                }
+                if (xiaoling_conn_) xiaoling_conn_->SendWakeWordDetected("");
+                SetDeviceState(kDeviceStateIdle);
+                intent_manager_.Pop(PlaybackIntentId::kVoiceSession);
+                return;
             }
-            if (xiaoling_conn_) {
-                xiaoling_conn_->SendWakeWordDetected("");
-            }
-            SetDeviceState(kDeviceStateIdle);
-            intent_manager_.Pop(PlaybackIntentId::kVoiceSession);
-            return;
-        }
-        ESP_LOGI(TAG, "Wakeup tone finished; audio upload already active");
+            ESP_LOGI(TAG, "Wakeup tone finished; recording session remains active");
+        });
     });
     if (GetDeviceState() != kDeviceStateConnecting) {
         return;
     }
+    // tone 已交给播放器，在本地开始解码/出声；旧会话的网络控制在其后执行。
+    // 保持 event/cancel/start 的协议顺序，但不让网络发送挡住本地提示音。
+    if (interrupted_tts) {
+        xiaoling_conn_->SendAbortSpeaking(kAbortReasonWakeWordDetected);
+    } else if (!xiaoling_conn_->EndSession()) {
+        ESP_LOGE(TAG, "Failed to report the current session end before wakeup");
+        CancelWakeup();
+        return;
+    }
+    if (!wake_word.empty()) xiaoling_conn_->SendWakeWordDetected(wake_word);
     // 不要让采集串行等待提示音播放完成。播放器会在进入监听状态、打开云端
     // 会话并并行启动麦克风链路时，保护唤醒提示音不被 TTS 抢占。
-    ESP_LOGI(TAG, "Wakeup tone started; start audio upload in parallel");
+    ESP_LOGI(TAG, "Wakeup tone submitted; start new recording session in parallel");
     SetListeningMode(mode);
     if (iat_subscription_id_ == 0) {
         auto on_iat_text = [this](const AppEvent::Event& event) {
@@ -1132,8 +1152,10 @@ void Application::BeginWakeup(ListeningMode mode) {
             // 防止排队中的旧 IAT 打断后续 TTS。
             const uint32_t observed_tts_generation = tts_url_generation_.load();
             const uint32_t received_ms = esp_log_timestamp();
+            const auto scope = event.Scope();
             ScheduleUrgent([this, text = std::string(event.Text()), observed_tts_generation,
-                            received_ms]() {
+                            received_ms, scope]() {
+                if (!scope.IsCurrent()) return;
                 if (text.empty()) {
                     return;
                 }
@@ -1194,7 +1216,9 @@ void Application::BeginWakeup(ListeningMode mode) {
             AppEvent::Id::XiaolingIatUpdate, on_iat_text);
         iat_end_subscription_id_ = AppEvent::Subscribe(
             AppEvent::Id::XiaolingIatEnd, [this](const AppEvent::Event& event) {
-                Schedule([this, text = std::string(event.Text())]() {
+                const auto scope = event.Scope();
+                Schedule([this, text = std::string(event.Text()), scope]() {
+                    if (!scope.IsCurrent()) return;
                     iat_utterance_active_ = false;
                     // 非空的最终 IAT 表示用户已经说完。在 TTS URL 到达前显示云端
                     // 思考状态。URL 回调会先设置此标志，再将自己的 UI 更新入队，
@@ -1209,17 +1233,44 @@ void Application::BeginWakeup(ListeningMode mode) {
     }
 }
 
-bool Application::EndListeningSessionForWakeup() {
-    ESP_LOGI(TAG, "Wake word detected while recording; end the current session");
+bool Application::ResetVoiceSessionForWakeup(bool& interrupted_tts) {
+    const auto state = GetDeviceState();
+    const auto generation = Xiaoling::voice_session_epoch.Advance();
+    AppEvent::PublishScoped(AppEvent::Id::VoiceSessionStarted, nullptr, 0,
+        Xiaoling::voice_session_epoch, generation);
+    const bool tts_active = active_tts_session_id_ != 0 || pending_tts_session_id_ != 0 ||
+                            tts_waiting_for_playback_.load();
+    interrupted_tts = tts_active;
+    ESP_LOGI(TAG, "唤醒替换语音会话: state=%s, epoch=%lu, old_tts=%lu/%lu",
+             DeviceStatus::GetStateName(state), static_cast<unsigned long>(generation),
+             static_cast<unsigned long>(active_tts_session_id_),
+             static_cast<unsigned long>(pending_tts_session_id_));
     iat_utterance_active_ = false;
     audio_service_.EnableAudioUpload(false);
+#ifdef CONFIG_LSPLATFORM
+    uplink_watchdog_.Stop();
+    downlink_watchdog_.Stop();
+#endif
+    exit_requested_.store(false);
+    tts_url_generation_.fetch_add(1);
+    interrupted_tts_generation_ = 0;
+    // 先使旧播放标识失效，再停播放器；迟到终态不能恢复旧录音或弹出新 Intent。
+    active_tts_session_id_ = 0;
+    pending_tts_session_id_ = 0;
+    tts_waiting_for_playback_.store(false);
+    tts_output_started_.store(false);
     session_controller_.EndSession();
-    if (!xiaoling_conn_ || !xiaoling_conn_->EndSession()) {
-        ESP_LOGE(TAG, "Failed to report the current session end before wakeup");
-        SetDeviceState(kDeviceStateIdle);
-        return false;
+    // 先冻结旧回复游标，再立即停止本地声音；网络 cancel/event 不得拖住静音。
+    if (xiaoling_conn_ && tts_active) {
+        xiaoling_conn_->PrepareAbortSpeaking(kAbortReasonWakeWordDetected);
     }
-    return SetDeviceState(kDeviceStateIdle);
+    audio_player_.CancelWakeup();
+    audio_player_.StopNonMusic(PlaybackEndReason::kPreempted);
+    prompt_tone_session_id_.store(0);
+    // 唤醒提示音的旧完成回调已经因 epoch 变化失效，主动释放它的 Intent。
+    intent_manager_.Pop(PlaybackIntentId::kPromptTone);
+    SetDeviceState(kDeviceStateIdle);
+    return xiaoling_conn_ != nullptr;
 }
 
 void Application::PauseWakeWordDetection() {
@@ -1288,13 +1339,8 @@ void Application::HandleStateChangedEvent() {
             Ui::DismissOverlays();
 #endif  // 小聆平台
             audio_service_.EnableAudioUpload(false);
-            if (exit_requested_.load() &&
-                (tts_waiting_for_playback_.load() || audio_player_.IsPlaying())) {
-                audio_service_.EnableWakeWordDetection(false);
-                ESP_LOGI(TAG, "待命期间等待 TTS 播放完成，保持唤醒检测关闭");
-            } else {
-                audio_service_.EnableWakeWordDetection(true);
-            }
+            // 上报关闭不等于关闭独立唤醒；包括退出会话后仍在播放的 TTS。
+            audio_service_.EnableWakeWordDetection(true);
 #ifdef CONFIG_LSPLATFORM
             uplink_watchdog_.Stop();
             downlink_watchdog_.Stop();
@@ -1323,10 +1369,10 @@ void Application::HandleStateChangedEvent() {
                 xiaoling_conn_->SendStartListening(listening_mode_);
             }
 
-            // 采集、AFE/AEC 常驻；进入聆听态打开上行编码和网络消费。
-            audio_service_.EnableAudioUpload(true);
+            // 采集、AFE/AEC 常驻；异步 started 确认后才开放新会话音频上报。
+            audio_service_.EnableAudioUpload(xiaoling_conn_ && xiaoling_conn_->CanUploadAudio());
 #ifdef CONFIG_LSPLATFORM
-            uplink_watchdog_.Start();
+            if (xiaoling_conn_ && xiaoling_conn_->CanUploadAudio()) uplink_watchdog_.Start();
 #endif  // 小聆平台
 
             break;
@@ -1380,18 +1426,26 @@ void Application::ScheduleUrgent(std::function<void()>&& callback) {
     xEventGroupSetBits(event_group_, MAIN_EVENT_SCHEDULE);
 }
 void Application::WakeWordInvoke(const std::string& wake_word) {
+    const auto detected_ms = esp_log_timestamp();
+    ScheduleUrgent([this, wake_word, detected_ms]() {
+        ESP_LOGI(TAG, "唤醒控制开始: queue_delay=%lums",
+                 static_cast<unsigned long>(esp_log_timestamp() - detected_ms));
+        HandleWakeWordDetectedEvent(wake_word);
+    });
+}
+
+void Application::HandleWakeWordInvocation(const std::string& wake_word) {
+    if (audio_service_.IsLocalEncodingBenchmark()) return;
     if (CameraService::GetInstance().CancelVoiceMcpCountdown(
             "用户通过语音唤醒取消拍照")) {
         return;
     }
-    if (SdMusicService::GetInstance().IsBusy()) {
-        ESP_LOGI(TAG, "TF 卡文件同步期间忽略外部唤醒词：%s", wake_word.c_str());
+    if (CameraService::GetInstance().IsActive()) {
+        ESP_LOGI(TAG, "拍照流程期间忽略外部唤醒词");
         return;
     }
-    if (exit_requested_.load() &&
-        (tts_waiting_for_playback_.load() || audio_player_.IsPlaying())) {
-        ESP_LOGI(TAG, "忽略退出期间的唤醒词：%s", wake_word.c_str());
-        audio_service_.EnableWakeWordDetection(false);
+    if (SdMusicService::GetInstance().IsBusy()) {
+        ESP_LOGI(TAG, "TF 卡文件同步期间忽略外部唤醒词：%s", wake_word.c_str());
         return;
     }
     PauseWakeWordDetection();
@@ -1401,25 +1455,35 @@ void Application::WakeWordInvoke(const std::string& wake_word) {
 
     auto state = GetDeviceState();
 
-    if (state == kDeviceStateIdle || state == kDeviceStateListening) {
-        if (!EnsureXiaolingReadyForWakeup()) {
-            return;
-        }
-
-        ESP_LOGI(TAG, "Wake word detected: %s", wake_word.c_str());
-        if (state == kDeviceStateListening && !EndListeningSessionForWakeup()) {
-            return;
-        }
-        xiaoling_conn_->SendWakeWordDetected(wake_word);
-        BeginWakeup(listening_mode_);
-    } else if (state == kDeviceStateSpeaking) {
-        AbortSpeaking(kAbortReasonWakeWordDetected);
-        SetDeviceState(kDeviceStateIdle);
-        if (EnsureXiaolingReadyForWakeup()) {
-            xiaoling_conn_->SendWakeWordDetected(wake_word);
-            BeginWakeup(listening_mode_);
-        }
+    if (state != kDeviceStateIdle && state != kDeviceStateListening &&
+        state != kDeviceStateSpeaking) {
+        ESP_LOGI(TAG, "Ignoring wake word while device is in %s state",
+                 DeviceStatus::GetStateName(state));
+        return;
     }
+    if (!EnsureXiaolingReadyForWakeup()) return;
+    ESP_LOGI(TAG, "Wake word detected: %s", wake_word.c_str());
+    BeginWakeup(listening_mode_, wake_word);
+}
+
+void Application::SetAudioStressMode(bool enable) {
+    Schedule([this, enable]() {
+        if (enable && (GetDeviceState() != kDeviceStateIdle &&
+                       GetDeviceState() != kDeviceStateWifiConfiguring)) {
+            ESP_LOGW(TAG, "本地压力测试需在待命/配网状态开启");
+            return;
+        }
+        if (enable && xiaoling_conn_ && xiaoling_conn_->IsSessionActive()) {
+            ESP_LOGW(TAG, "云端会话仍活动，拒绝开启本地压力测试");
+            return;
+        }
+        if (!enable && audio_service_.IsLocalEncodingBenchmark()) {
+            audio_player_.StopNonMusic(PlaybackEndReason::kCancelled);
+        }
+        if (!audio_service_.SetLocalEncodingBenchmark(enable)) {
+            ESP_LOGW(TAG, "本地压力测试切换失败，音频服务停止或上报已开启");
+        }
+    });
 }
 
 bool Application::CanEnterSleepMode() {
@@ -1563,6 +1627,7 @@ void Application::PlayPromptTone(uint16_t tone_id) {
 void Application::ResetXiaolingConn() {
     Schedule([this]() {
         std::lock_guard<std::mutex> lock(xiaoling_conn_mutex_);
+        Xiaoling::voice_session_epoch.Advance();
         // 如果音频通道已打开，则将其关闭。
         if (xiaoling_conn_ && xiaoling_conn_->IsConnected()) {
             xiaoling_conn_->Disconnect();

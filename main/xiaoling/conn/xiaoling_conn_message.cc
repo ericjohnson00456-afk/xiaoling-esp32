@@ -377,6 +377,18 @@ void XiaolingConn::SendMcpMessage(const std::string& message) {
 
 bool XiaolingConn::IsCurrentSessionMessage(const cJSON* root) const {
     const auto rid = ReadRequestId(root);
+    const auto* action = cJSON_GetObjectItemCaseSensitive(root, "action");
+    const auto* data = cJSON_GetObjectItemCaseSensitive(root, "data");
+    const auto* sub = cJSON_IsObject(data) ? cJSON_GetObjectItemCaseSensitive(data, "sub") : nullptr;
+    const bool setting = cJSON_IsString(sub) && std::strcmp(sub->valuestring, "setting") == 0;
+    if (!setting && cJSON_IsString(action) &&
+        (std::strcmp(action->valuestring, "started") == 0 ||
+         std::strcmp(action->valuestring, "result") == 0 ||
+         std::strcmp(action->valuestring, "finish") == 0 ||
+         std::strcmp(action->valuestring, "closed") == 0 ||
+         (std::strcmp(action->valuestring, "error") == 0 && !rid.empty()))) {
+        return voice_ != nullptr && voice_->AcceptsSessionMessage(rid);
+    }
     const auto& active_session_id = session_id();
     return rid.empty() || active_session_id.empty() || rid == active_session_id;
 }
@@ -393,10 +405,25 @@ void XiaolingConn::HandleIncomingText(const std::string& text) {
     const auto* action = cJSON_GetObjectItemCaseSensitive(root, "action");
     const bool alarm_tts_message = HandleAlarmTtsMessage(root);
     const bool current_session = IsCurrentSessionMessage(root);
+    uint32_t message_generation = 0;
+    bool voice_handled = false;
+    const auto* result_data = cJSON_GetObjectItemCaseSensitive(root, "data");
+    const auto* result_sub = cJSON_IsObject(result_data) ? cJSON_GetObjectItemCaseSensitive(result_data, "sub") : nullptr;
+    const bool session_message = cJSON_IsString(action) &&
+        (std::strcmp(action->valuestring, "started") == 0 ||
+         std::strcmp(action->valuestring, "finish") == 0 ||
+         std::strcmp(action->valuestring, "closed") == 0 ||
+         (std::strcmp(action->valuestring, "result") == 0 &&
+          !(cJSON_IsString(result_sub) && std::strcmp(result_sub->valuestring, "setting") == 0)));
+    if (!alarm_tts_message && !current_session) {
+        ESP_LOGI(TAG, "忽略旧会话消息: action=%s, rid=%s, current=%s",
+                 cJSON_IsString(action) ? action->valuestring : "-",
+                 ReadRequestId(root).c_str(), session_id().c_str());
+    }
     if (!alarm_tts_message && cJSON_IsString(action) && action->valuestring != nullptr &&
         current_session) {
         if (voice_ != nullptr) {
-            voice_->HandleMessage(root);
+            voice_handled = voice_->HandleMessage(root, &message_generation);
         }
 
         if (std::strcmp(action->valuestring, "connected") == 0) {
@@ -428,8 +455,10 @@ void XiaolingConn::HandleIncomingText(const std::string& text) {
         }
     }
 
-    if (!alarm_tts_message && on_incoming_json_ && current_session) {
-        on_incoming_json_(root);
+    if (!alarm_tts_message && on_incoming_json_ && current_session &&
+        (!session_message || (voice_handled &&
+         Xiaoling::voice_session_epoch.IsCurrent(message_generation)))) {
+        on_incoming_json_(root, message_generation);
     }
     cJSON_Delete(root);
 }

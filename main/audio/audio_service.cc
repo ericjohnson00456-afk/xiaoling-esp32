@@ -59,11 +59,10 @@ constexpr int64_t kAudioInputYieldIntervalUs = 100 * 1000;
 constexpr TickType_t kAudioInputYieldTicks = 1;
 
 #if CONFIG_USE_MICRO_WAKE_WORD
-// 唤醒推理与 ADC feed 分核；优先级低于实时音频链。
+// 唤醒推理与 ADC feed 分核；高于 AFE/编码、本地提示音与网络播放器。
 // IDF 浮点任务会自动绑定核心，因此不依赖 NO_AFFINITY 进行负载均衡。
 constexpr BaseType_t kProcessedWakeTaskCore = 1;
-// AFE/NS 和编码必须先获得调度，唤醒是有界旁路，不能反向拖慢上行。
-constexpr UBaseType_t kAudioWakePriority = kAudioAlgorithmPriority - 1;
+constexpr UBaseType_t kAudioWakePriority = kAudioAlgorithmPriority + 1;
 constexpr int64_t kWakeYieldIntervalUs = 50 * 1000;
 #endif
 
@@ -222,6 +221,7 @@ void AudioService::Start() {
     }
     audio_testing_running_.store(false);
     wake_word_running_.store(false);
+    local_encoding_benchmark_.store(false);
 
     audio_processor_->SetAecEnabled(aec_enabled_);
     audio_processor_->Start();
@@ -335,6 +335,7 @@ void AudioService::Stop() {
         return;
     }
     esp_timer_stop(audio_power_timer_);
+    local_encoding_benchmark_.store(false);
     audio_testing_running_.store(false);
     // A/B 编解码任务会使用测试 PCM 和播放队列；系统停止前先让它安全退出，
     // 避免 OTA 清队列时与其并发写入。
@@ -591,19 +592,25 @@ void AudioService::QueueWakeFrame(std::vector<int16_t> data, uint32_t generation
     }
     if (processed_wake_queue_.size() >= MAX_PROCESSED_WAKE_FRAMES_IN_QUEUE) {
         processed_wake_queue_.pop_front();
-        static uint32_t dropped_frames = 0;
-        if ((++dropped_frames % 100) == 1) {
+        const uint32_t dropped_frames = wake_dropped_frames_.fetch_add(1) + 1;
+        if ((dropped_frames % 100) == 1) {
             ESP_LOGW(TAG, "Wake queue full, dropped frames: %lu (ADC unaffected)",
                      static_cast<unsigned long>(dropped_frames));
         }
     }
-    processed_wake_queue_.push_back({std::move(data), generation});
+    ++wake_produced_frames_;
+    processed_wake_queue_.push_back({std::move(data), generation, esp_timer_get_time()});
     processed_wake_cv_.notify_one();
 }
 
 // 始终使用处理器输出，在 CPU1 独立推理；generation 排除启停前的旧帧。
 void AudioService::ProcessedWakeTask() {
     int64_t last_yield_us = esp_timer_get_time();
+    int64_t stats_started_us = last_yield_us;
+    uint32_t previous_produced = wake_produced_frames_.load();
+    uint32_t previous_dropped = wake_dropped_frames_.load();
+    uint32_t processed = 0;
+    int64_t inference_us = 0, max_inference_us = 0, max_age_us = 0;
     while (true) {
         if (esp_timer_get_time() - last_yield_us >= kWakeYieldIntervalUs) {
             vTaskDelay(kAudioInputYieldTicks);
@@ -624,7 +631,30 @@ void AudioService::ProcessedWakeTask() {
         std::lock_guard<std::mutex> inference_lock(wake_inference_mutex_);
         if (!service_stopped_.load() && IsWakeWordRunning() &&
             data.generation == wake_input_generation_.load()) {
+            const int64_t started_us = esp_timer_get_time();
+            max_age_us = std::max(max_age_us, started_us - data.enqueued_us);
             wake_word_->Feed(data.pcm);
+            const int64_t elapsed_us = esp_timer_get_time() - started_us;
+            inference_us += elapsed_us;
+            max_inference_us = std::max(max_inference_us, elapsed_us);
+            ++processed;
+        }
+        const int64_t now_us = esp_timer_get_time();
+        if (now_us - stats_started_us >= 5 * 1000 * 1000) {
+            const uint32_t produced = wake_produced_frames_.load();
+            const uint32_t dropped = wake_dropped_frames_.load();
+            const double seconds = (now_us - stats_started_us) / 1000000.0;
+            ESP_LOGI(TAG, "唤醒吞吐: input=%.1ffps, infer=%.1ffps, dropped=%lu, "
+                     "avg=%.1fms, max=%.1fms, age_max=%.1fms",
+                     (produced - previous_produced) / seconds, processed / seconds,
+                     static_cast<unsigned long>(dropped - previous_dropped),
+                     processed ? inference_us / (processed * 1000.0) : 0.0,
+                     max_inference_us / 1000.0, max_age_us / 1000.0);
+            previous_produced = produced;
+            previous_dropped = dropped;
+            stats_started_us = now_us;
+            processed = 0;
+            inference_us = max_inference_us = max_age_us = 0;
         }
     }
     ESP_LOGW(TAG, "Processed wake task stopped");
@@ -817,6 +847,11 @@ void AudioService::AudioOutputTask() {
 void AudioService::OpusCodecTask() {
     bool encoder_has_generation = false;
     uint32_t encoder_generation = 0;
+    int64_t stats_started_us = esp_timer_get_time();
+    uint32_t previous_produced = encode_produced_frames_.load();
+    uint32_t previous_dropped = encode_dropped_frames_.load();
+    uint32_t encoded = 0;
+    int64_t encoding_us = 0;
     while (true) {
         std::unique_lock<std::mutex> lock(audio_queue_mutex_);
         audio_queue_cv_.wait(lock, [this]() {
@@ -863,7 +898,8 @@ void AudioService::OpusCodecTask() {
             audio_encode_queue_.pop_front();
             audio_queue_cv_.notify_all();
             if (task->type == kAudioTaskTypeEncodeToOpusQueue &&
-                (!audio_upload_enabled_ || task->upload_generation != upload_generation_)) {
+                ((!audio_upload_enabled_ && !local_encoding_benchmark_.load()) ||
+                 task->upload_generation != upload_generation_)) {
                 continue;
             }
             lock.unlock();
@@ -878,6 +914,7 @@ void AudioService::OpusCodecTask() {
             auto packet = std::make_unique<AudioStreamPacket>();
             packet->frame_duration = OPUS_FRAME_DURATION_MS;
             packet->sample_rate = 16000;
+            const int64_t encoding_started_us = esp_timer_get_time();
 #ifdef CONFIG_LSPLATFORM
             const bool raw_uplink = task->type == kAudioTaskTypeEncodeToOpusQueue &&
                                     std::strcmp(XiaolingConfig::kUplinkAudioEncoding, "raw") == 0;
@@ -899,6 +936,23 @@ void AudioService::OpusCodecTask() {
 #endif // CONFIG_LSPLATFORM
                 ESP_LOGE(TAG, "Failed to encode audio");
                 continue;
+            }
+            encoding_us += esp_timer_get_time() - encoding_started_us;
+            ++encoded;
+            const int64_t stats_now_us = esp_timer_get_time();
+            if (stats_now_us - stats_started_us >= 5 * 1000 * 1000) {
+                const uint32_t produced = encode_produced_frames_.load();
+                const uint32_t dropped = encode_dropped_frames_.load();
+                const double seconds = (stats_now_us - stats_started_us) / 1000000.0;
+                ESP_LOGI(TAG, "编码吞吐: input=%.1ffps, output=%.1ffps, dropped=%lu, avg=%.1fms",
+                         (produced - previous_produced) / seconds, encoded / seconds,
+                         static_cast<unsigned long>(dropped - previous_dropped),
+                         encoded ? encoding_us / (encoded * 1000.0) : 0.0);
+                stats_started_us = stats_now_us;
+                previous_produced = produced;
+                previous_dropped = dropped;
+                encoded = 0;
+                encoding_us = 0;
             }
 
             if (task->type == kAudioTaskTypeEncodeToOpusQueue) {
@@ -952,7 +1006,8 @@ void AudioService::SetDecodeSampleRate(int sample_rate, int frame_duration) {
 void AudioService::PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t>&& pcm) {
     std::unique_lock<std::mutex> lock(audio_queue_mutex_);
     if (service_stopped_ ||
-        (type == kAudioTaskTypeEncodeToOpusQueue && !audio_upload_enabled_)) {
+        (type == kAudioTaskTypeEncodeToOpusQueue && !audio_upload_enabled_ &&
+         !local_encoding_benchmark_.load())) {
         return;
     }
     auto task = std::make_unique<AudioTask>();
@@ -974,12 +1029,14 @@ void AudioService::PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t
         const bool dropped_queued_frame = oldest_opus != audio_encode_queue_.end();
         if (dropped_queued_frame) {
             audio_encode_queue_.erase(oldest_opus);
+            ++encode_dropped_frames_;
         }
         if (!dropped_queued_frame) {
             return;
         }
     }
     if (type == kAudioTaskTypeEncodeToOpusQueue) {
+        ++encode_produced_frames_;
         audio_encode_queue_.push_back(std::move(task));
         audio_queue_cv_.notify_all();
         return;
@@ -1036,6 +1093,7 @@ bool AudioService::PushPcm(const uint8_t* data, size_t size, int sample_rate,
 
     std::unique_lock<std::mutex> lock(audio_queue_mutex_);
     const uint32_t enqueue_wait_start_ms = esp_log_timestamp();
+    if (output.session_id == 0 || output.session_id != player_session_id_) return false;
     const bool task_queue_full =
         audio_playback_queue_.size() >= MAX_PLAYER_PLAYBACK_TASKS_IN_QUEUE;
     const bool byte_queue_full = player_max_buffered_pcm_bytes_ != 0 &&
@@ -1043,8 +1101,8 @@ bool AudioService::PushPcm(const uint8_t* data, size_t size, int sample_rate,
                                      player_max_buffered_pcm_bytes_;
     const bool queue_was_full = task_queue_full || byte_queue_full;
     if (wait) {
-        audio_queue_cv_.wait(lock, [this, queue_was_full]() {
-            if (service_stopped_) {
+        audio_queue_cv_.wait(lock, [this, queue_was_full, session = output.session_id]() {
+            if (service_stopped_ || session != player_session_id_) {
                 return true;
             }
             if (audio_playback_queue_.size() >= MAX_PLAYER_PLAYBACK_TASKS_IN_QUEUE) {
@@ -1071,7 +1129,7 @@ bool AudioService::PushPcm(const uint8_t* data, size_t size, int sample_rate,
         return false;
     }
 
-    if (service_stopped_) {
+    if (service_stopped_ || output.session_id != player_session_id_) {
         return false;
     }
     audio_playback_queue_.push_back(std::move(task));
@@ -1092,6 +1150,7 @@ void AudioService::BeginPlayback(const AudioPlaybackConfig& config) {
     ResetPlayerPlaybackState(false);
     {
         std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+        player_session_id_ = config.session_id;
         player_initial_prebuffer_bytes_ = config.initial_prebuffer_bytes;
         player_recovery_prebuffer_bytes_ = config.recovery_prebuffer_bytes != 0
                                                ? config.recovery_prebuffer_bytes
@@ -1141,6 +1200,7 @@ void AudioService::SuspendPlayback() {
 
 void AudioService::ResumePlayback(const AudioOutputEvent& output) {
     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    player_session_id_ = output.session_id;
     player_recovery_prebuffer_bytes_ = suspended_player_recovery_prebuffer_bytes_;
     player_max_buffered_pcm_bytes_ = suspended_player_max_buffered_pcm_bytes_;
     player_producer_resume_pcm_bytes_ =
@@ -1188,6 +1248,7 @@ void AudioService::ResumePlayback(const AudioOutputEvent& output) {
 // 标记 PCM 已全部入队，使短尾帧越过预缓冲门槛，并补齐最后一个 DMA 缓冲。
 void AudioService::MarkPlaybackFinished(const AudioOutputEvent& output) {
     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    if (output.session_id != player_session_id_) return;
     player_playback_finished_ = true;
 
     /* i2s_channel_write() only submits full DMA buffers. Append silence to
@@ -1377,6 +1438,7 @@ void AudioService::EnableAudioUpload(bool enable) {
     uint32_t generation = 0;
     {
         std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+        if (enable) local_encoding_benchmark_.store(false);
         previous = audio_upload_enabled_;
         if (previous == enable) {
             return;
@@ -1398,6 +1460,19 @@ void AudioService::EnableAudioUpload(bool enable) {
              static_cast<unsigned>(encode_before),
              static_cast<unsigned>(opus_before),
              service_stopped_.load() ? 0 : 1);
+}
+
+bool AudioService::SetLocalEncodingBenchmark(bool enable) {
+    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    if (audio_upload_enabled_ || service_stopped_) return false;
+    if (local_encoding_benchmark_.exchange(enable) == enable) return true;
+    ++upload_generation_;
+    audio_encode_queue_.clear();
+    opus_packet_queue_.clear();
+    audio_queue_cv_.notify_all();
+    ESP_LOGI(TAG, "本地编码压力测试: %s，16kHz/20ms/16kbps Opus，不发送网络音频",
+             enable ? "开启" : "关闭");
+    return true;
 }
 
 // ============================================================================
@@ -1850,6 +1925,7 @@ void AudioService::ResetDecoder() {
 
 void AudioService::ResetPlayerPlaybackState(bool clear_suspended_queue) {
     std::scoped_lock lock(player_resampler_mutex_, audio_queue_mutex_);
+    player_session_id_ = 0;
     opus_decoder_->ResetState();
     /* 新播放会话以干净的重采样状态开始，避免上一段音频的残留相位 */
     player_resampler_input_rate_ = 0;
@@ -2010,6 +2086,10 @@ void AudioService::SetMicroWakeWordModel(const void* model_data, size_t model_si
     wake_word_ = std::make_unique<MicroWakeWord>(model_data, model_size, config);
     wake_word_name_ = wake_word;
     wake_word_->OnWakeWordDetected([this](const std::string& wake_word) {
+        if (local_encoding_benchmark_.load()) {
+            ESP_LOGI(TAG, "本地压力测试捕获唤醒: %s (不创建云端会话)", wake_word.c_str());
+            return;
+        }
         // The callback runs under MicroWakeWord's model lock, so Stop() would
         // deadlock here. Stop feeding immediately; the application task will
         // reset and restart the detector synchronously.

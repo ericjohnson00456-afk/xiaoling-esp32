@@ -6,6 +6,7 @@
 #include <mutex>
 #include <string>
 #include <vector>
+#include "event/event_epoch.h"
 
 class HomePresenter;
 
@@ -32,7 +33,7 @@ private:
         uint32_t show_at_ms = 0;
     };
 
-    void QueueIatText(std::string text);
+    void QueueIatText(std::string text, AppEvent::EpochSnapshot scope);
     void DrainIatText();
     void QueueTtsAudioProgress(uint32_t audio_clock_ms);
     void OnTtsTextStart();
@@ -67,6 +68,7 @@ private:
     std::atomic_bool tts_progress_dispatch_pending_{false};
     std::mutex iat_text_mutex_;
     std::string pending_iat_text_;
+    AppEvent::EpochSnapshot pending_iat_scope_;
     int64_t pending_iat_received_us_ = 0;
     int64_t last_iat_delay_log_us_ = 0;
     uint32_t last_voice_text_revision_ = 0;

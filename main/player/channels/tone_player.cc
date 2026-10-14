@@ -54,7 +54,10 @@ std::optional<uint16_t> TonePlayer::SelectWakeupTone() {
 
 void TonePlayer::PlayWakeup(std::function<void(bool)> completion) {
     CancelWakeup();
-    completion_ = std::move(completion);
+    {
+        std::lock_guard<std::mutex> lock(wakeup_mutex_);
+        completion_ = std::move(completion);
+    }
     const auto tone_id = SelectWakeupTone();
     if (!tone_id) {
         ESP_LOGW("TonePlayer", "No ROMFS wakeup tone; continue listening");
@@ -74,14 +77,13 @@ void TonePlayer::PlayWakeup(std::function<void(bool)> completion) {
 }
 
 void TonePlayer::OnEvent(const PlaybackEvent& event) {
-    if (!completion_ || event.channel != PlaybackChannel::kPrompt ||
-        event.session_id != wakeup_session_id_.load()) {
+    if (event.channel != PlaybackChannel::kPrompt || event.session_id == 0) {
         return;
     }
     if (event.state == PlaybackState::kCompleted || event.state == PlaybackState::kFailed) {
-        CompleteWakeup(true);
+        CompleteWakeup(true, event.session_id);
     } else if (event.state == PlaybackState::kStopped) {
-        CompleteWakeup(false);
+        CompleteWakeup(false, event.session_id);
     }
 }
 
@@ -94,18 +96,27 @@ bool TonePlayer::IsWakeupTerminalEvent(const PlaybackEvent& event) const {
             event.state == PlaybackState::kFailed);
 }
 
-void TonePlayer::CompleteWakeup(bool proceed) {
-    wakeup_session_id_ = 0;
-    auto completion = std::move(completion_);
-    completion_ = {};
+void TonePlayer::CompleteWakeup(bool proceed, uint32_t expected_session) {
+    std::function<void(bool)> completion;
+    {
+        std::lock_guard<std::mutex> lock(wakeup_mutex_);
+        if (expected_session != 0 && expected_session != wakeup_session_id_.load()) return;
+        wakeup_session_id_ = 0;
+        completion = std::move(completion_);
+        completion_ = {};
+    }
     if (completion) {
         completion(proceed);
     }
 }
 
 void TonePlayer::CancelWakeup() {
-    const bool was_playing = wakeup_session_id_.exchange(0) != 0;
-    completion_ = {};
+    bool was_playing;
+    {
+        std::lock_guard<std::mutex> lock(wakeup_mutex_);
+        was_playing = wakeup_session_id_.exchange(0) != 0;
+        completion_ = {};
+    }
     if (was_playing) {
         engine_->Stop(PlaybackEndReason::kCancelled);
     }

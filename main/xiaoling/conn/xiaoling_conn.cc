@@ -195,6 +195,10 @@ void XiaolingConn::SendStopListening() {
     }
 }
 
+void XiaolingConn::CheckVoiceStartTimeout() {
+    if (voice_ != nullptr) voice_->CheckStartTimeout();
+}
+
 bool XiaolingConn::StopListeningForTts() {
     return voice_ != nullptr && voice_->StopListeningForTts();
 }
@@ -239,9 +243,12 @@ int XiaolingConn::server_frame_duration() const {
     return voice_ != nullptr ? voice_->server_frame_duration() : 60;
 }
 
-const std::string& XiaolingConn::session_id() const {
-    static const std::string empty_session_id;
-    return voice_ != nullptr ? voice_->session_id() : empty_session_id;
+std::string XiaolingConn::session_id() const {
+    return voice_ != nullptr ? voice_->session_id() : std::string{};
+}
+
+uint32_t XiaolingConn::voice_generation() const {
+    return voice_ != nullptr ? voice_->event_generation() : 0;
 }
 
 void XiaolingConn::OnIncomingAudio(
@@ -251,7 +258,7 @@ void XiaolingConn::OnIncomingAudio(
     }
 }
 
-void XiaolingConn::OnIncomingJson(std::function<void(const cJSON*)> callback) {
+void XiaolingConn::OnIncomingJson(std::function<void(const cJSON*, uint32_t)> callback) {
     on_incoming_json_ = std::move(callback);
 }
 

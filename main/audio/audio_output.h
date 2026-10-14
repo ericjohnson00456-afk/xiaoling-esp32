@@ -24,6 +24,9 @@ struct AudioPlaybackConfig {
 // 16 kHz、单声道、16-bit PCM 每秒约 32 KiB。
 constexpr size_t kAudioPlayerInitialPrebufferBytes = 16 * 1024;
 constexpr size_t kAudioTtsInitialPrebufferBytes = 64 * 1024;
+// 本地提示音首块立即输出；欠载恢复也只等约一帧，不套用网络流缓冲。
+constexpr size_t kAudioPromptInitialPrebufferBytes = 0;
+constexpr size_t kAudioPromptRecoveryPrebufferBytes = 1152;
 // TF 本地音乐用约 1 秒启动/恢复，并在 1.5～2 秒之间形成反压回差。
 constexpr size_t kAudioLocalFilePrebufferBytes = 32 * 1024;
 constexpr size_t kAudioLocalFileProducerResumeBytes = 48 * 1024;

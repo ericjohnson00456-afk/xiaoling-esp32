@@ -28,6 +28,8 @@ constexpr int64_t kSlowHandlerUs = 20 * 1000;
 struct QueuedEvent {
     Id id;
     size_t size;
+    const Epoch* epoch;
+    uint32_t generation;
     alignas(std::max_align_t) uint8_t data[1];
 };
 
@@ -44,7 +46,8 @@ QueueHandle_t normal_queue = nullptr;
 QueueHandle_t urgent_queue = nullptr;
 TaskHandle_t task_handle = nullptr;
 
-QueuedEvent* AllocateEvent(Id id, const void* data, size_t size) {
+QueuedEvent* AllocateEvent(Id id, const void* data, size_t size,
+                           const Epoch* epoch, uint32_t generation) {
     const size_t allocation_size = offsetof(QueuedEvent, data) + (size == 0 ? 1 : size);
     auto* queued = static_cast<QueuedEvent*>(std::malloc(allocation_size));
     if (queued == nullptr) {
@@ -52,6 +55,8 @@ QueuedEvent* AllocateEvent(Id id, const void* data, size_t size) {
     }
     queued->id = id;
     queued->size = size;
+    queued->epoch = epoch;
+    queued->generation = generation;
     if (size > 0) {
         std::memcpy(queued->data, data, size);
     }
@@ -59,6 +64,9 @@ QueuedEvent* AllocateEvent(Id id, const void* data, size_t size) {
 }
 
 void Dispatch(const QueuedEvent& queued) {
+    if (queued.epoch != nullptr && !queued.epoch->IsCurrent(queued.generation)) {
+        return;
+    }
     std::array<Subscription, kMaxSubscriptions> matching{};
     size_t matching_count = 0;
     {
@@ -74,8 +82,11 @@ void Dispatch(const QueuedEvent& queued) {
         .id = queued.id,
         .data = queued.size == 0 ? nullptr : queued.data,
         .size = queued.size,
+        .epoch = queued.epoch,
+        .generation = queued.generation,
     };
     for (size_t i = 0; i < matching_count; ++i) {
+        if (!event.IsCurrent()) return;
         const int64_t started_us = esp_timer_get_time();
         matching[i].callback(event);
         const int64_t elapsed_us = esp_timer_get_time() - started_us;
@@ -192,7 +203,8 @@ void Unsubscribe(SubscriptionId subscription_id) {
     }
 }
 
-bool Publish(Id id, const void* data, size_t size, Priority priority) {
+static bool PublishImpl(Id id, const void* data, size_t size, Priority priority,
+                        const Epoch* epoch, uint32_t generation) {
     if (id == Id::None || (size > 0 && data == nullptr) ||
         size > kMaxPayloadSize) {
         ESP_LOGE(kTag, "拒绝无效事件: event=%u, size=%u",
@@ -204,7 +216,7 @@ bool Publish(Id id, const void* data, size_t size, Priority priority) {
         return false;
     }
 
-    QueuedEvent* event = AllocateEvent(id, data, size);
+    QueuedEvent* event = AllocateEvent(id, data, size, epoch, generation);
     if (event == nullptr) {
         ESP_LOGE(kTag, "分配事件失败: event=%u, size=%u",
                  static_cast<unsigned>(id), static_cast<unsigned>(size));
@@ -223,8 +235,23 @@ bool Publish(Id id, const void* data, size_t size, Priority priority) {
     return true;
 }
 
+bool Publish(Id id, const void* data, size_t size, Priority priority) {
+    return PublishImpl(id, data, size, priority, nullptr, 0);
+}
+
 bool PublishText(Id id, std::string_view text, Priority priority) {
     return Publish(id, text.data(), text.size(), priority);
+}
+
+bool PublishScoped(Id id, const void* data, size_t size,
+                   const Epoch& epoch, uint32_t generation, Priority priority) {
+    if (!epoch.IsCurrent(generation)) return false;
+    return PublishImpl(id, data, size, priority, &epoch, generation);
+}
+
+bool PublishTextScoped(Id id, std::string_view text,
+                       const Epoch& epoch, uint32_t generation, Priority priority) {
+    return PublishScoped(id, text.data(), text.size(), epoch, generation, priority);
 }
 
 }  // namespace AppEvent

@@ -1,4 +1,5 @@
 #include "esp_simple_player_backend.h"
+#include "playback_latency_policy.h"
 
 #include "resource/resource.h"
 #include "xiaoling/conn/network_diagnostics.h"
@@ -48,7 +49,6 @@ constexpr size_t kStreamingHttpBufferSize = 32 * 1024;
 constexpr size_t kFileReadSize = 4 * 1024;
 constexpr size_t kFileBufferSize = 32 * 1024;
 constexpr size_t kFileInputStackSize = 4 * 1024;
-constexpr uint32_t kFileDecodeYieldChunkInterval = 8;
 constexpr char kBufferedFileIoName[] = "io_file_buffered";
 // 建链阶段由 HTTP 客户端先在 10 秒返回，外层 12 秒看门狗负责兜底；请求
 // 真正发出后重新给首帧 8 秒，播放过程中仍以 5 秒实际无声作为断流阈值。
@@ -61,10 +61,10 @@ constexpr uint64_t kTtsPcmStallTimeoutUs = 5ULL * 1000ULL * 1000ULL;
 // 的默认超时设置。
 constexpr int kStreamingHttpBodyReadTimeoutMs = 50;
 constexpr size_t kPlayerCommandStackSize = 8 * 1024;
-// AudioPlayer 的控制、网络拉流和解码任务统一使用优先级 8。
+// 控制命令保持高优先级；拉流/解码低于 AFE 与本地唤醒，不能挤掉唤醒帧。
 constexpr UBaseType_t kPlayerCommandPriority = 8;
-constexpr UBaseType_t kPlayerInputPriority = 8;
-constexpr UBaseType_t kPlayerDecodePriority = 8;
+constexpr UBaseType_t kPlayerInputPriority = 6;
+constexpr UBaseType_t kPlayerDecodePriority = 6;
 #if CONFIG_FREERTOS_NUMBER_OF_CORES > 1
 constexpr BaseType_t kPlayerCommandCore = 1;
 #else
@@ -114,6 +114,25 @@ int EspSimplePlayerBackend::ConfigureInputIo(esp_asp_handle_t handle, void* ctx)
     if (esp_audio_simple_player_get_pipeline(handle, &pipeline) != ESP_GMF_ERR_OK || pipeline == nullptr) {
         return ESP_GMF_ERR_FAIL;
     }
+    // Simple Player 的输出端口 release 即使 valid_size=0 也会执行，原始
+    // OutputCallback 则不会。包装 acquire/release 并保留原 ctx 与返回值，
+    // 因此能覆盖空 PCM 忙轮询，也不改变 EOF/错误或引入无法结束的 GMF job。
+    auto* last = static_cast<esp_gmf_element_t*>(pipeline->last_el);
+    auto* out = last != nullptr ? last->out : nullptr;
+    if (out == nullptr || out->ops.acquire == nullptr || out->ops.release == nullptr ||
+        out->ops.del != nullptr) return ESP_GMF_ERR_NOT_SUPPORT;
+    // Simple Player 会复用既有流水线，不能再次把代理自身保存为 original。
+    if (out->ops.release != BudgetRelease) {
+        engine->original_output_acquire_ = out->ops.acquire;
+        engine->original_output_release_ = out->ops.release;
+        engine->original_output_ctx_ = out->ctx;
+        out->ctx = engine;
+        out->ops.acquire = BudgetAcquire;
+        out->ops.release = BudgetRelease;
+    } else if (out->ctx != engine || out->ops.acquire != BudgetAcquire) {
+        return ESP_GMF_ERR_INVALID_STATE;
+    }
+    engine->decode_yield_policy_.Reset(esp_timer_get_time());
     esp_gmf_io_handle_t input = nullptr;
     if (esp_gmf_pipeline_get_in(pipeline, &input) != ESP_GMF_ERR_OK || input == nullptr) {
         return ESP_GMF_ERR_FAIL;
@@ -136,6 +155,8 @@ int EspSimplePlayerBackend::ConfigureInputIo(esp_asp_handle_t handle, void* ctx)
     }
 
     if (is_http) {
+        // 重用 HTTP 流水线时恢复默认的自然结束等待，主动取消会再明确关闭它。
+        esp_gmf_io_set_task_timeout(input, 1000);
         // 上一条流式 TTS 可能通过 IO abort 强制退出；新请求运行前必须清除
         // abort 标志并重新释放 HTTP 输入任务。
         esp_gmf_io_clear_abort(input);
@@ -389,16 +410,20 @@ bool EspSimplePlayerBackend::DoPlay(const PlaybackRequest& request) {
 
     // 新媒体开始前清掉旧下行 Opus 和残留 PCM，物理 I2S 仍由 AudioOutputTask 独占。
     const bool local_file = request.source_type == PlaybackSourceType::kFile;
+    const bool local_prompt = IsLowLatencyPrompt(request);
+    low_latency_prompt_.store(local_prompt);
     audio_output_->BeginPlayback(AudioPlaybackConfig{
         .session_id = request.session_id,
         .initial_prebuffer_bytes = local_file
                                        ? kAudioLocalFilePrebufferBytes
-                                       : (request.channel == PlaybackChannel::kTts
+                                       : (local_prompt ? kAudioPromptInitialPrebufferBytes
+                                          : request.channel == PlaybackChannel::kTts
                                               ? kAudioTtsInitialPrebufferBytes
                                               : kAudioPlayerInitialPrebufferBytes),
         .recovery_prebuffer_bytes = local_file
                                         ? kAudioLocalFilePrebufferBytes
-                                        : kAudioPlayerInitialPrebufferBytes,
+                                        : (local_prompt ? kAudioPromptRecoveryPrebufferBytes
+                                                        : kAudioPlayerInitialPrebufferBytes),
         .max_buffered_pcm_bytes = local_file
                                       ? kAudioLocalFileMaxBufferedBytes
                                       : 0,
@@ -568,14 +593,19 @@ bool EspSimplePlayerBackend::DoResume() {
 bool EspSimplePlayerBackend::Stop(PlaybackEndReason reason) {
     // Stop 同样异步投递，状态终态由 GMF 回调统一确认。
     command_pending_playback_ = false;
+    bool clear_output = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        clear_output = playing_ || draining_;
         if (playing_ && current_request_.channel == PlaybackChannel::kTts) {
             // 流式 TTS 可能正在等云端开始合成。先让 50 ms 正文读取循环退出，
             // 控制任务才能及时完成 stop，避免后续提示音被堵在队列中。
             tts_stop_requested_ = true;
         }
     }
+    // 停止命令可能排在 HTTP/GMF 操作之后。先作废旧 PCM 会话，立即静音
+    // 并唤醒被队列反压的解码任务；迟到 PCM 不能重新填入已取消的队列。
+    if (clear_output && audio_output_ != nullptr) audio_output_->ClearActivePlaybackQueue();
     return Enqueue(Command{
         .type = CommandType::kStop,
         .reason = reason,
@@ -607,11 +637,19 @@ bool EspSimplePlayerBackend::DoStop(PlaybackEndReason reason) {
         return true;
     }
 
+    // 取消中的旧 TTS 也必须获得 CPU，完成关闭才能给共用流水线让位。
+    // 新录音已开启时不能让 priority=6 的 close job 长期排在编码任务后面。
+    cancelling_decode_.store(true);
+    if (const auto task = decode_task_handle_.load(); task != nullptr) {
+        vTaskPrioritySet(task, PlaybackDecodePriority(true));
+    }
+
     if (tts_stop_requested_.load()) {
         InterruptTtsHttpSocket();
     }
 
     const auto result = esp_audio_simple_player_stop(handle_);
+    cancelling_decode_.store(false);
     if (result != ESP_GMF_ERR_OK) {
         ESP_LOGE(TAG, "停止播放失败: 0x%x", result);
         return false;
@@ -752,6 +790,10 @@ void EspSimplePlayerBackend::InterruptTtsHttpSocket() {
         pipeline != nullptr &&
         esp_gmf_pipeline_get_in(pipeline, &input) == ESP_GMF_ERR_OK &&
         input != nullptr) {
+        // 主动取消不应先等默认 1000 ms 的 IO 自然结束通知，再开始终止任务。
+        // close 内部仍会 deinit/join IO 任务，未跳过安全退出或释放运行中的资源。
+        // 超时只改当前即将关闭的输入；新 HTTP IO 使用默认的自然结束策略。
+        esp_gmf_io_set_task_timeout(input, 0);
         const auto abort_result = esp_gmf_io_abort(input);
         ESP_LOGI(TAG, "TTS 停止时中止 GMF HTTP 输入: result=0x%x",
                  static_cast<unsigned>(abort_result));
@@ -962,6 +1004,8 @@ int EspSimplePlayerBackend::HandleHttpIoEvent(http_stream_event_msg_t* event) {
                 break;
             }
             ++eagain_retries;
+            // 部分传输实现会立即返回 EAGAIN，不能在此高频重试占满核心。
+            vTaskDelay(1);
 
             if (tts_stop_requested_.load()) {
                 // 返回 EOF 让 GMF 立即退出当前 HTTP 输入；真正的停止原因仍由
@@ -1033,15 +1077,16 @@ int EspSimplePlayerBackend::HandleOutput(uint8_t* data, int data_size) {
     if (data_size <= 0 || audio_output_ == nullptr) {
         return ESP_FAIL;
     }
+    // 主动停止后只丢弃迟到帧，不能用 PushPcm 失败把 GMF 提前推入 error-close，
+    // 否则它会在控制任务设定主动取消策略之前进入默认的一秒关闭等待。
+    if (tts_stop_requested_.load()) return ESP_OK;
     // 解码器每次输出 PCM 都经过这里，再进入 AudioOutput 的播放队列。
     AudioOutputEvent output;
     uint32_t chunk_index = 0;
-    bool is_file = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         output.session_id = current_request_.session_id;
         chunk_index = ++output_chunks_;
-        is_file = current_request_.source_type == PlaybackSourceType::kFile;
         if (playing_ && current_request_.channel == PlaybackChannel::kTts &&
             current_request_.session_id == tts_timeout_session_id_ &&
             !tts_timeout_stop_pending_) {
@@ -1061,14 +1106,37 @@ int EspSimplePlayerBackend::HandleOutput(uint8_t* data, int data_size) {
     const bool queued = audio_output_->PushPcm(
         data, static_cast<size_t>(data_size),
         CONFIG_AUDIO_SIMPLE_PLAYER_RESAMPLE_DEST_RATE, output, true);
-    // Buffered file IO can keep every GMF stage continuously runnable. Give
-    // CPU1's Idle task a bounded scheduling opportunity without throttling
-    // HTTP TTS, whose reads already block while waiting for network data.
-    if (queued && is_file &&
-        chunk_index % kFileDecodeYieldChunkInterval == 0) {
-        vTaskDelay(1);
+    return (queued || tts_stop_requested_.load()) ? ESP_OK : ESP_FAIL;
+}
+
+esp_gmf_err_io_t EspSimplePlayerBackend::BudgetAcquire(
+        void* ctx, esp_gmf_payload_t* load, uint32_t wanted, int wait_ticks) {
+    auto* engine = static_cast<EspSimplePlayerBackend*>(ctx);
+    // 此回调在真实解码任务中执行，不借助私有 GMF 结构寻找 TaskHandle。
+    // 同一流水线复用时按当前音源恢复优先级，不能让后续 TTS 沿用提示音提升。
+    engine->decode_task_handle_.store(xTaskGetCurrentTaskHandle());
+    const auto priority = PlaybackDecodePriority(engine->low_latency_prompt_.load() ||
+                                                 engine->cancelling_decode_.load());
+    if (uxTaskPriorityGet(nullptr) != priority) {
+        vTaskPrioritySet(nullptr, priority);
+        ESP_LOGI(TAG, "解码调度切换: priority=%u, prompt=%d", priority,
+                 engine->low_latency_prompt_.load() ? 1 : 0);
     }
-    return queued ? ESP_OK : ESP_FAIL;
+    return engine->original_output_acquire_(engine->original_output_ctx_, load, wanted, wait_ticks);
+}
+
+esp_gmf_err_io_t EspSimplePlayerBackend::BudgetRelease(
+        void* ctx, esp_gmf_payload_t* load, int wait_ticks) {
+    auto* engine = static_cast<EspSimplePlayerBackend*>(ctx);
+    const auto result = engine->original_output_release_(engine->original_output_ctx_, load, wait_ticks);
+    if (result >= ESP_GMF_IO_OK && load != nullptr &&
+        engine->decode_yield_policy_.ShouldYield(esp_timer_get_time(), load->valid_size, load->is_done,
+            PlaybackDecodeYieldIntervalUs(engine->low_latency_prompt_.load() ||
+                                          engine->cancelling_decode_.load()))) {
+        vTaskDelay(1);
+        engine->decode_yield_policy_.Reset(esp_timer_get_time());
+    }
+    return result;
 }
 
 int EspSimplePlayerBackend::HandleEvent(esp_asp_event_pkt_t* event) {

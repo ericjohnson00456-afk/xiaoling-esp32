@@ -50,6 +50,21 @@ bool ReadBool(const cJSON* object, const char* name) {
     return cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(object, name));
 }
 
+std::string ReadRequestId(const cJSON* root) {
+    const auto* rid = cJSON_GetObjectItemCaseSensitive(root, "rid");
+    if (cJSON_IsString(rid) && rid->valuestring != nullptr) return rid->valuestring;
+    if (cJSON_IsNumber(rid)) return std::to_string(static_cast<unsigned long>(rid->valuedouble));
+    return {};
+}
+
+bool PublishVoiceEvent(AppEvent::Id id, uint32_t generation) {
+    return AppEvent::PublishScoped(id, nullptr, 0, Xiaoling::voice_session_epoch, generation);
+}
+
+bool PublishVoiceText(AppEvent::Id id, std::string_view text, uint32_t generation) {
+    return AppEvent::PublishTextScoped(id, text, Xiaoling::voice_session_epoch, generation);
+}
+
 bool AsciiEqualsIgnoreCase(const std::string& value, const char* expected) {
     if (expected == nullptr || value.size() != std::strlen(expected)) {
         return false;
@@ -133,7 +148,7 @@ bool CountUtf8Codepoints(const char* text, uint32_t* count) {
 
 class TtsSubtitleFetcher final {
 public:
-    using Callback = std::function<void(int, const std::string&)>;
+    using Callback = std::function<void(int, const std::string&, uint32_t)>;
 
     explicit TtsSubtitleFetcher(Callback callback) : callback_(std::move(callback)) {
     }
@@ -144,7 +159,7 @@ public:
         task_cv_.wait(lock, [this]() { return !worker_running_; });
     }
 
-    void Start(const std::string& url) {
+    void Start(const std::string& url, uint32_t event_generation) {
         if (url.empty()) {
             return;
         }
@@ -154,6 +169,7 @@ public:
             std::lock_guard<std::mutex> lock(mutex_);
             pending_url_ = url;
             pending_generation_ = generation;
+            pending_event_generation_ = event_generation;
             if (!worker_running_) {
                 worker_running_ = true;
                 start_worker = true;
@@ -196,6 +212,7 @@ private:
     struct Request {
         std::string url;
         uint32_t generation;
+        uint32_t event_generation;
     };
 
     static void TaskEntry(void* arg) {
@@ -221,6 +238,7 @@ private:
                 request.url = std::move(pending_url_);
                 pending_url_.clear();
                 request.generation = pending_generation_;
+                request.event_generation = pending_event_generation_;
             }
             ESP_LOGI(TAG, "字幕请求开始: generation=%lu, url=%s",
                      static_cast<unsigned long>(request.generation), request.url.c_str());
@@ -232,13 +250,13 @@ private:
         return generation_.load() == generation;
     }
 
-    void Emit(Event event, const std::string& text, uint32_t generation) {
-        if (IsCurrent(generation) && callback_) {
-            callback_(event, text);
+    void Emit(Event event, const std::string& text, uint32_t generation, uint32_t event_generation) {
+        if (IsCurrent(generation) && Xiaoling::voice_session_epoch.IsCurrent(event_generation) && callback_) {
+            callback_(event, text, event_generation);
         }
     }
 
-    void ParseBlock(const std::string& block, uint32_t generation, bool* done) {
+    void ParseBlock(const std::string& block, uint32_t generation, uint32_t event_generation, bool* done) {
         std::string event_name;
         std::string payload;
         size_t offset = 0;
@@ -282,16 +300,16 @@ private:
             AsciiEqualsIgnoreCase(payload, "done") ||
             AsciiEqualsIgnoreCase(payload, "\"done\"")) {
             ESP_LOGI(TAG, "字幕流收到 done");
-            Emit(kDone, {}, generation);
+            Emit(kDone, {}, generation, event_generation);
             *done = true;
         } else if ((event_name.empty() || event_name == "data") && !payload.empty()) {
             // 服务端同时存在标准 SSE(event:data + data:)和简化 SSE(data:)
             // 两种格式；没有 event 行时，非 [DONE] 的 data 仍然是字幕句段。
-            Emit(kData, payload, generation);
+            Emit(kData, payload, generation, event_generation);
         }
     }
 
-    void ParseAvailable(std::string* buffer, uint32_t generation, bool* done) {
+    void ParseAvailable(std::string* buffer, uint32_t generation, uint32_t event_generation, bool* done) {
         while (!*done && IsCurrent(generation)) {
             size_t delimiter = buffer->find("\n\n");
             size_t delimiter_size = 2;
@@ -306,7 +324,7 @@ private:
             }
             const std::string block = buffer->substr(0, delimiter);
             buffer->erase(0, delimiter + delimiter_size);
-            ParseBlock(block, generation, done);
+            ParseBlock(block, generation, event_generation, done);
         }
     }
 
@@ -408,13 +426,13 @@ private:
             }
             read_errors = 0;
             buffer.append(read_buffer, static_cast<size_t>(bytes));
-            ParseAvailable(&buffer, request.generation, &done);
+            ParseAvailable(&buffer, request.generation, request.event_generation, &done);
         }
         if (!done && IsCurrent(request.generation)) {
-            ParseAvailable(&buffer, request.generation, &done);
+            ParseAvailable(&buffer, request.generation, request.event_generation, &done);
             if (!done) {
                 ESP_LOGI(TAG, "字幕请求结束: 未收到 done");
-                Emit(kDone, {}, request.generation);
+                Emit(kDone, {}, request.generation, request.event_generation);
             }
         }
         http->Close();
@@ -427,6 +445,7 @@ private:
     bool worker_running_ = false;
     std::string pending_url_;
     uint32_t pending_generation_ = 0;
+    uint32_t pending_event_generation_ = 0;
     std::string access_token_;
     bool worker_stack_external_ = false;
 };
@@ -447,25 +466,33 @@ std::string JsonToString(cJSON* root) {
 
 XiaolingSessionVoice::XiaolingSessionVoice()
     : subtitle_fetcher_(std::make_unique<TtsSubtitleFetcher>(
-          [this](int event, const std::string& text) {
-              HandleSubtitleEvent(event, text);
+          [this](int event, const std::string& text, uint32_t generation) {
+              HandleSubtitleEvent(event, text, generation);
           })) {
     event_group_ = xEventGroupCreate();
     tts_stream_ready_subscription_id_ = AppEvent::Subscribe(
-        AppEvent::Id::XiaolingTtsStreamReady, [this](const AppEvent::Event&) {
+        AppEvent::Id::XiaolingTtsStreamReady, [this](const AppEvent::Event& event) {
+            std::lock_guard<std::recursive_mutex> lock(session_mutex_);
+            if (!event.IsCurrent()) return;
             OnTtsPipelinePlaying();
         });
     tts_pipeline_subscription_id_ = AppEvent::Subscribe(
-        AppEvent::Id::XiaolingTtsPlaying, [this](const AppEvent::Event&) {
+        AppEvent::Id::XiaolingTtsPlaying, [this](const AppEvent::Event& event) {
+            std::lock_guard<std::recursive_mutex> lock(session_mutex_);
+            if (!event.IsCurrent()) return;
             OnTtsPipelinePlaying();
         });
     tts_started_subscription_id_ = AppEvent::Subscribe(
-        AppEvent::Id::XiaolingTtsStarted, [this](const AppEvent::Event&) {
+        AppEvent::Id::XiaolingTtsStarted, [this](const AppEvent::Event& event) {
+            std::lock_guard<std::recursive_mutex> lock(session_mutex_);
+            if (!event.IsCurrent()) return;
             OnTtsStarted();
         });
     tts_progress_subscription_id_ = AppEvent::Subscribe(
         AppEvent::Id::XiaolingTtsOutputProgress,
         [this](const AppEvent::Event& event) {
+            std::lock_guard<std::recursive_mutex> lock(session_mutex_);
+            if (!event.IsCurrent()) return;
             const auto text = event.Text();
             if (text.empty()) {
                 return;
@@ -479,6 +506,8 @@ XiaolingSessionVoice::XiaolingSessionVoice()
         });
     tts_stopped_subscription_id_ = AppEvent::Subscribe(
         AppEvent::Id::XiaolingTtsStopped, [this](const AppEvent::Event& event) {
+            std::lock_guard<std::recursive_mutex> lock(session_mutex_);
+            if (!event.IsCurrent()) return;
             OnTtsPlaybackStopped(event.Text() == "natural");
         });
 }
@@ -600,6 +629,7 @@ bool XiaolingSessionVoice::SendAudioBatch(
 }
 
 void XiaolingSessionVoice::SendWakeWordDetected(const std::string& wake_word) {
+    std::lock_guard<std::recursive_mutex> lock(session_mutex_);
     // 云端通过 oneshot 标记识别本轮由唤醒词触发。
     pending_wake_word_ = wake_word;
 }
@@ -607,6 +637,11 @@ void XiaolingSessionVoice::SendWakeWordDetected(const std::string& wake_word) {
 std::string XiaolingSessionVoice::BuildStartMessage(ListeningMode mode) {
     text_session_ = false;
     session_id_ = std::to_string(static_cast<unsigned long>(esp_random()));
+    event_generation_ = Xiaoling::voice_session_epoch.Current();
+    accepting_session_messages_ = true;
+    awaiting_started_ = true;
+    ESP_LOGI(TAG, "新语音会话请求: epoch=%lu, rid=%s",
+             static_cast<unsigned long>(event_generation_.load()), session_id_.c_str());
 
     cJSON* root = cJSON_CreateObject();
     cJSON* params = cJSON_CreateObject();
@@ -669,50 +704,51 @@ std::string XiaolingSessionVoice::BuildStartMessage(ListeningMode mode) {
 }
 
 void XiaolingSessionVoice::PrepareTextSession(std::string session_id) {
+    std::lock_guard<std::recursive_mutex> lock(session_mutex_);
     ResetResultState();
     SetAudioUploadEnabled(false, "prepare_text_session");
     session_id_ = std::move(session_id);
+    event_generation_ = Xiaoling::voice_session_epoch.Current();
+    accepting_session_messages_ = true;
+    awaiting_started_ = true;
+    start_deadline_us_ = 0;
     text_session_ = true;
 }
 
 void XiaolingSessionVoice::SendStartListening(ListeningMode mode) {
-    if (!text_sender_) {
-        if (error_callback_) {
-            error_callback_(XiaolingSessionVoiceError::kServerError);
+    {
+        std::lock_guard<std::recursive_mutex> lock(session_mutex_);
+        if (!text_sender_) {
+            if (error_callback_) error_callback_(XiaolingSessionVoiceError::kServerError);
+            return;
         }
-        return;
-    }
-    if (session_active_) {
-        text_sender_("{\"action\":\"cancel\"}");
-    }
-
-    SetAudioUploadEnabled(false, "send_start_prepare");
-    uplink_audio_format_checked_ = false;
-    if (event_group_ == nullptr) {
-        if (error_callback_) {
-            error_callback_(XiaolingSessionVoiceError::kServerError);
+        if (session_active_) text_sender_("{\"action\":\"cancel\"}");
+        SetAudioUploadEnabled(false, "send_start_prepare");
+        uplink_audio_format_checked_ = false;
+        if (event_group_ == nullptr) {
+            if (error_callback_) error_callback_(XiaolingSessionVoiceError::kServerError);
+            return;
         }
-        return;
-    }
-
-    xEventGroupClearBits(event_group_, kSessionStartedBit);
-    SetSessionActive(text_sender_(BuildStartMessage(mode)));
-    if (!session_active_) {
-        return;
-    }
-
-    // 收到 started 后才允许发送音频。
-    const auto bits = xEventGroupWaitBits(event_group_, kSessionStartedBit,
-                                          pdTRUE, pdFALSE,
-                                          pdMS_TO_TICKS(kSessionStartTimeoutMs));
-    if (!(bits & kSessionStartedBit) || !audio_upload_enabled_) {
-        ESP_LOGE(TAG, "等待 lschat started 消息超时");
-        SetSessionActive(false);
-        if (error_callback_) {
-            error_callback_(XiaolingSessionVoiceError::kServerTimeout);
+        xEventGroupClearBits(event_group_, kSessionStartedBit);
+        start_deadline_us_ = esp_timer_get_time() + kSessionStartTimeoutMs * 1000LL;
+        SetSessionActive(text_sender_(BuildStartMessage(mode)));
+        if (!session_active_) {
+            awaiting_started_ = false;
+            if (error_callback_) error_callback_(XiaolingSessionVoiceError::kServerError);
         }
-        return;
     }
+    // 接收任务异步确认，主任务立即返回，保持可打断/可重新唤醒。
+}
+
+void XiaolingSessionVoice::CheckStartTimeout() {
+    std::lock_guard<std::recursive_mutex> lock(session_mutex_);
+    if (!awaiting_started_ || !session_active_ || start_deadline_us_ == 0 ||
+        !Xiaoling::voice_session_epoch.IsCurrent(event_generation_.load()) ||
+        esp_timer_get_time() < start_deadline_us_) return;
+    ESP_LOGE(TAG, "等待 lschat started 消息超时: epoch=%lu",
+             static_cast<unsigned long>(event_generation_.load()));
+    CancelSession();
+    if (error_callback_) error_callback_(XiaolingSessionVoiceError::kServerTimeout);
 }
 
 void XiaolingSessionVoice::SendStopListening() {
@@ -720,6 +756,7 @@ void XiaolingSessionVoice::SendStopListening() {
 }
 
 bool XiaolingSessionVoice::StopListeningForTts() {
+    std::lock_guard<std::recursive_mutex> lock(session_mutex_);
     const bool was_active = session_active_.load();
     const bool sent = !was_active ||
         (text_sender_ && text_sender_("{\"action\":\"cancel\"}"));
@@ -751,6 +788,9 @@ bool XiaolingSessionVoice::EndSession() {
 }
 
 bool XiaolingSessionVoice::CancelSession() {
+    std::lock_guard<std::recursive_mutex> lock(session_mutex_);
+    accepting_session_messages_ = false;
+    awaiting_started_ = false;
     const bool was_active = session_active_.load();
     const bool sent = !was_active ||
         (text_sender_ && text_sender_("{\"action\":\"cancel\"}"));
@@ -779,6 +819,7 @@ void XiaolingSessionVoice::PrepareTtsReplay() {
 }
 
 void XiaolingSessionVoice::PrepareAbortSpeaking(AbortReason reason) {
+    std::lock_guard<std::recursive_mutex> session_lock(session_mutex_);
     if (reason != kAbortReasonWakeWordDetected) {
         return;
     }
@@ -859,6 +900,7 @@ bool XiaolingSessionVoice::SendFrozenReplyInterruption() {
 }
 
 void XiaolingSessionVoice::SendAbortSpeaking(AbortReason reason) {
+    std::lock_guard<std::recursive_mutex> session_lock(session_mutex_);
     // Application 正常会在停止播放器前调用 PrepareAbortSpeaking()；这里的
     // fallback 覆盖直接调用本接口的路径，同时仍确保 event 早于 cancel。
     PrepareAbortSpeaking(reason);
@@ -876,6 +918,7 @@ void XiaolingSessionVoice::SendAbortSpeaking(AbortReason reason) {
 }
 
 void XiaolingSessionVoice::HandleIatBargeIn() {
+    std::lock_guard<std::recursive_mutex> session_lock(session_mutex_);
     // A new IAT belongs to the existing full-duplex session. Report the old
     // reply cursor, but do not send action=cancel or disable audio upload: the
     // cloud still needs the remainder of the user's new utterance.
@@ -964,13 +1007,30 @@ void XiaolingSessionVoice::HandleBinary(std::vector<uint8_t> payload) {
     }
 }
 
-void XiaolingSessionVoice::HandleMessage(const cJSON* root) {
+std::string XiaolingSessionVoice::session_id() const {
+    std::lock_guard<std::recursive_mutex> lock(session_mutex_);
+    return session_id_;
+}
+
+bool XiaolingSessionVoice::AcceptsSessionMessage(const std::string& rid) const {
+    std::lock_guard<std::recursive_mutex> lock(session_mutex_);
+    return Xiaoling::AcceptsVoiceReply(accepting_session_messages_, event_generation_.load(),
+                                      session_id_, rid);
+}
+
+bool XiaolingSessionVoice::HandleMessage(const cJSON* root, uint32_t* accepted_generation) {
+    std::lock_guard<std::recursive_mutex> lock(session_mutex_);
     const auto* action = ReadString(root, "action");
     if (action == nullptr) {
-        return;
+        return false;
     }
+    if (std::strcmp(action, "connected") == 0 || std::strcmp(action, "mcp") == 0) return false;
+    if (!AcceptsSessionMessage(ReadRequestId(root))) return false;
+    if (accepted_generation != nullptr) *accepted_generation = event_generation_.load();
 
     if (std::strcmp(action, "started") == 0) {
+        if (!awaiting_started_) return false;
+        awaiting_started_ = false;
         bool preserve_playing_tts = false;
         {
             std::lock_guard<std::mutex> lock(subtitle_state_mutex_);
@@ -998,7 +1058,7 @@ void XiaolingSessionVoice::HandleMessage(const cJSON* root) {
         ESP_LOGI(TAG, "%s", text_session_
                                 ? "lschat 文本会话已启动，禁止上传音频"
                                 : "lschat 语音会话已启动，允许上传音频");
-        return;
+        return true;
     }
     if (std::strcmp(action, "finish") == 0 ||
         std::strcmp(action, "closed") == 0 ||
@@ -1024,10 +1084,10 @@ void XiaolingSessionVoice::HandleMessage(const cJSON* root) {
         } else {
             EndTtsText();
         }
-        return;
+        return true;
     }
     if (std::strcmp(action, "result") != 0) {
-        return;
+        return false;
     }
 
     const auto* data = cJSON_GetObjectItemCaseSensitive(root, "data");
@@ -1050,16 +1110,20 @@ void XiaolingSessionVoice::HandleMessage(const cJSON* root) {
     }
     const auto* sub = ReadString(data, "sub");
     if (sub == nullptr) {
-        return;
+        return true;
     }
     if (std::strcmp(sub, "iat") == 0) {
         HandleIat(data);
     } else if (std::strcmp(sub, "tts") == 0) {
         HandleTts(data, message_sid != nullptr ? message_sid : "");
     }
+    return true;
 }
 
 void XiaolingSessionVoice::Reset() {
+    std::lock_guard<std::recursive_mutex> lock(session_mutex_);
+    accepting_session_messages_ = false;
+    awaiting_started_ = false;
     SetAudioUploadEnabled(false, "reset");
     SetSessionActive(false);
     pending_wake_word_.clear();
@@ -1116,13 +1180,13 @@ void XiaolingSessionVoice::HandleIat(const cJSON* data) {
     const bool is_last = ReadBool(data, "is_last");
     if (!iat_active_) {
         iat_active_ = true;
-        AppEvent::PublishText(AppEvent::Id::XiaolingIatStart, last_iat_text_);
+        PublishVoiceText(AppEvent::Id::XiaolingIatStart, last_iat_text_, event_generation_.load());
     } else if (!ReadBool(data, "is_last")) {
-        AppEvent::PublishText(AppEvent::Id::XiaolingIatUpdate, last_iat_text_);
+        PublishVoiceText(AppEvent::Id::XiaolingIatUpdate, last_iat_text_, event_generation_.load());
     }
 
     if (is_last) {
-        AppEvent::PublishText(AppEvent::Id::XiaolingIatEnd, last_iat_text_);
+        PublishVoiceText(AppEvent::Id::XiaolingIatEnd, last_iat_text_, event_generation_.load());
         iat_active_ = false;
     }
 }
@@ -1180,7 +1244,7 @@ void XiaolingSessionVoice::StartTtsAudio(std::string url, const std::string& rep
     // 音频已经建连并开始解码；但无需再等首个 PCM 真正交给 codec。
     ESP_LOGI(TAG, "TTS 音频优先启动: audio_url_bytes=%u",
              static_cast<unsigned>(url.size()));
-    AppEvent::PublishText(AppEvent::Id::XiaolingTtsUrl, url);
+    PublishVoiceText(AppEvent::Id::XiaolingTtsUrl, url, event_generation_.load());
 }
 
 void XiaolingSessionVoice::StartPendingSubtitleStream() {
@@ -1289,7 +1353,7 @@ void XiaolingSessionVoice::StartSubtitleStream(const std::string& url) {
     // during the audio prebuffer window before the UI audio clock starts.
     CancelSubtitleStream(false);
     if (subtitle_fetcher_ != nullptr) {
-        subtitle_fetcher_->Start(url);
+        subtitle_fetcher_->Start(url, event_generation_.load());
     }
 }
 
@@ -1299,7 +1363,7 @@ void XiaolingSessionVoice::CancelSubtitleStream(bool notify_interrupt) {
     }
     tts_text_active_.store(false);
     if (notify_interrupt) {
-        AppEvent::Publish(AppEvent::Id::XiaolingTtsTextInterrupt);
+        PublishVoiceEvent(AppEvent::Id::XiaolingTtsTextInterrupt, event_generation_.load());
     }
 }
 
@@ -1315,7 +1379,10 @@ void XiaolingSessionVoice::ResetTimelineStateLocked() {
     previous_timeline_end_ms_ = 0;
 }
 
-void XiaolingSessionVoice::HandleSubtitleEvent(int event, const std::string& text) {
+void XiaolingSessionVoice::HandleSubtitleEvent(int event, const std::string& text, uint32_t generation) {
+    std::lock_guard<std::recursive_mutex> session_lock(session_mutex_);
+    if (generation != event_generation_.load() ||
+        !Xiaoling::voice_session_epoch.IsCurrent(generation)) return;
     if (event == 0) {
         bool timeline_stream = false;
         {
@@ -1327,9 +1394,9 @@ void XiaolingSessionVoice::HandleSubtitleEvent(int event, const std::string& tex
                 return;
             }
             if (!tts_text_active_.exchange(true)) {
-                AppEvent::Publish(AppEvent::Id::XiaolingTtsTextStart);
+                PublishVoiceEvent(AppEvent::Id::XiaolingTtsTextStart, generation);
             }
-            AppEvent::PublishText(AppEvent::Id::XiaolingTtsTextUpdate, text);
+            PublishVoiceText(AppEvent::Id::XiaolingTtsTextUpdate, text, generation);
             ESP_LOGI(TAG, "普通文本字幕已推送: bytes=%u",
                      static_cast<unsigned>(text.size()));
             return;
@@ -1412,12 +1479,12 @@ void XiaolingSessionVoice::HandleSubtitleEvent(int event, const std::string& tex
                  static_cast<unsigned long>(start_ms),
                  static_cast<unsigned long>(end_ms));
         if (!tts_text_active_.exchange(true)) {
-            AppEvent::Publish(AppEvent::Id::XiaolingTtsTextStart);
+            PublishVoiceEvent(AppEvent::Id::XiaolingTtsTextStart, generation);
         }
-        AppEvent::PublishText(AppEvent::Id::XiaolingTtsTextUpdate, text);
+        PublishVoiceText(AppEvent::Id::XiaolingTtsTextUpdate, text, generation);
     } else if (event == 1) {
         if (tts_text_active_.exchange(false)) {
-            AppEvent::Publish(AppEvent::Id::XiaolingTtsTextEnd);
+            PublishVoiceEvent(AppEvent::Id::XiaolingTtsTextEnd, generation);
         }
     }
 }
@@ -1426,12 +1493,12 @@ void XiaolingSessionVoice::EndIat() {
     if (!iat_active_) {
         return;
     }
-    AppEvent::PublishText(AppEvent::Id::XiaolingIatEnd, last_iat_text_);
+    PublishVoiceText(AppEvent::Id::XiaolingIatEnd, last_iat_text_, event_generation_.load());
     iat_active_ = false;
 }
 
 void XiaolingSessionVoice::EndTtsText() {
     if (tts_text_active_.exchange(false)) {
-        AppEvent::Publish(AppEvent::Id::XiaolingTtsTextEnd);
+        PublishVoiceEvent(AppEvent::Id::XiaolingTtsTextEnd, event_generation_.load());
     }
 }

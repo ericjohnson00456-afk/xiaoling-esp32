@@ -1,5 +1,7 @@
 #pragma once
 
+#include "event_epoch.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -44,6 +46,7 @@ enum class Id : uint16_t {
     XiaolingTtsStarted,
     XiaolingTtsOutputProgress,
     XiaolingTtsStopped,
+    VoiceSessionStarted,
 };
 
 enum class Priority : uint8_t {
@@ -55,6 +58,13 @@ struct Event {
     Id id = Id::None;
     const void* data = nullptr;
     size_t size = 0;
+    const Epoch* epoch = nullptr;
+    uint32_t generation = 0;
+
+    bool IsCurrent() const {
+        return epoch == nullptr || epoch->IsCurrent(generation);
+    }
+    EpochSnapshot Scope() const { return {epoch, generation}; }
 
     template <typename T>
     const T* Get() const {
@@ -101,6 +111,14 @@ bool Publish(Id id, const void* data = nullptr, size_t size = 0,
 // 复制文本后异步发布；接收方通过 Event::Text() 读取。
 bool PublishText(Id id, std::string_view text,
                  Priority priority = Priority::Normal);
+
+// 出队以及每个订阅回调前重新检查代次；二次 Schedule 时也应保存并检查代次。
+bool PublishScoped(Id id, const void* data, size_t size,
+                   const Epoch& epoch, uint32_t generation,
+                   Priority priority = Priority::Normal);
+bool PublishTextScoped(Id id, std::string_view text,
+                       const Epoch& epoch, uint32_t generation,
+                       Priority priority = Priority::Normal);
 
 template <typename T>
 bool Publish(Id id, const T& value,

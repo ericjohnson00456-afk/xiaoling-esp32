@@ -153,6 +153,9 @@ public:
     // ===== 4. 上行 Opus 与录音测试 =====
     /* 只控制业务是否消费新 Opus，不启停采集、AFE/AEC 或编码任务。 */
     void EnableAudioUpload(bool enable);
+    // 本地等效上报负载：执行同一 Opus 编码，不发送音频，不触发业务唤醒。
+    bool SetLocalEncodingBenchmark(bool enable);
+    bool IsLocalEncodingBenchmark() const { return local_encoding_benchmark_.load(); }
     std::unique_ptr<AudioStreamPacket> PopOpusPacket();
     void EnableAudioTesting(bool enable);
 
@@ -205,9 +208,12 @@ private:
     struct WakeInputFrame {
         std::vector<int16_t> pcm;
         uint32_t generation;
+        int64_t enqueued_us;
     };
     std::deque<WakeInputFrame> processed_wake_queue_;
     std::atomic<uint32_t> wake_input_generation_{0};
+    std::atomic<uint32_t> wake_produced_frames_{0};
+    std::atomic<uint32_t> wake_dropped_frames_{0};
     // 推理和启停串行化；不在持有队列锁时等待此锁。
     std::mutex wake_inference_mutex_;
 #endif
@@ -269,6 +275,7 @@ private:
     // ===== 6. 播放状态 =====
     // 播放器流的预缓冲、尾帧和等待状态，由 audio_queue_mutex_ 保护。
     bool audio_output_busy_ = false;
+    uint32_t player_session_id_ = 0;
     // true 表示播放器不再入新帧，允许 AudioOutputTask 播放不足预缓冲长度的尾音。
     bool player_playback_finished_ = false;
     // 当前播放器会话的首播预缓冲门槛，由 AudioOutput 配置传入。
@@ -299,6 +306,9 @@ private:
     std::atomic_bool voice_detected_{false};
     std::atomic_bool wake_word_running_{false};
     std::atomic_bool audio_testing_running_{false};
+    std::atomic_bool local_encoding_benchmark_{false};
+    std::atomic<uint32_t> encode_produced_frames_{0};
+    std::atomic<uint32_t> encode_dropped_frames_{0};
     std::atomic_bool audio_testing_processing_{false};
     // Start/Stop 控制采集、播放、Opus 服务循环的退出条件。
     std::atomic_bool service_stopped_{true};

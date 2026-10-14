@@ -117,7 +117,10 @@ public:
     // 清除 Wi-Fi 配置、重置小聆连接并进入配网状态；五击和串口 wifi 命令共用。
     void ClearNetworkConfiguration();
 
+    // 外部唤醒入口：可跨任务调用，统一投递到主任务替换语音会话。
     void WakeWordInvoke(const std::string& wake_word);
+    // 仅用于本地编码/唤醒压力验证，不创建云端录音会话。
+    void SetAudioStressMode(bool enable);
     bool CanEnterSleepMode();
     void SendMcpMessage(const std::string& payload);
     // 语音拍照接管早到 TTS 时，要求会话层保留已收到的 timeline。
@@ -267,7 +270,8 @@ private:
     void HandleStopListeningEvent();
     void HandleNetworkConnectedEvent();
     void HandleNetworkDisconnectedEvent();
-    void HandleWakeWordDetectedEvent();
+    void HandleWakeWordDetectedEvent(const std::string& wake_word);
+    void HandleWakeWordInvocation(const std::string& wake_word);
     void HandleVadChangedEvent();
     void HandlePlayerOutputStartedEvent(const PlaybackOutputEvent& event);
     void HandlePlayerOutputProgressEvent(const PlaybackOutputEvent& event);
@@ -279,8 +283,8 @@ private:
     bool EnsureXiaolingReadyForWakeup();
     void SetListeningMode(ListeningMode mode);
     void PauseWakeWordDetection();
-    bool EndListeningSessionForWakeup();
-    void BeginWakeup(ListeningMode mode);
+    bool ResetVoiceSessionForWakeup(bool& interrupted_tts);
+    void BeginWakeup(ListeningMode mode, const std::string& wake_word = {});
     void CancelWakeup();
     void PublishWifiIcon();
 

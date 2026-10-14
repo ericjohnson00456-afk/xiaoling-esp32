@@ -1,4 +1,5 @@
 #include "audio_player.h"
+#include "xiaoling/session/voice_session_epoch.h"
 
 #include "channels/alarm_player.h"
 #include "channels/tone_player.h"
@@ -58,10 +59,12 @@ AudioPlayer::~AudioPlayer() {
     AppEvent::Unsubscribe(backend_event_subscription_id_);
 }
 
-bool AudioPlayer::Initialize(AudioService* audio_service) {
+bool AudioPlayer::Initialize(AudioService* audio_service, ControlScheduler scheduler) {
     if (backend_ != nullptr) {
         return true;
     }
+    if (!scheduler) return false;
+    control_scheduler_ = std::move(scheduler);
 
     if (backend_event_subscription_id_ == 0) {
         backend_event_subscription_id_ = AppEvent::Subscribe(
@@ -72,7 +75,11 @@ bool AudioPlayer::Initialize(AudioService* audio_service) {
                     ESP_LOGE(TAG, "播放器内部事件数据无效");
                     return;
                 }
-                static_cast<AudioPlayer*>(context)->HandleBackendEvent(*event);
+                auto* player = static_cast<AudioPlayer*>(context);
+                const auto scope = queued.Scope();
+                player->control_scheduler_([player, playback = *event, scope]() {
+                    if (scope.IsCurrent()) player->HandleBackendEvent(playback);
+                });
             },
             this);
         if (backend_event_subscription_id_ == 0) {
@@ -287,6 +294,7 @@ uint32_t AudioPlayer::PlayAlarmTtsUrl(const std::string& url) {
 }
 
 void AudioPlayer::PlayWakeup(std::function<void(bool)> completion) {
+    std::lock_guard<std::recursive_mutex> lock(wakeup_mutex_);
     wakeup_in_progress_ = true;
     if (!PauseMusic() || !StopNonMusic(PlaybackEndReason::kPreempted)) {
         wakeup_in_progress_ = false;
@@ -298,7 +306,10 @@ void AudioPlayer::PlayWakeup(std::function<void(bool)> completion) {
         if (completion) completion(true);
         return;
     }
-    tone_channel_->PlayWakeup([this, completion = std::move(completion)](bool proceed) {
+    const auto generation = Xiaoling::voice_session_epoch.Current();
+    tone_channel_->PlayWakeup([this, generation, completion = std::move(completion)](bool proceed) {
+        std::lock_guard<std::recursive_mutex> lock(wakeup_mutex_);
+        if (!Xiaoling::voice_session_epoch.IsCurrent(generation)) return;
         wakeup_in_progress_ = false;
         if (tts_channel_ != nullptr) {
             if (proceed) {
@@ -313,6 +324,7 @@ void AudioPlayer::PlayWakeup(std::function<void(bool)> completion) {
 }
 
 void AudioPlayer::CancelWakeup() {
+    std::lock_guard<std::recursive_mutex> lock(wakeup_mutex_);
     if (tone_channel_ != nullptr) {
         tone_channel_->CancelWakeup();
     }
@@ -466,7 +478,12 @@ void AudioPlayer::SetMusicTrackCallback(MusicTrackCallback callback) {
 
 void AudioPlayer::PublishPlayerOutputStarted(const AudioOutputEvent& event) {
     const auto output = ToPlaybackOutputEvent(event);
-    if (!AppEvent::Publish(AppEvent::Id::PlayerOutputStarted, output)) {
+    const bool published = output.channel == PlaybackChannel::kTts
+        ? AppEvent::PublishScoped(AppEvent::Id::PlayerOutputStarted, &output, sizeof(output),
+              Xiaoling::voice_session_epoch, TtsSessionGeneration(output.session_id))
+        : AppEvent::Publish(AppEvent::Id::PlayerOutputStarted, output);
+    if (!published && (output.channel != PlaybackChannel::kTts ||
+        Xiaoling::voice_session_epoch.IsCurrent(TtsSessionGeneration(output.session_id)))) {
         ESP_LOGE(TAG, "发布播放器首帧输出事件失败");
     }
 }
@@ -512,11 +529,25 @@ void AudioPlayer::RememberSession(uint32_t session_id, PlaybackChannel channel) 
     }
     std::lock_guard<std::mutex> lock(session_mutex_);
     session_channels_[session_id] = channel;
+    if (channel == PlaybackChannel::kTts) {
+        tts_session_generations_.emplace(session_id, Xiaoling::voice_session_epoch.Current());
+    }
+}
+
+uint32_t AudioPlayer::TtsSessionGeneration(uint32_t session_id) const {
+    std::lock_guard<std::mutex> lock(session_mutex_);
+    const auto it = tts_session_generations_.find(session_id);
+    return it == tts_session_generations_.end() ? 0 : it->second;
 }
 
 void AudioPlayer::PublishBackendEvent(const PlaybackEvent& event) {
     RememberSession(event.session_id, event.channel);
-    if (!AppEvent::Publish(AppEvent::Id::PlaybackBackend, event)) {
+    const bool published = event.channel == PlaybackChannel::kTts
+        ? AppEvent::PublishScoped(AppEvent::Id::PlaybackBackend, &event, sizeof(event),
+              Xiaoling::voice_session_epoch, TtsSessionGeneration(event.session_id))
+        : AppEvent::Publish(AppEvent::Id::PlaybackBackend, event);
+    if (!published && (event.channel != PlaybackChannel::kTts ||
+        Xiaoling::voice_session_epoch.IsCurrent(TtsSessionGeneration(event.session_id)))) {
         ESP_LOGE(TAG, "发布播放器内部事件失败: session=%lu, state=%u",
                  static_cast<unsigned long>(event.session_id),
                  static_cast<unsigned>(event.state));
@@ -524,24 +555,21 @@ void AudioPlayer::PublishBackendEvent(const PlaybackEvent& event) {
 }
 
 void AudioPlayer::HandleBackendEvent(const PlaybackEvent& event) {
-    // 从这里开始已进入 app_event 任务。先维护播放器内部状态，再对外发布
+    // 此处已经进入 Application 主任务。先维护播放器内部状态，再对外发布
     // 语义明确的生命周期事件，订阅者不需要了解 GMF 回调线程。
-    if (tone_channel_ != nullptr && tone_channel_->IsWakeupTerminalEvent(event)) {
-        wakeup_in_progress_ = false;
-        if (tts_channel_ != nullptr) {
-            if (event.state == PlaybackState::kCompleted ||
-                event.state == PlaybackState::kFailed) {
-                tts_channel_->ResumeDeferredUrl();
-            } else {
-                tts_channel_->ClearDeferredUrl();
-            }
-        }
-    }
+    // TonePlayer 的完成回调在 wakeup_mutex_ 下统一恢复暂存 URL；不能在
+    // 检查 session 与调用回调之间先无条件恢复，否则旧终态可能影响新唤醒。
 
     DispatchPlaybackEvent(event);
 
     const AppEvent::Id id = ToAppEventId(event.state);
-    if (id != AppEvent::Id::None && !AppEvent::Publish(id, event)) {
+    const bool published = id == AppEvent::Id::None ||
+        (event.channel == PlaybackChannel::kTts
+            ? AppEvent::PublishScoped(id, &event, sizeof(event), Xiaoling::voice_session_epoch,
+                                      TtsSessionGeneration(event.session_id))
+            : AppEvent::Publish(id, event));
+    if (!published && (event.channel != PlaybackChannel::kTts ||
+        Xiaoling::voice_session_epoch.IsCurrent(TtsSessionGeneration(event.session_id)))) {
         ESP_LOGE(TAG, "发布播放生命周期事件失败: session=%lu, state=%u",
                  static_cast<unsigned long>(event.session_id),
                  static_cast<unsigned>(event.state));

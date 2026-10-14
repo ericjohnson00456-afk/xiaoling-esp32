@@ -65,6 +65,7 @@ public:
     void OnAudioSent(std::function<void(uint32_t)> callback);
     void SendWakeWordDetected(const std::string& wake_word);
     void SendStartListening(ListeningMode mode);
+    void CheckVoiceStartTimeout();
     void SendStopListening();
     bool StopListeningForTts();
     bool EndSession();
@@ -87,10 +88,11 @@ public:
     bool ResolveCustomAlarmDate(const std::string& alarm_id, std::string& date);
     int server_sample_rate() const;
     int server_frame_duration() const;
-    const std::string& session_id() const;
+    std::string session_id() const;
+    uint32_t voice_generation() const;
 
     void OnIncomingAudio(std::function<void(std::unique_ptr<AudioStreamPacket>)> callback);
-    void OnIncomingJson(std::function<void(const cJSON*)> callback);
+    void OnIncomingJson(std::function<void(const cJSON*, uint32_t)> callback);
     void OnNetworkError(std::function<void(XiaolingError)> callback);
     void OnConnected(std::function<void()> callback);
     void OnDisconnected(std::function<void()> callback);
@@ -161,7 +163,7 @@ private:
     std::string access_token_;
     bool error_occurred_ = false;
 
-    std::function<void(const cJSON*)> on_incoming_json_;
+    std::function<void(const cJSON*, uint32_t)> on_incoming_json_;
     std::function<void(uint32_t)> on_audio_sent_;
     std::function<void(XiaolingError)> on_network_error_;
     std::function<void()> on_connected_;
