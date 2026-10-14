@@ -2,6 +2,7 @@
 #include "playback_session_guard.h"
 #include "playback_stream_policy.h"
 #include "audio_yield_policy.h"
+#include "input_discard_policy.h"
 #include "resource/resource.h"
 #include "xiaoling/conn/xiaoling_config.h"
 #include <esp_log.h>
@@ -512,9 +513,16 @@ void AudioService::AudioInputTask() {
             continue;
         }
 
+        const uint32_t discard_before = input_discard_state_.load();
         std::vector<int16_t> data;
         if (!ReadAudioData(data, 16000, samples)) {
             continue;
+        }
+        if (DiscardCapturedInput(data, discard_before, input_discard_state_.load())) {
+            processor_pending.clear();
+#if !CONFIG_USE_MICRO_WAKE_WORD
+            wake_pending.clear();
+#endif
         }
 
         const size_t channels = codec_->input_channels();
@@ -1497,6 +1505,8 @@ void AudioService::EnableAudioUpload(bool enable) {
     uint32_t generation = 0;
     {
         std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+        // started / 重连等入口也不能绕过输入保护，tone 期间不编码静音占位包。
+        if (input_discard_state_.load() & 1u) enable = false;
         if (enable) local_encoding_benchmark_.store(false);
         previous = audio_upload_enabled_;
         if (previous == enable) {
@@ -1519,6 +1529,22 @@ void AudioService::EnableAudioUpload(bool enable) {
              static_cast<unsigned>(encode_before),
              static_cast<unsigned>(opus_before),
              service_stopped_.load() ? 0 : 1);
+}
+
+void AudioService::SetMicrophoneSuppressed(bool suppress) {
+    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    const auto previous = input_discard_state_.load();
+    const auto next = NextInputDiscardState(previous, suppress);
+    if (next == previous) return;
+    input_discard_state_.store(next);
+    // 两个边界都作废在途编码；解除保护仅允许新数据，业务层另行开上报。
+    audio_upload_enabled_ = false;
+    ++upload_generation_;
+    audio_encode_queue_.clear();
+    opus_packet_queue_.clear();
+    audio_queue_cv_.notify_all();
+    ESP_LOGI(TAG, "麦克风输入保护: %s，丢弃原始输入并清空上报缓存",
+             suppress ? "开启" : "解除");
 }
 
 bool AudioService::SetLocalEncodingBenchmark(bool enable) {

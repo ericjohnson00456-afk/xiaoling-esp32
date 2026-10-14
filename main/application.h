@@ -18,6 +18,7 @@
 #include "xiaoling/conn/xiaoling_conn.h"
 #include "ota/ota.h"
 #include "audio_service.h"
+#include "audio/wakeup_recording_gate.h"
 #include "player/audio_player.h"
 #include "player/intents/playback_intent_manager.h"
 #include "xiaoling/session/session_core.h"
@@ -199,6 +200,7 @@ private:
     std::vector<uint32_t> audio_event_subscription_ids_;
     std::atomic_bool vad_event_pending_{false};
     bool iat_utterance_active_ = false;
+    WakeupRecordingGate wakeup_recording_gate_;
 
     /*  ========== OTA业务 ======== */
     // OTA 流程独立于设备激活和小聆连接。application_ota.cc 只负责
@@ -282,6 +284,7 @@ private:
     // 唤醒入口的连接检查：WS 就绪返回 true；否则按网络状态播报 085/064 提示音。
     bool EnsureXiaolingReadyForWakeup();
     void SetListeningMode(ListeningMode mode);
+    void RefreshListeningAudioUpload();
     void PauseWakeWordDetection();
     bool ResetVoiceSessionForWakeup(bool& interrupted_tts);
     void BeginWakeup(ListeningMode mode, const std::string& wake_word = {});

@@ -718,12 +718,7 @@ void Application::InitializeXiaolingConn() {
             }
             ESP_LOGI(TAG, "WebSocket 重连完成，恢复全双工语音会话");
             xiaoling_conn_->SendStartListening(listening_mode_);
-            if (xiaoling_conn_->CanUploadAudio()) {
-                audio_service_.EnableAudioUpload(true);
-#ifdef CONFIG_LSPLATFORM
-                uplink_watchdog_.Start();
-#endif  // CONFIG_LSPLATFORM
-            }
+            RefreshListeningAudioUpload();
         });
     });
 
@@ -819,10 +814,7 @@ void Application::InitializeXiaolingConn() {
                 const auto state = GetDeviceState();
                 if (state != kDeviceStateListening &&
                     !(state == kDeviceStateSpeaking && session_controller_.KeepListeningDuringTts())) return;
-                audio_service_.EnableAudioUpload(true);
-#ifdef CONFIG_LSPLATFORM
-                uplink_watchdog_.Start();
-#endif
+                RefreshListeningAudioUpload();
                 ESP_LOGI(TAG, "新语音会话确认，开启音频上报: epoch=%lu",
                          static_cast<unsigned long>(generation));
             });
@@ -1025,6 +1017,10 @@ void Application::HandleStopListeningEvent() {
 
 void Application::HandleWakeWordDetectedEvent(const std::string& wake_word) {
     if (audio_service_.IsLocalEncodingBenchmark()) return;
+    if (wakeup_recording_gate_.Blocked()) {
+        ESP_LOGI(TAG, "无 AEC 唤醒提示音期间忽略重复唤醒");
+        return;
+    }
     if (alarm_flow_.on_wake_word) {
         alarm_flow_.on_wake_word();
     }
@@ -1113,9 +1109,17 @@ void Application::BeginWakeup(ListeningMode mode, const std::string& wake_word) 
         return;
     }
     const auto generation = Xiaoling::voice_session_epoch.Current();
+    wakeup_recording_gate_.Begin(generation, audio_service_.IsAecEnabled());
+    if (wakeup_recording_gate_.Blocked()) {
+        audio_service_.SetMicrophoneSuppressed(true);
+        audio_service_.PauseWakeWordDetection();
+        ESP_LOGI(TAG, "无 AEC：按提示音实际播放终态丢弃录音，不限制 tone 长度");
+    }
     audio_player_.PlayWakeup([this, generation](bool proceed) {
         Schedule([this, generation, proceed]() {
             if (!Xiaoling::voice_session_epoch.IsCurrent(generation)) return;
+            const bool deferred_recording = wakeup_recording_gate_.Complete(generation);
+            if (deferred_recording) audio_service_.SetMicrophoneSuppressed(false);
             intent_manager_.Pop(PlaybackIntentId::kPromptTone);
             if (!proceed) {
                 if (GetDeviceState() == kDeviceStateListening && xiaoling_conn_) {
@@ -1124,6 +1128,12 @@ void Application::BeginWakeup(ListeningMode mode, const std::string& wake_word) 
                 if (xiaoling_conn_) xiaoling_conn_->SendWakeWordDetected("");
                 SetDeviceState(kDeviceStateIdle);
                 intent_manager_.Pop(PlaybackIntentId::kVoiceSession);
+                return;
+            }
+            if (deferred_recording && GetDeviceState() == kDeviceStateConnecting) {
+                audio_service_.EnableWakeWordDetection(true);
+                ESP_LOGI(TAG, "无 AEC：提示音及 DMA 已结束，开始新录音会话");
+                SetListeningMode(listening_mode_);
                 return;
             }
             ESP_LOGI(TAG, "Wakeup tone finished; recording session remains active");
@@ -1142,9 +1152,11 @@ void Application::BeginWakeup(ListeningMode mode, const std::string& wake_word) 
         return;
     }
     if (!wake_word.empty()) xiaoling_conn_->SendWakeWordDetected(wake_word);
-    // 不要让采集串行等待提示音播放完成。播放器会在进入监听状态、打开云端
-    // 会话并并行启动麦克风链路时，保护唤醒提示音不被 TTS 抢占。
-    ESP_LOGI(TAG, "Wakeup tone submitted; start new recording session in parallel");
+    // AEC 开启时继续并行录音；否则等本轮 tone 自然结束并排空 DMA 再建会话，
+    // 让自定义长 tone 不占用录音和云端会话的超时预算。ADC/处理器仍常驻。
+    if (!wakeup_recording_gate_.Blocked()) {
+        ESP_LOGI(TAG, "Wakeup tone submitted; start new recording session in parallel");
+    }
     SetListeningMode(mode);
     if (iat_subscription_id_ == 0) {
         auto on_iat_text = [this](const AppEvent::Event& event) {
@@ -1234,6 +1246,8 @@ void Application::BeginWakeup(ListeningMode mode, const std::string& wake_word) 
 }
 
 bool Application::ResetVoiceSessionForWakeup(bool& interrupted_tts) {
+    wakeup_recording_gate_.Cancel();
+    audio_service_.SetMicrophoneSuppressed(false);
     const auto state = GetDeviceState();
     const auto generation = Xiaoling::voice_session_epoch.Advance();
     AppEvent::PublishScoped(AppEvent::Id::VoiceSessionStarted, nullptr, 0,
@@ -1279,6 +1293,8 @@ void Application::PauseWakeWordDetection() {
 }
 
 void Application::CancelWakeup() {
+    wakeup_recording_gate_.Cancel();
+    audio_service_.SetMicrophoneSuppressed(false);
     audio_player_.CancelWakeup();
     intent_manager_.Pop(PlaybackIntentId::kPromptTone);
     if (xiaoling_conn_) {
@@ -1293,16 +1309,31 @@ void Application::CancelWakeup() {
 
 void Application::SetListeningMode(ListeningMode mode) {
     listening_mode_ = mode;
+    if (wakeup_recording_gate_.Blocked()) return;
     SetDeviceState(kDeviceStateListening);
+}
+
+void Application::RefreshListeningAudioUpload() {
+    const auto state = GetDeviceState();
+    const bool enable = !wakeup_recording_gate_.Blocked() && xiaoling_conn_ &&
+                        xiaoling_conn_->CanUploadAudio() &&
+                        (state == kDeviceStateListening ||
+                         (state == kDeviceStateSpeaking && session_controller_.KeepListeningDuringTts()));
+    audio_service_.EnableAudioUpload(enable);
+#ifdef CONFIG_LSPLATFORM
+    if (enable) uplink_watchdog_.Start();
+#endif
 }
 
 void Application::HandleStateChangedEvent() {
     DeviceState new_state = DeviceStatus::GetState();
-    // 监听现在与唤醒提示音并行启动。在“连接中 -> 监听中”的状态切换期间保留
-    // 该提示音，其他无关状态变化仍会将其取消。
+    // AEC 并行监听，无 AEC 在 connecting 等 tone。在进入 listening 时保留
+    // 该提示音，其他无关状态变化仍会将其取消并撤销录音保护。
     if (new_state != kDeviceStateConnecting &&
         new_state != kDeviceStateListening &&
         audio_player_.IsWakeupPending()) {
+        wakeup_recording_gate_.Cancel();
+        audio_service_.SetMicrophoneSuppressed(false);
         audio_player_.CancelWakeup();
         intent_manager_.Pop(PlaybackIntentId::kPromptTone);
         if (xiaoling_conn_) {
@@ -1370,10 +1401,7 @@ void Application::HandleStateChangedEvent() {
             }
 
             // 采集、AFE/AEC 常驻；异步 started 确认后才开放新会话音频上报。
-            audio_service_.EnableAudioUpload(xiaoling_conn_ && xiaoling_conn_->CanUploadAudio());
-#ifdef CONFIG_LSPLATFORM
-            if (xiaoling_conn_ && xiaoling_conn_->CanUploadAudio()) uplink_watchdog_.Start();
-#endif  // 小聆平台
+            RefreshListeningAudioUpload();
 
             break;
         case kDeviceStateSpeaking:

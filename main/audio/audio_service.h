@@ -129,6 +129,9 @@ public:
     bool ReadAudioData(std::vector<int16_t>& data, int sample_rate, int samples);
     bool SupportsAec() const;
     void SetAecEnabled(bool enable);
+    bool IsAecEnabled() const { return aec_enabled_; }
+    // 常驻读取 ADC 并喂静音，丢弃原始输入及待上报缓存；不会自动重开上报。
+    void SetMicrophoneSuppressed(bool suppress);
     bool IsVoiceDetected() const { return voice_detected_.load(); }
 
     // ===== 3. 唤醒词 =====
@@ -328,6 +331,7 @@ private:
     // 上报会话代数用于剔除跨会话编码帧；开关不启停工作任务本身。
     uint32_t upload_generation_ = 0;
     bool audio_upload_enabled_ = false;
+    std::atomic<uint32_t> input_discard_state_{0};
     // codec 空闲关电计时；新读写会按需重新打开对应方向。
     esp_timer_handle_t audio_power_timer_ = nullptr;
     std::chrono::steady_clock::time_point last_input_time_;
