@@ -119,8 +119,12 @@ SpiLcdDisplay::SpiLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_h
 
     ESP_LOGI(TAG, "Initialize LVGL port");
     lvgl_port_cfg_t port_cfg = ESP_LVGL_PORT_INIT_CONFIG();
-    // 与音频实时任务使用相同优先级，避免音乐解码启动时压住 LVGL 动画。
+    // BOX3 的 AEC/NS/唤醒集中在双核上运行，LCD 不能与实时音频争同级 CPU。
+#if CONFIG_BOARD_TYPE_ESP_BOX_3
+    port_cfg.task_priority = 5;
+#else
     port_cfg.task_priority = 8;
+#endif
 #if CONFIG_SPIRAM
     // LVGL task stack does not participate
     // in ISR/DMA work. Keep that stack out of scarce internal SRAM on boards

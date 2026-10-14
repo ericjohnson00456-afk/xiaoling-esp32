@@ -1,7 +1,9 @@
 #include "afe_audio_processor.h"
 #include "speech_agc_guard.h"
+#include "audio/audio_yield_policy.h"
 #include <esp_log.h>
 #include <esp_heap_caps.h>
+#include <esp_timer.h>
 #include <freertos/idf_additions.h>
 #include <algorithm>
 #include <cmath>
@@ -190,14 +192,10 @@ void AfeAudioProcessor::ApplySpeechAgc(std::vector<int16_t>& data) {
     if (output_agc_ == nullptr || gain_vad_ == nullptr ||
         data.size() != kFrameSamples) return;
 
-    double input_power = 0.0;
-    for (const int16_t value : data) {
-        input_power += static_cast<double>(value) * value;
-    }
-    const double input_rms = std::sqrt(input_power / data.size());
+    const uint64_t input_power = SpeechAgcGuard::IntegerPower(data);
     const bool speech =
         vad_process_with_trigger(gain_vad_, data.data()) == VAD_SPEECH &&
-        input_rms >= 64.0;  // 极低电平即使误判为人声也不额外放大。
+        input_power >= 64ULL * 64 * data.size(); // 保留原 RMS>=64 门控。
 
     std::vector<int16_t> gained(data.size());
     for (size_t offset = 0; offset < data.size(); offset += kAgcFrameSamples) {
@@ -220,6 +218,7 @@ void AfeAudioProcessor::ApplySpeechAgc(std::vector<int16_t>& data) {
     }
     SpeechAgcGuard::Apply(data, gained, previous_mix, agc_mix_);
     if (++agc_frames_ % 300 == 0) {
+        const double input_rms = std::sqrt(static_cast<double>(input_power) / data.size());
         const double output_rms = std::sqrt(SpeechAgcGuard::Power(data) / data.size());
         const double input_db = input_rms > 0.0
             ? 20.0 * std::log10(input_rms / 32768.0) : -120.0;
@@ -235,6 +234,9 @@ void AfeAudioProcessor::ApplySpeechAgc(std::vector<int16_t>& data) {
 
 void AfeAudioProcessor::AudioProcessorTask() {
     size_t processed_frames = 0;
+    int64_t stats_started_us = esp_timer_get_time();
+    uint32_t output_frames = 0;
+    int64_t processing_us = 0, max_processing_us = 0;
     auto fetch_size = afe_iface_->get_fetch_chunksize(afe_data_);
     auto feed_size = afe_iface_->get_feed_chunksize(afe_data_);
     ESP_LOGI(TAG, "Audio communication task started, feed size: %d fetch size: %d",
@@ -253,6 +255,10 @@ void AfeAudioProcessor::AudioProcessorTask() {
             }
             continue;
         }
+        // 在 fetch 返回后检查，避免阻塞等待跨过共同让步窗口。
+        if (const auto ticks = AudioYieldDelayTicks(xTaskGetTickCount(), pdMS_TO_TICKS(100)); ticks) {
+            vTaskDelay(ticks);
+        }
         if (++processed_frames % 300 == 0) {
             ESP_LOGI(TAG, "AFE/NS 最小剩余栈: %u bytes",
                      static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
@@ -270,6 +276,7 @@ void AfeAudioProcessor::AudioProcessorTask() {
         }
 
         if (output_callback_) {
+            const int64_t processing_started_us = esp_timer_get_time();
             size_t samples = res->data_size / sizeof(int16_t);
             
             // Add data to buffer
@@ -280,14 +287,29 @@ void AfeAudioProcessor::AudioProcessorTask() {
                 if (output_buffer_.size() == frame_samples_) {
                     // If buffer size equals frame size, move the entire buffer
                     EmitOutput(std::move(output_buffer_));
+                    ++output_frames;
                     output_buffer_.clear();
                     output_buffer_.reserve(frame_samples_);
                 } else {
                     // If buffer size exceeds frame size, copy one frame and remove it
                     EmitOutput(std::vector<int16_t>(output_buffer_.begin(), output_buffer_.begin() + frame_samples_));
+                    ++output_frames;
                     output_buffer_.erase(output_buffer_.begin(), output_buffer_.begin() + frame_samples_);
                 }
             }
+            const int64_t elapsed_us = esp_timer_get_time() - processing_started_us;
+            processing_us += elapsed_us;
+            max_processing_us = std::max(max_processing_us, elapsed_us);
+        }
+        const int64_t now_us = esp_timer_get_time();
+        if (now_us - stats_started_us >= 5 * 1000 * 1000) {
+            ESP_LOGI(TAG, "AFE 后处理: output=%.1ffps, avg=%.2fms, max=%.2fms",
+                     output_frames * 1000000.0 / (now_us - stats_started_us),
+                     output_frames ? processing_us / (output_frames * 1000.0) : 0.0,
+                     max_processing_us / 1000.0);
+            stats_started_us = now_us;
+            output_frames = 0;
+            processing_us = max_processing_us = 0;
         }
     }
 }

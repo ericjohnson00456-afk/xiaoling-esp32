@@ -97,6 +97,15 @@ bool AudioPlayer::Initialize(AudioService* audio_service, ControlScheduler sched
         backend_event_subscription_id_ = 0;
         return false;
     }
+    auto tone_backend = std::make_unique<EspSimplePlayerBackend>();
+    if (!tone_backend->Initialize(audio_service, [this](const PlaybackEvent& event) {
+            PublishBackendEvent(event);
+        })) {
+        ESP_LOGE(TAG, "独立提示音后端初始化失败");
+        AppEvent::Unsubscribe(backend_event_subscription_id_);
+        backend_event_subscription_id_ = 0;
+        return false;
+    }
     audio_service_ = audio_service;
     AudioServiceOutputCallbacks output_callbacks;
     output_callbacks.on_output_started = [this](const AudioOutputEvent& event) {
@@ -107,7 +116,8 @@ bool AudioPlayer::Initialize(AudioService* audio_service, ControlScheduler sched
     };
     audio_service_->SetOutputCallbacks(output_callbacks);
     backend_ = std::move(backend);
-    tone_channel_ = std::make_unique<TonePlayer>(*backend_, [this]() {
+    tone_backend_ = std::move(tone_backend);
+    tone_channel_ = std::make_unique<TonePlayer>(*tone_backend_, [this]() {
         return next_session_id_.fetch_add(1);
     });
     tts_channel_ = std::make_unique<TtsPlayer>(*backend_, [this]() {
@@ -137,6 +147,7 @@ uint32_t AudioPlayer::PlayTtsUrl(const std::string& url) {
         ESP_LOGE(TAG, "播放器尚未初始化");
         return 0;
     }
+    if (!wakeup_in_progress_ && tone_backend_) tone_backend_->Stop(PlaybackEndReason::kPreempted);
     const uint32_t session_id = tts_channel_->PlayUrl(url);
     RememberSession(session_id, PlaybackChannel::kTts);
     return session_id;
@@ -259,7 +270,7 @@ uint32_t AudioPlayer::PlayTone(uint16_t tone_id) {
         ESP_LOGW(TAG, "播放器不可用或唤醒提示音正在播放");
         return 0;
     }
-    if (!PauseMusic()) {
+    if (!PauseMusic() || !StopNonMusic(PlaybackEndReason::kPreempted)) {
         return 0;
     }
     const uint32_t session_id = tone_channel_->PlayTone(tone_id);
@@ -339,6 +350,7 @@ bool AudioPlayer::IsWakeupPending() const {
 }
 
 bool AudioPlayer::Pause() {
+    if (tone_backend_ && tone_backend_->IsPlaying()) return tone_backend_->Pause();
     if (backend_ != nullptr && backend_->IsPlaying()) {
         return backend_->Pause();
     }
@@ -349,6 +361,7 @@ bool AudioPlayer::Resume() {
     if (wakeup_in_progress_) {
         return false;
     }
+    if (tone_backend_ && tone_backend_->IsPlaying()) return tone_backend_->Resume();
     if (backend_ != nullptr && backend_->IsPlaying()) {
         return backend_->Resume();
     }
@@ -386,11 +399,14 @@ bool AudioPlayer::StopLocalFilePlayback(PlaybackEndReason reason) {
 }
 
 bool AudioPlayer::StopNonMusic(PlaybackEndReason reason) {
-    return backend_ == nullptr || backend_->Stop(reason);
+    const bool stream_stopped = backend_ == nullptr || backend_->Stop(reason);
+    const bool tone_stopped = tone_backend_ == nullptr || tone_backend_->Stop(reason);
+    return stream_stopped && tone_stopped;
 }
 
 bool AudioPlayer::IsPlaying() const {
     return (backend_ != nullptr && backend_->IsPlaying()) ||
+           (tone_backend_ != nullptr && tone_backend_->IsPlaying()) ||
            (music_channel_ != nullptr && music_channel_->IsAudible());
 }
 

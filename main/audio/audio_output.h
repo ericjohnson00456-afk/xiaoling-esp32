@@ -15,6 +15,10 @@ struct AudioPlaybackConfig {
     uint32_t session_id = 0;
     size_t initial_prebuffer_bytes = 0;
     size_t recovery_prebuffer_bytes = 0;
+    // 有首块 PCM 后最多等待多久；0 表示沿用纯字节门槛（本地音乐）。
+    uint32_t prebuffer_max_wait_ms = 0;
+    // 输出队列短暂为空时先等待后续帧，不立即进入恢复预缓冲；0 保留旧策略。
+    uint32_t underrun_grace_ms = 0;
     // 为 0 时仅使用通用任务数上限；非 0 时同时按当前排队 PCM 字节数反压。
     size_t max_buffered_pcm_bytes = 0;
     // 达到上限后的生产者需等待缓存回落到该水位，避免在边界反复唤醒。
@@ -23,7 +27,13 @@ struct AudioPlaybackConfig {
 
 // 16 kHz、单声道、16-bit PCM 每秒约 32 KiB。
 constexpr size_t kAudioPlayerInitialPrebufferBytes = 16 * 1024;
-constexpr size_t kAudioTtsInitialPrebufferBytes = 64 * 1024;
+constexpr size_t kAudioTtsInitialPrebufferBytes = 4 * 1024;
+constexpr size_t kAudioTtsRecoveryPrebufferBytes = 8 * 1024;
+constexpr uint32_t kAudioTtsPrebufferMaxWaitMs = 200;
+constexpr uint32_t kAudioTtsUnderrunGraceMs = 60;
+// TTS 最多解码约 1 秒，回落到半秒再继续生产，避免高优先级解码超前数秒。
+constexpr size_t kAudioTtsMaxBufferedPcmBytes = 32 * 1024;
+constexpr size_t kAudioTtsProducerResumeBytes = 16 * 1024;
 // 本地提示音首块立即输出；欠载恢复也只等约一帧，不套用网络流缓冲。
 constexpr size_t kAudioPromptInitialPrebufferBytes = 0;
 constexpr size_t kAudioPromptRecoveryPrebufferBytes = 1152;
@@ -38,13 +48,14 @@ public:
 
     virtual bool PushPcm(const uint8_t* data, size_t size, int sample_rate,
                          const AudioOutputEvent& output, bool wait) = 0;
-    virtual void BeginPlayback(const AudioPlaybackConfig& config) = 0;
+    virtual bool BeginPlayback(const AudioPlaybackConfig& config) = 0;
     virtual void SuspendPlayback() = 0;
     virtual void ResumePlayback(const AudioOutputEvent& output) = 0;
     virtual void MarkPlaybackFinished(const AudioOutputEvent& output) = 0;
-    virtual void ClearActivePlaybackQueue() = 0;
+    // 0 表示无条件撤销；各后端停止/完成时必须传自己的会话 ID。
+    virtual void ClearActivePlaybackQueue(uint32_t expected_session = 0) = 0;
     virtual void ClearPlaybackQueue() = 0;
-    virtual void WaitForPlaybackComplete() = 0;
+    virtual void WaitForPlaybackComplete(uint32_t expected_session = 0) = 0;
     virtual uint32_t GetOutputLastActivityMs() const = 0;
 };
 

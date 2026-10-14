@@ -1,5 +1,6 @@
 #include "esp_simple_player_backend.h"
 #include "playback_latency_policy.h"
+#include "audio/playback_stream_policy.h"
 
 #include "resource/resource.h"
 #include "xiaoling/conn/network_diagnostics.h"
@@ -17,6 +18,7 @@
 #include <freertos/idf_additions.h>
 
 #include <cstring>
+#include <algorithm>
 #include <cerrno>
 #include <array>
 #include <limits>
@@ -37,8 +39,8 @@ namespace {
 // 实时 TTS 响应可能只包含下一个 MP3 帧的一部分。云端按片段生成语音，
 // 每次返回的数据可能不足一个完整 MP3 帧，因此要尽快把已有字节交给解码器，
 // 不要让 esp_http_client_read() 等待更大的数据块。
-// 当前 48 kbps/16 kHz 流的一个 MP3 帧约为 216 字节。每次读取 1 KiB，
-// 可以及时消耗服务器突发数据并保持较小的 lwIP 接收窗口流动；下面的
+// 首帧先读 256 字节；解码开始后按 1 KiB 突发拉流，减少持续播放的碎片开销。
+// 保留短正文超时，允许不足 1 KiB 时返回部分内容；下面的
 // 50 ms 正文超时也能在数据不足时及时返回部分内容。
 constexpr size_t kStreamingHttpReadSize = 1024;
 constexpr size_t kStreamingHttpBufferSize = 32 * 1024;
@@ -165,7 +167,8 @@ int EspSimplePlayerBackend::ConfigureInputIo(esp_asp_handle_t handle, void* ctx)
         auto* io = static_cast<esp_gmf_io_t*>(input);
         // 网络拉流任务需要先于解码和输出任务准备数据，同时避免 TTS 网络工作
         // 占用运行 AFE 的 0 号核心。
-        io->io_cfg.thread.prio = kPlayerInputPriority;
+        const auto input_priority = engine->tts_decode_.load() ? 7 : kPlayerInputPriority;
+        io->io_cfg.thread.prio = input_priority;
         io->io_cfg.thread.core = kPlayerCommandCore;
         io->io_cfg.thread.stack_in_ext = true;
         io->io_cfg.buffer_cfg.io_size = kStreamingHttpReadSize;
@@ -189,7 +192,7 @@ int EspSimplePlayerBackend::ConfigureInputIo(esp_asp_handle_t handle, void* ctx)
                  "priority=%u, core=%d",
                  static_cast<unsigned>(kStreamingHttpReadSize),
                  static_cast<unsigned>(kStreamingHttpBufferSize),
-                 static_cast<unsigned>(kPlayerInputPriority),
+                 static_cast<unsigned>(input_priority),
                  kPlayerCommandCore);
         // 保留组件原有的 acquire_read 实现。上面的回调只观察请求生命周期，
         // 这里保存的后端上下文与播放器句柄具有相同的生命周期。
@@ -376,7 +379,7 @@ bool EspSimplePlayerBackend::Initialize(AudioOutput* audio_output, EventCallback
 }
 
 bool EspSimplePlayerBackend::Play(const PlaybackRequest& request) {
-    if (!initialized_ || handle_ == nullptr ||
+    if (!initialized_ || handle_ == nullptr || request.session_id == 0 ||
         (request.source_type != PlaybackSourceType::kUrl &&
          request.source_type != PlaybackSourceType::kRomfs &&
          request.source_type != PlaybackSourceType::kFile)) {
@@ -412,7 +415,12 @@ bool EspSimplePlayerBackend::DoPlay(const PlaybackRequest& request) {
     const bool local_file = request.source_type == PlaybackSourceType::kFile;
     const bool local_prompt = IsLowLatencyPrompt(request);
     low_latency_prompt_.store(local_prompt);
-    audio_output_->BeginPlayback(AudioPlaybackConfig{
+    const bool tts = request.channel == PlaybackChannel::kTts;
+    tts_decode_.store(tts);
+    if (const auto task = decode_task_handle_.load(); task != nullptr) {
+        vTaskPrioritySet(task, PlaybackDecodePriority(local_prompt, tts));
+    }
+    if (!audio_output_->BeginPlayback(AudioPlaybackConfig{
         .session_id = request.session_id,
         .initial_prebuffer_bytes = local_file
                                        ? kAudioLocalFilePrebufferBytes
@@ -423,14 +431,28 @@ bool EspSimplePlayerBackend::DoPlay(const PlaybackRequest& request) {
         .recovery_prebuffer_bytes = local_file
                                         ? kAudioLocalFilePrebufferBytes
                                         : (local_prompt ? kAudioPromptRecoveryPrebufferBytes
-                                                        : kAudioPlayerInitialPrebufferBytes),
+                                           : tts ? kAudioTtsRecoveryPrebufferBytes
+                                                 : kAudioPlayerInitialPrebufferBytes),
+        .prebuffer_max_wait_ms = tts ? kAudioTtsPrebufferMaxWaitMs : 0,
+        .underrun_grace_ms = tts ? kAudioTtsUnderrunGraceMs : 0,
         .max_buffered_pcm_bytes = local_file
                                       ? kAudioLocalFileMaxBufferedBytes
-                                      : 0,
+                                      : (tts ? kAudioTtsMaxBufferedPcmBytes : 0),
         .producer_resume_pcm_bytes = local_file
                                          ? kAudioLocalFileProducerResumeBytes
-                                         : 0,
-    });
+                                         : (tts ? kAudioTtsProducerResumeBytes : 0),
+    })) {
+        command_pending_playback_ = false;
+        Emit(PlaybackEvent{
+            .session_id = request.session_id,
+            .channel = request.channel,
+            .state = PlaybackState::kStopped,
+            .reason = PlaybackEndReason::kPreempted,
+        });
+        ESP_LOGI(TAG, "忽略迟到的旧播放启动: session=%lu",
+                 static_cast<unsigned long>(request.session_id));
+        return false;
+    }
     playback_started_ms_ = esp_log_timestamp();
     if (request.source_type == PlaybackSourceType::kFile) {
         ESP_LOGI(TAG, "开始文件播放: session=%lu, channel=%d, path=%s",
@@ -493,7 +515,7 @@ bool EspSimplePlayerBackend::DoPlay(const PlaybackRequest& request) {
         tts_timeout_stop_pending_ = false;
         tts_stop_requested_ = false;
     }
-    audio_output_->ClearActivePlaybackQueue();
+    audio_output_->ClearActivePlaybackQueue(request.session_id);
     command_pending_playback_ = false;
     Emit(PlaybackEvent{
         .session_id = request.session_id,
@@ -594,9 +616,12 @@ bool EspSimplePlayerBackend::Stop(PlaybackEndReason reason) {
     // Stop 同样异步投递，状态终态由 GMF 回调统一确认。
     command_pending_playback_ = false;
     bool clear_output = false;
+    uint32_t stopped_session = 0;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         clear_output = playing_ || draining_;
+        stopped_session = current_request_.session_id;
+        if (clear_output) stop_reason_ = reason;
         if (playing_ && current_request_.channel == PlaybackChannel::kTts) {
             // 流式 TTS 可能正在等云端开始合成。先让 50 ms 正文读取循环退出，
             // 控制任务才能及时完成 stop，避免后续提示音被堵在队列中。
@@ -605,7 +630,7 @@ bool EspSimplePlayerBackend::Stop(PlaybackEndReason reason) {
     }
     // 停止命令可能排在 HTTP/GMF 操作之后。先作废旧 PCM 会话，立即静音
     // 并唤醒被队列反压的解码任务；迟到 PCM 不能重新填入已取消的队列。
-    if (clear_output && audio_output_ != nullptr) audio_output_->ClearActivePlaybackQueue();
+    if (clear_output && audio_output_ != nullptr) audio_output_->ClearActivePlaybackQueue(stopped_session);
     return Enqueue(Command{
         .type = CommandType::kStop,
         .reason = reason,
@@ -616,8 +641,10 @@ bool EspSimplePlayerBackend::DoStop(PlaybackEndReason reason) {
     // 只有控制任务能调用底层 stop，避免停止和播放命令交叉进入 GMF。
     DisarmTtsPcmTimeout();
     bool drain_only = false;
+    uint32_t stopped_session = 0;
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        stopped_session = current_request_.session_id;
         if (!playing_) {
             if (draining_) {
                 draining_ = false;
@@ -633,7 +660,7 @@ bool EspSimplePlayerBackend::DoStop(PlaybackEndReason reason) {
         }
     }
     if (drain_only) {
-        audio_output_->ClearActivePlaybackQueue();
+        audio_output_->ClearActivePlaybackQueue(stopped_session);
         return true;
     }
 
@@ -668,6 +695,12 @@ bool EspSimplePlayerBackend::Enqueue(Command command) {
     }
     {
         std::lock_guard<std::mutex> lock(command_mutex_);
+        if (command.type == CommandType::kStop) {
+            // Stop 也取消排队但尚未开始的播放，不让旧 TTS 在新 tone 之后启动。
+            command_queue_.erase(std::remove_if(command_queue_.begin(), command_queue_.end(),
+                [](const Command& queued) { return queued.type == CommandType::kPlay; }),
+                command_queue_.end());
+        }
         // 多个打断来源可能同时请求停止。同一时刻只保留一个待处理的停止命令，
         // 避免反复进入 GMF。
         if (command.type == CommandType::kStop && !command_queue_.empty() &&
@@ -995,10 +1028,12 @@ int EspSimplePlayerBackend::HandleHttpIoEvent(http_stream_event_msg_t* event) {
         int read_len = 0;
         int read_errno = 0;
         uint32_t eagain_retries = 0;
+        const auto requested_bytes = StreamingReadBytes(
+            static_cast<size_t>(event->buffer_len), output_chunks_.load() != 0);
         do {
             errno = 0;
             read_len = esp_http_client_read(
-                client, static_cast<char*>(event->buffer), event->buffer_len);
+                client, static_cast<char*>(event->buffer), static_cast<int>(requested_bytes));
             read_errno = errno;
             if (read_len != -ESP_ERR_HTTP_EAGAIN) {
                 break;
@@ -1036,7 +1071,7 @@ int EspSimplePlayerBackend::HandleHttpIoEvent(http_stream_event_msg_t* event) {
                      "read=%d, elapsed=%lums, retries=%lu, errno=%d",
                      static_cast<unsigned long>(session_id),
                      static_cast<unsigned long>(read_sequence),
-                     event->buffer_len, read_len, elapsed_ms,
+                     static_cast<int>(requested_bytes), read_len, elapsed_ms,
                      static_cast<unsigned long>(eagain_retries),
                      read_errno);
         }
@@ -1116,7 +1151,7 @@ esp_gmf_err_io_t EspSimplePlayerBackend::BudgetAcquire(
     // 同一流水线复用时按当前音源恢复优先级，不能让后续 TTS 沿用提示音提升。
     engine->decode_task_handle_.store(xTaskGetCurrentTaskHandle());
     const auto priority = PlaybackDecodePriority(engine->low_latency_prompt_.load() ||
-                                                 engine->cancelling_decode_.load());
+                                                 engine->cancelling_decode_.load(), engine->tts_decode_.load());
     if (uxTaskPriorityGet(nullptr) != priority) {
         vTaskPrioritySet(nullptr, priority);
         ESP_LOGI(TAG, "解码调度切换: priority=%u, prompt=%d", priority,
@@ -1168,6 +1203,7 @@ int EspSimplePlayerBackend::HandleEvent(esp_asp_event_pkt_t* event) {
     PlaybackEvent playback_event;
     bool should_emit = true;
     bool terminal = false;
+    bool expected_cancel = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         playback_event.session_id = current_request_.session_id;
@@ -1205,10 +1241,11 @@ int EspSimplePlayerBackend::HandleEvent(esp_asp_event_pkt_t* event) {
                 playing_ = false;
                 draining_ = false;
                 command_pending_playback_ = false;
-                playback_event.state = PlaybackState::kFailed;
-                playback_event.reason = IsTtsPcmTimeout(stop_reason_)
-                                            ? stop_reason_
-                                            : PlaybackEndReason::kFailed;
+                expected_cancel = stop_reason_ == PlaybackEndReason::kPreempted ||
+                                  stop_reason_ == PlaybackEndReason::kCancelled;
+                playback_event.state = expected_cancel ? PlaybackState::kStopped : PlaybackState::kFailed;
+                playback_event.reason = expected_cancel || IsTtsPcmTimeout(stop_reason_)
+                                            ? stop_reason_ : PlaybackEndReason::kFailed;
                 terminal = true;
                 break;
             default:
@@ -1231,7 +1268,7 @@ int EspSimplePlayerBackend::HandleEvent(esp_asp_event_pkt_t* event) {
     if (terminal) {
         DisarmTtsPcmTimeout();
     }
-    if (state == ESP_ASP_STATE_ERROR) {
+    if (state == ESP_ASP_STATE_ERROR && !expected_cancel) {
         NetworkDiagnostics::LogSnapshot("player_stream_error");
     }
     ESP_LOGI(TAG, "GMF 状态事件: state=%s, elapsed=%lums, pcm_chunks=%lu",
@@ -1243,11 +1280,11 @@ int EspSimplePlayerBackend::HandleEvent(esp_asp_event_pkt_t* event) {
             .session_id = playback_event.session_id,
         });
         // GMF 完成只表示解码结束，还要等待 AudioOutputTask 写完最后一批 PCM。
-        audio_output_->WaitForPlaybackComplete();
+        audio_output_->WaitForPlaybackComplete(playback_event.session_id);
         std::lock_guard<std::mutex> lock(mutex_);
         draining_ = false;
     } else if (state == ESP_ASP_STATE_STOPPED || state == ESP_ASP_STATE_ERROR) {
-        audio_output_->ClearActivePlaybackQueue();
+        audio_output_->ClearActivePlaybackQueue(playback_event.session_id);
     }
 
     ESP_LOGI(TAG, "播放状态: session=%lu, state=%s",

@@ -90,6 +90,8 @@ private:
     AudioService* audio_service_ = nullptr;
     ControlScheduler control_scheduler_;
     std::unique_ptr<PlaybackBackend> backend_;
+    // 本地 tone 独立控制/解码，不排在 HTTP TTS 关闭、重连之后。
+    std::unique_ptr<PlaybackBackend> tone_backend_;
     std::unique_ptr<PlaybackBackend> music_backend_;
     std::unique_ptr<TonePlayer> tone_channel_;
     std::unique_ptr<TtsPlayer> tts_channel_;

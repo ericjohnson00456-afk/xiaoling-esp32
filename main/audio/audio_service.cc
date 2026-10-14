@@ -1,4 +1,7 @@
 #include "audio_service.h"
+#include "playback_session_guard.h"
+#include "playback_stream_policy.h"
+#include "audio_yield_policy.h"
 #include "resource/resource.h"
 #include "xiaoling/conn/xiaoling_config.h"
 #include <esp_log.h>
@@ -684,6 +687,28 @@ void AudioService::AudioOutputTask() {
     };
     while (true) {
         std::unique_lock<std::mutex> lock(audio_queue_mutex_);
+        if (audio_playback_queue_.empty() && player_stream_active_.load() &&
+            !player_playback_finished_ && player_output_chunks_.load() != 0 &&
+            player_underrun_grace_ms_ != 0) {
+            const auto session = player_session_id_;
+            const auto grace_ms = player_underrun_grace_ms_;
+            const bool supplied = audio_queue_cv_.wait_for(lock,
+                std::chrono::milliseconds(grace_ms), [this, session]() {
+                    return service_stopped_ || !audio_playback_queue_.empty() ||
+                           player_session_id_ != session || player_playback_finished_ ||
+                           !player_stream_active_.load();
+                });
+            if (!supplied && ShouldRebufferPlayback(grace_ms, grace_ms,
+                    audio_playback_queue_.empty(), player_session_id_ == session,
+                    player_playback_finished_, player_output_chunks_.load() != 0)) {
+                player_prebuffering_ = true;
+                player_prebuffer_wait_logged_ = false;
+                ++player_rebuffer_count_;
+                ESP_LOGW(TAG, "播放器实际供给断流: session=%lu, waited=%lums, recovery=%lu",
+                         static_cast<unsigned long>(session), static_cast<unsigned long>(grace_ms),
+                         static_cast<unsigned long>(player_rebuffer_count_));
+            }
+        }
         audio_queue_cv_.wait(lock, [this, &testing_previous_volume]() {
             return !audio_playback_queue_.empty() || service_stopped_ ||
                    testing_previous_volume >= 0;
@@ -708,13 +733,15 @@ void AudioService::AudioOutputTask() {
             continue;
         }
 
-        /* TTS starts with two seconds of actual PCM. Other player sources use
-           about 0.5 seconds both initially and after an underrun, which absorbs
-           SD/LCD shared-SPI stalls. A completed stream always releases a tail
-           below the target. */
+        // TTS 用短缓冲和等待期限；音乐保留字节门槛。保存会话 ID，等待期间
+        // 若 tone 接管输出，必须重新读取它的配置，不能继续等旧 TTS 水位。
         const bool is_player =
             audio_playback_queue_.front()->type == kAudioTaskTypePlayerToPlaybackQueue;
         const bool initial_prebuffer = player_output_chunks_.load() == 0;
+        const uint32_t buffering_session = player_session_id_;
+        const uint32_t max_wait_ms = player_prebuffer_max_wait_ms_;
+        const auto buffer_deadline = std::chrono::steady_clock::now() +
+                                     std::chrono::milliseconds(max_wait_ms);
         const size_t prebuffer_target = initial_prebuffer
                                             ? player_initial_prebuffer_bytes_
                                             : player_recovery_prebuffer_bytes_;
@@ -724,6 +751,7 @@ void AudioService::AudioOutputTask() {
                player_prebuffering_ &&
                prebuffered_pcm_bytes < prebuffer_target &&
                !player_playback_finished_ &&
+               player_session_id_ == buffering_session &&
                is_player) {
             if (!player_prebuffer_wait_logged_) {
                 player_prebuffer_wait_logged_ = true;
@@ -733,7 +761,18 @@ void AudioService::AudioOutputTask() {
                          static_cast<unsigned>(prebuffer_target),
                          static_cast<unsigned>(audio_playback_queue_.size()));
             }
-            audio_queue_cv_.wait(lock);
+            if (max_wait_ms != 0) {
+                if (audio_queue_cv_.wait_until(lock, buffer_deadline) == std::cv_status::timeout) {
+                    ESP_LOGI(TAG, "播放器缓冲到时先播: session=%lu, pcm=%u/%u, wait=%lums",
+                             static_cast<unsigned long>(buffering_session),
+                             static_cast<unsigned>(queued_player_pcm_bytes_),
+                             static_cast<unsigned>(prebuffer_target),
+                             static_cast<unsigned long>(max_wait_ms));
+                    break;
+                }
+            } else {
+                audio_queue_cv_.wait(lock);
+            }
             prebuffered_pcm_bytes = audio_playback_queue_.empty()
                                          ? 0
                                          : queued_player_pcm_bytes_;
@@ -744,6 +783,7 @@ void AudioService::AudioOutputTask() {
         if (audio_playback_queue_.empty()) {
             continue;
         }
+        if (is_player && player_session_id_ != buffering_session) continue;
         if (is_player && player_prebuffering_) {
             player_prebuffering_ = false;
             player_prebuffer_wait_logged_ = false;
@@ -767,7 +807,8 @@ void AudioService::AudioOutputTask() {
                                            : 0;
         }
         if (task->type == kAudioTaskTypePlayerToPlaybackQueue &&
-            audio_playback_queue_.empty() && !player_playback_finished_) {
+            audio_playback_queue_.empty() && !player_playback_finished_ &&
+            player_underrun_grace_ms_ == 0) {
             player_prebuffering_ = true;
             player_prebuffer_wait_logged_ = false;
             ++player_rebuffer_count_;
@@ -775,18 +816,13 @@ void AudioService::AudioOutputTask() {
                      static_cast<unsigned long>(player_rebuffer_count_));
         }
         audio_output_busy_ = true;
-        audio_queue_cv_.notify_all();
-        lock.unlock();
-
         bool player_output_started = false;
         if (task->type == kAudioTaskTypePlayerToPlaybackQueue) {
-            const uint32_t now_ms = esp_log_timestamp();
-            /* Mark activity before the potentially blocking codec write. A
-             * timeout callback can otherwise race with the first block after
-             * a long prebuffer and mistake active output for silence. */
-            player_output_last_activity_ms_.store(now_ms);
+            player_output_last_activity_ms_.store(esp_log_timestamp());
             player_output_started = player_output_chunks_.fetch_add(1) == 0;
         }
+        audio_queue_cv_.notify_all();
+        lock.unlock();
 
         if (!codec_->output_enabled()) {
             esp_timer_stop(audio_power_timer_);
@@ -800,35 +836,34 @@ void AudioService::AudioOutputTask() {
                      testing_previous_volume);
         }
         codec_->OutputData(task->PlaybackData(), task->PlaybackSamples());
-        if (task->type == kAudioTaskTypePlayerToPlaybackQueue) {
+        lock.lock();
+        const bool current_player_output = task->type == kAudioTaskTypePlayerToPlaybackQueue &&
+                                          task->player_output.session_id == player_session_id_;
+        const int sample_rate = codec_->output_sample_rate();
+        const uint32_t duration_ms = sample_rate > 0
+            ? static_cast<uint32_t>((static_cast<uint64_t>(task->PlaybackSamples()) * 1000) /
+                                    static_cast<uint32_t>(sample_rate)) : 0;
+        const uint32_t audio_clock_ms = current_player_output && duration_ms > 0
+            ? player_audio_clock_ms_.fetch_add(duration_ms) + duration_ms : 0;
+        if (current_player_output) player_output_last_activity_ms_.store(esp_log_timestamp());
+        audio_output_busy_ = false;
+        audio_queue_cv_.notify_all();
+        lock.unlock();
+        // codec 写入期间可能已切换会话，旧进度不能累加到新播放时钟。
+        if (current_player_output) {
             if (player_output_started && output_callbacks_.on_output_started) {
-                ESP_LOGI(TAG, "播放器首个 PCM 已交给 codec: samples=%u",
+                ESP_LOGI(TAG, "播放器首个 PCM 已交给 codec: session=%lu, samples=%u",
+                         static_cast<unsigned long>(task->player_output.session_id),
                          static_cast<unsigned>(task->PlaybackSamples()));
                 output_callbacks_.on_output_started(task->player_output);
             }
-            const int sample_rate = codec_->output_sample_rate();
-            const uint32_t duration_ms = sample_rate > 0
-                ? static_cast<uint32_t>((static_cast<uint64_t>(task->PlaybackSamples()) * 1000) /
-                                        static_cast<uint32_t>(sample_rate))
-                : 0;
             if (duration_ms > 0) {
-                const uint32_t audio_clock_ms =
-                    player_audio_clock_ms_.fetch_add(duration_ms) + duration_ms;
                 if (output_callbacks_.on_output_progress) {
                     auto output = task->player_output;
                     output.audio_clock_ms = audio_clock_ms;
                     output_callbacks_.on_output_progress(output);
                 }
             }
-        }
-
-        lock.lock();
-        audio_output_busy_ = false;
-        audio_queue_cv_.notify_all();
-        lock.unlock();
-
-        if (task->type == kAudioTaskTypePlayerToPlaybackQueue) {
-            player_output_last_activity_ms_.store(esp_log_timestamp());
         }
 
         /* Update the last output time */
@@ -905,6 +940,9 @@ void AudioService::OpusCodecTask() {
             lock.unlock();
 
             // 编码器由此任务独占复位，防止停止/重开上报时携带旧会话状态。
+            if (const auto ticks = AudioYieldDelayTicks(xTaskGetTickCount(), pdMS_TO_TICKS(100)); ticks) {
+                vTaskDelay(ticks);
+            }
             if (opus_encoder_ != nullptr &&
                 (!encoder_has_generation || encoder_generation != task->upload_generation)) {
                 opus_encoder_->ResetState();
@@ -1146,12 +1184,14 @@ bool AudioService::PushPcm(const uint8_t* data, size_t size, int sample_rate,
 }
 
 // 新播放器会话重置下行解码/缓冲状态；暂停保存的音乐 PCM 不能被新 TTS 会话清掉。
-void AudioService::BeginPlayback(const AudioPlaybackConfig& config) {
-    ResetPlayerPlaybackState(false);
+bool AudioService::BeginPlayback(const AudioPlaybackConfig& config) {
+    if (config.session_id == 0 || !ResetPlayerPlaybackState(false, config.session_id)) return false;
     {
         std::lock_guard<std::mutex> lock(audio_queue_mutex_);
-        player_session_id_ = config.session_id;
+        if (player_session_id_ != config.session_id) return false;
         player_initial_prebuffer_bytes_ = config.initial_prebuffer_bytes;
+        player_prebuffer_max_wait_ms_ = config.prebuffer_max_wait_ms;
+        player_underrun_grace_ms_ = config.underrun_grace_ms;
         player_recovery_prebuffer_bytes_ = config.recovery_prebuffer_bytes != 0
                                                ? config.recovery_prebuffer_bytes
                                                : kAudioPlayerInitialPrebufferBytes;
@@ -1162,14 +1202,16 @@ void AudioService::BeginPlayback(const AudioPlaybackConfig& config) {
                            config.max_buffered_pcm_bytes)
                 : config.max_buffered_pcm_bytes;
         ESP_LOGI(TAG,
-                 "播放器 PCM 水位: session=%lu, start=%u, recovery=%u, resume=%u, max=%u",
+                 "播放器 PCM 水位: session=%lu, start=%u, recovery=%u, resume=%u, max=%u, wait=%lums",
                  static_cast<unsigned long>(config.session_id),
                  static_cast<unsigned>(player_initial_prebuffer_bytes_),
                  static_cast<unsigned>(player_recovery_prebuffer_bytes_),
                  static_cast<unsigned>(player_producer_resume_pcm_bytes_),
-                 static_cast<unsigned>(player_max_buffered_pcm_bytes_));
+                 static_cast<unsigned>(player_max_buffered_pcm_bytes_),
+                 static_cast<unsigned long>(player_prebuffer_max_wait_ms_));
+        player_stream_active_.store(true);
     }
-    player_stream_active_.store(true);
+    return true;
 }
 
 void AudioService::SuspendPlayback() {
@@ -1177,6 +1219,8 @@ void AudioService::SuspendPlayback() {
     suspended_player_playback_queue_.clear();
     suspended_player_pcm_bytes_ = 0;
     suspended_player_recovery_prebuffer_bytes_ = player_recovery_prebuffer_bytes_;
+    suspended_player_prebuffer_max_wait_ms_ = player_prebuffer_max_wait_ms_;
+    suspended_player_underrun_grace_ms_ = player_underrun_grace_ms_;
     suspended_player_max_buffered_pcm_bytes_ = player_max_buffered_pcm_bytes_;
     suspended_player_producer_resume_pcm_bytes_ =
         player_producer_resume_pcm_bytes_;
@@ -1202,6 +1246,8 @@ void AudioService::ResumePlayback(const AudioOutputEvent& output) {
     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
     player_session_id_ = output.session_id;
     player_recovery_prebuffer_bytes_ = suspended_player_recovery_prebuffer_bytes_;
+    player_prebuffer_max_wait_ms_ = suspended_player_prebuffer_max_wait_ms_;
+    player_underrun_grace_ms_ = suspended_player_underrun_grace_ms_;
     player_max_buffered_pcm_bytes_ = suspended_player_max_buffered_pcm_bytes_;
     player_producer_resume_pcm_bytes_ =
         suspended_player_producer_resume_pcm_bytes_;
@@ -1278,8 +1324,10 @@ void AudioService::MarkPlaybackFinished(const AudioOutputEvent& output) {
 }
 
 // 立即撤销活动队列；暂停保存的音乐 PCM 保留给后续恢复。
-void AudioService::ClearActivePlaybackQueue() {
+void AudioService::ClearActivePlaybackQueue(uint32_t expected_session) {
     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    if (!OwnsPlaybackSession(player_session_id_, expected_session)) return;
+    player_session_id_ = 0;
     player_stream_active_.store(false);
     audio_playback_queue_.clear();
     queued_player_pcm_bytes_ = 0;
@@ -1290,6 +1338,7 @@ void AudioService::ClearActivePlaybackQueue() {
 // 立即撤销所有待播放 PCM，包括暂停保存的音乐。
 void AudioService::ClearPlaybackQueue() {
     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    player_session_id_ = 0;
     player_stream_active_.store(false);
     audio_playback_queue_.clear();
     suspended_player_playback_queue_.clear();
@@ -1304,11 +1353,13 @@ void AudioService::ClearPlaybackQueue() {
 }
 
 // 等到播放队列和当前 codec 写入结束，再等待 I2S DMA 环里的尾音实际送出。
-void AudioService::WaitForPlaybackComplete() {
+void AudioService::WaitForPlaybackComplete(uint32_t expected_session) {
     std::unique_lock<std::mutex> lock(audio_queue_mutex_);
-    audio_queue_cv_.wait(lock, [this]() {
-        return service_stopped_ || (audio_playback_queue_.empty() && !audio_output_busy_);
+    audio_queue_cv_.wait(lock, [this, expected_session]() {
+        return service_stopped_ || !OwnsPlaybackSession(player_session_id_, expected_session) ||
+               (audio_playback_queue_.empty() && !audio_output_busy_);
     });
+    if (!OwnsPlaybackSession(player_session_id_, expected_session)) return;
     if (service_stopped_) {
         player_stream_active_.store(false);
         return;
@@ -1324,6 +1375,8 @@ void AudioService::WaitForPlaybackComplete() {
             sample_rate;
         lock.unlock();
         vTaskDelay(pdMS_TO_TICKS(drain_ms));
+        lock.lock();
+        if (!OwnsPlaybackSession(player_session_id_, expected_session)) return;
         ESP_LOGI(TAG, "播放器 DMA 排空完成: drain=%dms", drain_ms);
     }
     player_stream_active_.store(false);
@@ -1923,9 +1976,13 @@ void AudioService::ResetDecoder() {
     ResetPlayerPlaybackState(true);
 }
 
-void AudioService::ResetPlayerPlaybackState(bool clear_suspended_queue) {
+bool AudioService::ResetPlayerPlaybackState(bool clear_suspended_queue, uint32_t new_session) {
     std::scoped_lock lock(player_resampler_mutex_, audio_queue_mutex_);
-    player_session_id_ = 0;
+    if (new_session != 0) {
+        if (!IsNewerPlaybackSession(new_session, latest_player_session_id_)) return false;
+        latest_player_session_id_ = new_session;
+    }
+    player_session_id_ = new_session;
     opus_decoder_->ResetState();
     /* 新播放会话以干净的重采样状态开始，避免上一段音频的残留相位 */
     player_resampler_input_rate_ = 0;
@@ -1947,6 +2004,8 @@ void AudioService::ResetPlayerPlaybackState(bool clear_suspended_queue) {
     player_playback_finished_ = false;
     player_initial_prebuffer_bytes_ = 0;
     player_recovery_prebuffer_bytes_ = kAudioPlayerInitialPrebufferBytes;
+    player_prebuffer_max_wait_ms_ = 0;
+    player_underrun_grace_ms_ = 0;
     player_max_buffered_pcm_bytes_ = 0;
     player_producer_resume_pcm_bytes_ = 0;
     player_prebuffering_ = true;
@@ -1954,6 +2013,7 @@ void AudioService::ResetPlayerPlaybackState(bool clear_suspended_queue) {
     player_rebuffer_count_ = 0;
     player_stream_active_.store(false);
     audio_queue_cv_.notify_all();
+    return true;
 }
 
 // 定时关闭长时间无读写的 codec 输入/输出；有新数据时对应路径会重新启用。

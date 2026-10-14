@@ -164,15 +164,15 @@ public:
     bool PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> packet, bool wait = false);
     bool PushPcm(const uint8_t* data, size_t size, int sample_rate,
                  const AudioOutputEvent& output, bool wait = true) override;
-    void BeginPlayback(const AudioPlaybackConfig& config) override;
+    bool BeginPlayback(const AudioPlaybackConfig& config) override;
     // 暂存音乐暂停瞬间已经解码、但尚未送到 DAC 的 PCM，避免恢复时跳过。
     void SuspendPlayback() override;
     void ResumePlayback(const AudioOutputEvent& output) override;
     void MarkPlaybackFinished(const AudioOutputEvent& output) override;
     // 清理当前活动播放队列，但保留被音乐暂停保存的 PCM。
-    void ClearActivePlaybackQueue() override;
+    void ClearActivePlaybackQueue(uint32_t expected_session = 0) override;
     void ClearPlaybackQueue() override;
-    void WaitForPlaybackComplete() override;
+    void WaitForPlaybackComplete(uint32_t expected_session = 0) override;
     uint32_t GetOutputLastActivityMs() const override {
         return player_output_last_activity_ms_.load();
     }
@@ -276,16 +276,21 @@ private:
     // 播放器流的预缓冲、尾帧和等待状态，由 audio_queue_mutex_ 保护。
     bool audio_output_busy_ = false;
     uint32_t player_session_id_ = 0;
+    uint32_t latest_player_session_id_ = 0;
     // true 表示播放器不再入新帧，允许 AudioOutputTask 播放不足预缓冲长度的尾音。
     bool player_playback_finished_ = false;
     // 当前播放器会话的首播预缓冲门槛，由 AudioOutput 配置传入。
     size_t player_initial_prebuffer_bytes_ = 0;
     size_t player_recovery_prebuffer_bytes_ = kAudioPlayerInitialPrebufferBytes;
+    uint32_t player_prebuffer_max_wait_ms_ = 0;
+    uint32_t player_underrun_grace_ms_ = 0;
     size_t player_max_buffered_pcm_bytes_ = 0;
     size_t player_producer_resume_pcm_bytes_ = 0;
     size_t queued_player_pcm_bytes_ = 0;
     // 音乐被 TTS 抢占期间保存本地文件会话的反压配置，恢复后继续沿用。
     size_t suspended_player_recovery_prebuffer_bytes_ = kAudioPlayerInitialPrebufferBytes;
+    uint32_t suspended_player_prebuffer_max_wait_ms_ = 0;
+    uint32_t suspended_player_underrun_grace_ms_ = 0;
     size_t suspended_player_max_buffered_pcm_bytes_ = 0;
     size_t suspended_player_producer_resume_pcm_bytes_ = 0;
     bool player_prebuffering_ = true;
@@ -334,7 +339,7 @@ private:
     void OpusCodecTask();
     void CaptureUplinkPcmForTesting(const std::vector<int16_t>& data);
     void PrepareAudioTestingPlayback();
-    void ResetPlayerPlaybackState(bool clear_suspended_queue);
+    bool ResetPlayerPlaybackState(bool clear_suspended_queue, uint32_t new_session = 0);
 #if CONFIG_USE_MICRO_WAKE_WORD
     void ProcessedWakeTask();
     void QueueWakeFrame(std::vector<int16_t> data, uint32_t generation);
