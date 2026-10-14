@@ -6,6 +6,7 @@
 #include "board.h"
 #include "camera/camera_service.h"
 #include "event/app_event.h"
+#include "player/channels/tts_player.h"
 #include "ui/ui.h"
 
 #define TAG "ApplicationAudio"
@@ -34,9 +35,60 @@ void Application::InitializeAudio() {
     audio_service_.EnableWakeWordDetection(true);
 }
 
+void Application::HandleCloudPushTtsUrl(const std::string& url) {
+    if (CameraService::GetInstance().DeferVoiceMcpTtsUrl(url, true)) return;
+    if (!TtsPlayer::IsHttpUrl(url)) {
+        ESP_LOGW(TAG, "忽略无效的云端主动 TTS URL: bytes=%u",
+                 static_cast<unsigned>(url.size()));
+        return;
+    }
+    if (GetDeviceState() == kDeviceStateConnecting ||
+        intent_manager_.Top() > PlaybackIntentId::kVoiceSession) {
+        ESP_LOGW(TAG, "唤醒或高优先级播放期间忽略云端主动 TTS");
+        return;
+    }
+
+    // 借用语音播放焦点压住音乐，但不创建录音会话；播完后释放焦点。
+    if (!intent_manager_.Contains(PlaybackIntentId::kVoiceSession) &&
+        !intent_manager_.Push(PlaybackIntentId::kVoiceSession)) {
+        ESP_LOGE(TAG, "云端主动 TTS 无法取得播放焦点");
+        return;
+    }
+    push_tts_owns_voice_intent_ = true;
+    audio_service_.EnableAudioUpload(false);
+    if (xiaoling_conn_ != nullptr) xiaoling_conn_->EndSession();
+    session_controller_.EndSession();
+    exit_requested_.store(false);
+    if (GetDeviceState() != kDeviceStateIdle) SetDeviceState(kDeviceStateIdle);
+
+    // 新推送取代旧回复；旧字幕、播放器事件和排队中的会话任务随 epoch 失效。
+    const auto generation = Xiaoling::voice_session_epoch.Advance();
+    AppEvent::PublishScoped(AppEvent::Id::VoiceSessionStarted, nullptr, 0,
+                            Xiaoling::voice_session_epoch, generation);
+    active_tts_session_id_ = 0;
+    pending_tts_session_id_ = 0;
+    push_tts_session_id_ = 0;
+    tts_waiting_for_playback_.store(false);
+    tts_output_started_.store(false);
+
+    const uint32_t session_id = audio_player_.PlayTtsUrl(url);
+    if (session_id == 0) {
+        audio_player_.ClearDeferredTtsUrl();
+        tts_waiting_for_playback_.store(false);
+        push_tts_owns_voice_intent_ = false;
+        intent_manager_.Pop(PlaybackIntentId::kVoiceSession);
+        ESP_LOGW(TAG, "云端主动 TTS 提交播放器失败");
+        return;
+    }
+    push_tts_session_id_ = session_id;
+    pending_tts_session_id_ = session_id;
+    ESP_LOGI(TAG, "云端主动 TTS 已提交: session=%lu",
+             static_cast<unsigned long>(session_id));
+}
+
 void Application::RegisterAudioEventSubscribers() {
     // Application::Initialize() 只应调用一次；此保护同时避免意外重复订阅。
-    if (tts_url_subscription_id_ != 0 ||
+    if (tts_url_subscription_id_ != 0 || push_tts_url_subscription_id_ != 0 ||
         !playback_event_subscription_ids_.empty() ||
         !playback_output_event_subscription_ids_.empty() ||
         !audio_event_subscription_ids_.empty()) {
@@ -67,6 +119,20 @@ void Application::RegisterAudioEventSubscribers() {
         }, this);
     if (tts_url_subscription_id_ == 0) {
         ESP_LOGE(TAG, "订阅 TTS URL 事件失败");
+    }
+
+    push_tts_url_subscription_id_ = AppEvent::Subscribe(
+        AppEvent::Id::XiaolingPushTtsUrl,
+        [](const AppEvent::Event& event, void* context) {
+            auto* application = static_cast<Application*>(context);
+            std::string url(event.Text());
+            const auto scope = event.Scope();
+            application->Schedule([application, url = std::move(url), scope]() {
+                if (scope.IsCurrent()) application->HandleCloudPushTtsUrl(url);
+            });
+        }, this);
+    if (push_tts_url_subscription_id_ == 0) {
+        ESP_LOGE(TAG, "订阅云端主动 TTS URL 事件失败");
     }
 
     // 播放器先在 app_event 中整理内部状态，再发布统一的公共生命周期事件。

@@ -180,6 +180,9 @@ private:
     PlaybackIntentManager intent_manager_;
     uint32_t active_tts_session_id_ = 0;
     uint32_t pending_tts_session_id_ = 0;
+    // 云端主动播报不属于语音问答；使用独立标记阻止播完后重启录音。
+    uint32_t push_tts_session_id_ = 0;
+    bool push_tts_owns_voice_intent_ = false;
     // 通用提示音持有 kPromptTone，终态只释放与当前 session 匹配的 Intent。
     std::atomic_uint32_t prompt_tone_session_id_{0};
     // TTS URL 到达后保持该标志，直到 DAC 首帧输出或当前 TTS 会话结束。
@@ -195,6 +198,7 @@ private:
     uint32_t iat_update_subscription_id_ = 0;
     uint32_t iat_end_subscription_id_ = 0;
     uint32_t tts_url_subscription_id_ = 0;
+    uint32_t push_tts_url_subscription_id_ = 0;
     std::vector<uint32_t> playback_event_subscription_ids_;
     std::vector<uint32_t> playback_output_event_subscription_ids_;
     std::vector<uint32_t> audio_event_subscription_ids_;
@@ -278,6 +282,7 @@ private:
     void HandlePlayerOutputStartedEvent(const PlaybackOutputEvent& event);
     void HandlePlayerOutputProgressEvent(const PlaybackOutputEvent& event);
     void HandlePlaybackEvent(const PlaybackEvent& event);
+    void HandleCloudPushTtsUrl(const std::string& url);
     void PlayPromptTone(uint16_t tone_id);
     void ProcessMainEvents(EventBits_t bits);
     void InitializeXiaolingConn();

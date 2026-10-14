@@ -153,6 +153,10 @@ uint32_t AudioPlayer::PlayTtsUrl(const std::string& url) {
     return session_id;
 }
 
+void AudioPlayer::ClearDeferredTtsUrl() {
+    if (tts_channel_ != nullptr) tts_channel_->ClearDeferredUrl();
+}
+
 uint32_t AudioPlayer::PlayMusicUrl(const std::string& url) {
     return music_playlist_->PlayUrl(url);
 }

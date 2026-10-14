@@ -1,6 +1,7 @@
 #include "device.h"
 
 #include "application.h"
+#include "xiaoling/conn/cloud_tts_url.h"
 #include "xiaoling/session/voice_session_epoch.h"
 #include "event/app_event.h"
 #include "system/settings.h"
@@ -69,7 +70,10 @@ int HandleDeviceCommand(int argc, char** argv) {
                 std::printf("TTS test requires idle/listening state\n");
                 return;
             }
-            AppEvent::PublishTextScoped(AppEvent::Id::XiaolingTtsUrl, url,
+            const auto event_id = voice_player_url_is_mp3(url.c_str())
+                                      ? AppEvent::Id::XiaolingPushTtsUrl
+                                      : AppEvent::Id::XiaolingTtsUrl;
+            AppEvent::PublishTextScoped(event_id, url,
                                         Xiaoling::voice_session_epoch, generation);
         });
         return 0;

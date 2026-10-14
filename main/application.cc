@@ -88,6 +88,9 @@ Application::~Application() {
     if (tts_url_subscription_id_ != 0) {
         AppEvent::Unsubscribe(tts_url_subscription_id_);
     }
+    if (push_tts_url_subscription_id_ != 0) {
+        AppEvent::Unsubscribe(push_tts_url_subscription_id_);
+    }
     if (clock_timer_handle_ != nullptr) {
         esp_timer_stop(clock_timer_handle_);
         esp_timer_delete(clock_timer_handle_);
@@ -129,21 +132,27 @@ void Application::HandlePlaybackEvent(const PlaybackEvent& event) {
     if (event.channel != PlaybackChannel::kTts) {
         return;
     }
+    const bool push_tts = event.session_id != 0 &&
+                          event.session_id == push_tts_session_id_;
     if (pending_tts_session_id_ != 0 && pending_tts_session_id_ != event.session_id) {
         return;
     }
     if (event.state == PlaybackState::kStreamReady) {
         pending_tts_session_id_ = event.session_id;
-        AppEvent::PublishScoped(AppEvent::Id::XiaolingTtsStreamReady, nullptr, 0,
-            Xiaoling::voice_session_epoch, Xiaoling::voice_session_epoch.Current());
+        if (!push_tts) {
+            AppEvent::PublishScoped(AppEvent::Id::XiaolingTtsStreamReady, nullptr, 0,
+                Xiaoling::voice_session_epoch, Xiaoling::voice_session_epoch.Current());
+        }
         return;
     }
     if (event.state == PlaybackState::kPlaying) {
         pending_tts_session_id_ = 0;
         active_tts_session_id_ = event.session_id;
-        AppEvent::PublishScoped(AppEvent::Id::XiaolingTtsPlaying, nullptr, 0,
-            Xiaoling::voice_session_epoch, Xiaoling::voice_session_epoch.Current());
-        session_controller_.StartTts(event.session_id);
+        if (!push_tts) {
+            AppEvent::PublishScoped(AppEvent::Id::XiaolingTtsPlaying, nullptr, 0,
+                Xiaoling::voice_session_epoch, Xiaoling::voice_session_epoch.Current());
+            session_controller_.StartTts(event.session_id);
+        }
         // kPlaying 只表示播放器已进入播放态，仍需等待 DAC 首个 PCM 输出。
         if (!exit_requested_.load() &&
             tts_waiting_for_playback_.load() &&
@@ -167,6 +176,23 @@ void Application::HandlePlaybackEvent(const PlaybackEvent& event) {
                  static_cast<unsigned long>(event.session_id),
                  static_cast<unsigned long>(active_tts_session_id_),
                  static_cast<unsigned long>(pending_tts_session_id_),
+                 static_cast<unsigned>(event.state));
+        return;
+    }
+    if (push_tts) {
+        // 主动播报只占用播放器，不属于问答 TTS，也不触发半双工重新录音。
+        tts_waiting_for_playback_.store(false);
+        tts_output_started_.store(false);
+        pending_tts_session_id_ = 0;
+        active_tts_session_id_ = 0;
+        push_tts_session_id_ = 0;
+        if (GetDeviceState() != kDeviceStateIdle) SetDeviceState(kDeviceStateIdle);
+        if (push_tts_owns_voice_intent_) {
+            push_tts_owns_voice_intent_ = false;
+            intent_manager_.Pop(PlaybackIntentId::kVoiceSession);
+        }
+        ESP_LOGI(TAG, "云端主动 TTS 播放结束: session=%lu, state=%u",
+                 static_cast<unsigned long>(event.session_id),
                  static_cast<unsigned>(event.state));
         return;
     }
@@ -271,8 +297,10 @@ void Application::HandlePlayerOutputStartedEvent(
     }
 
     tts_output_started_.store(true);
-    AppEvent::PublishScoped(AppEvent::Id::XiaolingTtsStarted, nullptr, 0,
-        Xiaoling::voice_session_epoch, Xiaoling::voice_session_epoch.Current());
+    if (event.session_id != push_tts_session_id_) {
+        AppEvent::PublishScoped(AppEvent::Id::XiaolingTtsStarted, nullptr, 0,
+            Xiaoling::voice_session_epoch, Xiaoling::voice_session_epoch.Current());
+    }
     if (!exit_requested_.load() && active_tts_session_id_ != 0 &&
         tts_output_started_.exchange(false) &&
         tts_waiting_for_playback_.exchange(false) &&
@@ -290,6 +318,7 @@ void Application::HandlePlayerOutputProgressEvent(
     if (event.channel != PlaybackChannel::kTts) {
         return;
     }
+    if (event.session_id == push_tts_session_id_) return;
     if (!IsCurrentTtsSession(event.session_id, active_tts_session_id_, pending_tts_session_id_)) return;
     AppEvent::PublishTextScoped(AppEvent::Id::XiaolingTtsOutputProgress,
         std::to_string(event.audio_clock_ms), Xiaoling::voice_session_epoch,
@@ -1257,7 +1286,8 @@ bool Application::ResetVoiceSessionForWakeup(bool& interrupted_tts) {
         Xiaoling::voice_session_epoch, generation);
     const bool tts_active = active_tts_session_id_ != 0 || pending_tts_session_id_ != 0 ||
                             tts_waiting_for_playback_.load();
-    interrupted_tts = tts_active;
+    // 云端主动播报没有对话回复游标，唤醒只需停止本地播放，不发送旧回复打断。
+    interrupted_tts = tts_active && push_tts_session_id_ == 0;
     ESP_LOGI(TAG, "唤醒替换语音会话: state=%s, epoch=%lu, old_tts=%lu/%lu",
              DeviceStatus::GetStateName(state), static_cast<unsigned long>(generation),
              static_cast<unsigned long>(active_tts_session_id_),
@@ -1272,13 +1302,16 @@ bool Application::ResetVoiceSessionForWakeup(bool& interrupted_tts) {
     tts_url_generation_.fetch_add(1);
     interrupted_tts_generation_ = 0;
     // 先使旧播放标识失效，再停播放器；迟到终态不能恢复旧录音或弹出新 Intent。
+    // 若主动播报占用了 VoiceSessionIntent，本次唤醒直接接管该 Intent。
+    push_tts_session_id_ = 0;
+    push_tts_owns_voice_intent_ = false;
     active_tts_session_id_ = 0;
     pending_tts_session_id_ = 0;
     tts_waiting_for_playback_.store(false);
     tts_output_started_.store(false);
     session_controller_.EndSession();
     // 先冻结旧回复游标，再立即停止本地声音；网络 cancel/event 不得拖住静音。
-    if (xiaoling_conn_ && tts_active) {
+    if (xiaoling_conn_ && interrupted_tts) {
         xiaoling_conn_->PrepareAbortSpeaking(kAbortReasonWakeWordDetected);
     }
     audio_player_.CancelWakeup();

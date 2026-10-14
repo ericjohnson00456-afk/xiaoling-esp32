@@ -37,6 +37,7 @@ enum class Id : uint16_t {
     XiaolingIatUpdate,
     XiaolingIatEnd,
     XiaolingTtsUrl,
+    XiaolingPushTtsUrl,
     XiaolingTtsTextStart,
     XiaolingTtsTextUpdate,
     XiaolingTtsTextEnd,

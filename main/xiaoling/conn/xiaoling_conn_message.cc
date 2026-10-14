@@ -2,7 +2,9 @@
 
 #include "system/system_info.h"
 #include "event/app_event.h"
+#include "xiaoling/conn/cloud_tts_url.h"
 #include "xiaoling/session/session_voice.h"
+#include "xiaoling/session/voice_session_epoch.h"
 #include "xiaoling_config.h"
 
 #include <cJSON.h>
@@ -50,6 +52,57 @@ std::string ReadScalar(const cJSON* object, const char* name) {
         return std::to_string(item->valueint);
     }
     return {};
+}
+
+// ARCS Mini 将 pushup TTS 与对话回复分开分发；ESP32 还接受 .mp3 主路径
+// 作为主动播报标记，避免待机时的消息被语音会话 RID 校验误丢弃。
+bool TryPublishPushTtsUrl(const cJSON* root) {
+    const auto* action = cJSON_GetObjectItemCaseSensitive(root, "action");
+    if (!cJSON_IsString(action) || action->valuestring == nullptr ||
+        std::strcmp(action->valuestring, "result") != 0) return false;
+
+    const auto* data = cJSON_GetObjectItemCaseSensitive(root, "data");
+    if (!cJSON_IsObject(data)) return false;
+    const auto* type = cJSON_GetObjectItemCaseSensitive(data, "type");
+    const auto* sub = cJSON_GetObjectItemCaseSensitive(data, "sub");
+    const bool raw_tts = cJSON_IsString(type) && type->valuestring != nullptr &&
+                         std::strcmp(type->valuestring, "TTS") == 0;
+    const bool encoded_tts = cJSON_IsString(sub) && sub->valuestring != nullptr &&
+                             std::strcmp(sub->valuestring, "tts") == 0;
+    if (!raw_tts && !encoded_tts) return false;
+
+    const auto* from = cJSON_GetObjectItemCaseSensitive(root, "from");
+    const bool explicit_push =
+        cJSON_GetObjectItemCaseSensitive(root, "pushup") != nullptr ||
+        (cJSON_IsString(from) && from->valuestring != nullptr &&
+         std::strcmp(from->valuestring, "pushup") == 0);
+    std::string url;
+    if (raw_tts) {
+        const auto* value = cJSON_GetObjectItemCaseSensitive(data, "url");
+        if (cJSON_IsString(value) && value->valuestring != nullptr) {
+            url = value->valuestring;
+        }
+    } else {
+        const auto* content = cJSON_GetObjectItemCaseSensitive(data, "content");
+        if (cJSON_IsString(content) && content->valuestring != nullptr) {
+            if (!Base64Codec::Decode(content->valuestring, url)) url.clear();
+        }
+    }
+    if (url.empty() || std::memchr(url.data(), '\0', url.size()) != nullptr) {
+        if (explicit_push) ESP_LOGW(TAG, "云端主动 TTS URL 无效，已忽略");
+        return explicit_push;
+    }
+    if (!explicit_push && !voice_player_url_is_mp3(url.c_str())) return false;
+
+    ESP_LOGI(TAG, "收到云端主动 TTS URL: bytes=%u, mp3=%d",
+             static_cast<unsigned>(url.size()),
+             voice_player_url_is_mp3(url.c_str()) ? 1 : 0);
+    if (!AppEvent::PublishTextScoped(AppEvent::Id::XiaolingPushTtsUrl, url,
+                                     Xiaoling::voice_session_epoch,
+                                     Xiaoling::voice_session_epoch.Current())) {
+        ESP_LOGE(TAG, "云端主动 TTS URL 事件发布失败");
+    }
+    return true;
 }
 
 std::string ReadErrorDetail(const cJSON* root) {
@@ -403,6 +456,10 @@ void XiaolingConn::HandleIncomingText(const std::string& text) {
 
     const auto* action = cJSON_GetObjectItemCaseSensitive(root, "action");
     const bool alarm_tts_message = HandleAlarmTtsMessage(root);
+    if (!alarm_tts_message && TryPublishPushTtsUrl(root)) {
+        cJSON_Delete(root);
+        return;
+    }
     const bool current_session = IsCurrentSessionMessage(root);
     uint32_t message_generation = 0;
     bool voice_handled = false;

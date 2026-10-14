@@ -88,7 +88,8 @@ bool CameraService::StartButtonCapture() {
     return Start(Origin::Button, 0);
 }
 
-bool CameraService::StartVoiceMcpCapture(VoiceMcpResultCallback callback) {
+bool CameraService::StartVoiceMcpCapture(bool sync,
+                                         VoiceMcpResultCallback callback) {
     if (!callback) {
         return false;
     }
@@ -110,15 +111,21 @@ bool CameraService::StartVoiceMcpCapture(VoiceMcpResultCallback callback) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         voice_tts_gate_active_ = true;
+        voice_mcp_sync_ = sync;
+        voice_mcp_result_sent_ = false;
         deferred_voice_tts_url_.clear();
-        if (tts_waiting_without_pcm && !recent_tts_url_.empty() &&
+        deferred_voice_tts_pushup_ = false;
+        if (!sync && tts_waiting_without_pcm && !recent_tts_url_.empty() &&
             now_us >= recent_tts_url_at_us_ &&
             now_us - recent_tts_url_at_us_ <= kEarlyVoiceTtsWindowUs) {
             adopted_url = recent_tts_url_;
             deferred_voice_tts_url_ = adopted_url;
+            deferred_voice_tts_pushup_ = recent_tts_pushup_;
             adopted_early_tts = true;
         }
     }
+    ESP_LOGI(kTag, "MCP 拍照模式: sync=%d, 等待主动 TTS=%d",
+             sync ? 1 : 0, sync ? 0 : 1);
 
     if (adopted_early_tts && application_ != nullptr) {
         // 必须在拍照 Intent 停止旧播放器之前标记重播，否则极快的 STOPPED
@@ -140,13 +147,14 @@ bool CameraService::StartVoiceMcpCapture(VoiceMcpResultCallback callback) {
         std::lock_guard<std::mutex> lock(mutex_);
         if (deferred_voice_tts_url_ == adopted_url) {
             deferred_voice_tts_url_.clear();
+            deferred_voice_tts_pushup_ = false;
         }
     }
     callback(false, error.empty() ? "无法启动拍照" : std::move(error));
     if (application_ != nullptr) {
-        application_->Schedule([this]() { ReleaseVoiceMcpTtsGate(); });
+        application_->Schedule([this]() { ReleaseVoiceMcpTtsGate(false); });
     } else {
-        ReleaseVoiceMcpTtsGate();
+        ReleaseVoiceMcpTtsGate(false);
     }
     return false;
 }
@@ -164,15 +172,28 @@ bool CameraService::CancelVoiceMcpCountdown(const char* reason) {
     return true;
 }
 
-bool CameraService::DeferVoiceMcpTtsUrl(const std::string& url) {
+bool CameraService::DeferVoiceMcpTtsUrl(const std::string& url, bool pushup) {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (voice_tts_gate_active_ && voice_mcp_sync_ && pushup) {
+        // sync:true 不期待 pushup TTS；不能让它覆盖正常回复或在工具完成后复播。
+        ESP_LOGI(kTag, "sync 拍照期间忽略主动播报 TTS URL");
+        return true;
+    }
+    if (voice_tts_gate_active_ && voice_mcp_sync_ &&
+        !voice_mcp_result_sent_) {
+        // 工具结果发出前到达的普通 TTS 也属于旧回复，不应在 sync 拍照后复播。
+        ESP_LOGI(kTag, "sync 拍照结果发出前忽略旧 TTS URL");
+        return true;
+    }
     recent_tts_url_ = url;
     recent_tts_url_at_us_ = esp_timer_get_time();
+    recent_tts_pushup_ = pushup;
     if (!voice_tts_gate_active_) {
         return false;
     }
     // 同一轮回复只应有一个语音 URL；若云端重复下发，以最新值为准。
     deferred_voice_tts_url_ = url;
+    deferred_voice_tts_pushup_ = pushup;
     ESP_LOGI(kTag, "拍照 TTS URL 已暂存，等待 MCP 工具响应");
     return true;
 }
@@ -480,7 +501,14 @@ void CameraService::UploadMcpPhoto(uint32_t generation, Camera& camera) {
 
         phase_ = Phase::WaitingTts;
         ESP_LOGI(kTag, "MCP 照片已通过 HTTP 上传，准备响应图片 URL");
-        CompleteVoiceMcp(generation, true, std::move(image_url), true);
+        bool sync = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            sync = voice_mcp_sync_;
+        }
+        ESP_LOGI(kTag, "MCP 照片 URL 已就绪: sync=%d, 等待 TTS=%d",
+                 sync ? 1 : 0, sync ? 0 : 1);
+        CompleteVoiceMcp(generation, true, std::move(image_url), !sync);
     } catch (const std::exception& error) {
         CompleteVoiceMcp(generation, false, error.what(), false);
     }
@@ -507,20 +535,25 @@ void CameraService::CompleteVoiceMcp(uint32_t generation, bool success,
     // 回调先把 MCP 响应加入 Application 队列；随后排入 Intent 释放和
     // TTS 放行任务，从队列顺序上保证响应先于音频拉流。
     callback(success, std::move(value));
+    if (success) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        voice_mcp_result_sent_ = true;
+    }
     if (keep_until_tts) {
         ReleaseCameraIntent();
     } else {
         FinishExit(false);
     }
     if (application_ != nullptr) {
-        application_->Schedule([this]() { ReleaseVoiceMcpTtsGate(); });
+        application_->Schedule([this, success]() { ReleaseVoiceMcpTtsGate(success); });
     } else {
-        ReleaseVoiceMcpTtsGate();
+        ReleaseVoiceMcpTtsGate(success);
     }
 }
 
-void CameraService::ReleaseVoiceMcpTtsGate() {
+void CameraService::ReleaseVoiceMcpTtsGate(bool replay) {
     std::string url;
+    bool pushup = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!voice_tts_gate_active_) {
@@ -528,15 +561,21 @@ void CameraService::ReleaseVoiceMcpTtsGate() {
         }
         voice_tts_gate_active_ = false;
         url = std::move(deferred_voice_tts_url_);
+        pushup = deferred_voice_tts_pushup_;
         deferred_voice_tts_url_.clear();
+        deferred_voice_tts_pushup_ = false;
         recent_tts_url_.clear();
         recent_tts_url_at_us_ = 0;
+        recent_tts_pushup_ = false;
+        voice_mcp_sync_ = false;
+        voice_mcp_result_sent_ = false;
     }
-    if (!url.empty() && application_ != nullptr) {
+    if (replay && !url.empty() && application_ != nullptr) {
         ESP_LOGI(kTag, "MCP 工具响应已发送，放行拍照 TTS URL");
-        // 重新走统一事件入口，让 Application 同步绑定新 session，并由
-        // XiaolingSessionVoice 在扬声器首帧后启动已经暂存的 timeline。
-        if (!AppEvent::PublishText(AppEvent::Id::XiaolingTtsUrl, url)) {
+        // 保留原来的 pushup/普通 TTS 类型，避免主动播报误进入对话收尾。
+        const auto event_id = pushup ? AppEvent::Id::XiaolingPushTtsUrl
+                                     : AppEvent::Id::XiaolingTtsUrl;
+        if (!AppEvent::PublishText(event_id, url)) {
             ESP_LOGW(kTag, "拍照 TTS URL 放行事件提交失败");
         }
     }

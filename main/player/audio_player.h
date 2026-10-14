@@ -38,6 +38,7 @@ public:
 
     bool Initialize(AudioService* audio_service, ControlScheduler scheduler);
     uint32_t PlayTtsUrl(const std::string& url);
+    void ClearDeferredTtsUrl();
     uint32_t PlayMusicUrl(const std::string& url);
     uint32_t PlayMusicList(const std::vector<std::string>& urls);
     bool PlayMusicItemList(const std::vector<MusicTrack>& tracks,

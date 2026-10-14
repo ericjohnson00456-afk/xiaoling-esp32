@@ -29,11 +29,11 @@ class CameraService {
     void Initialize(Application& application);
     bool StartButtonCapture();
     // MCP 拍照异步返回图片 URL；失败或取消时 value 为错误说明。
-    bool StartVoiceMcpCapture(VoiceMcpResultCallback callback);
+    bool StartVoiceMcpCapture(bool sync, VoiceMcpResultCallback callback);
     // 按键或唤醒词只在三秒预览倒计时阶段取消语音拍照。
     bool CancelVoiceMcpCountdown(const char* reason);
     // 提前到达的拍照 TTS URL 要等 MCP 响应发出后才交给播放器。
-    bool DeferVoiceMcpTtsUrl(const std::string& url);
+    bool DeferVoiceMcpTtsUrl(const std::string& url, bool pushup = false);
     // 按键拍照拥有独立的 TTS 收尾；语音拍照沿用普通语音会话策略。
     bool OwnsStandaloneTtsLifecycle() const;
     bool Capture();
@@ -74,7 +74,7 @@ class CameraService {
     void UploadMcpPhoto(uint32_t generation, Camera& camera);
     void CompleteVoiceMcp(uint32_t generation, bool success,
                           std::string value, bool keep_until_tts);
-    void ReleaseVoiceMcpTtsGate();
+    void ReleaseVoiceMcpTtsGate(bool replay);
     void ReleaseCameraIntent();
     void HandlePlaybackEvent(const PlaybackEvent& event);
     void HandleIntentPreempted();
@@ -99,9 +99,13 @@ class CameraService {
     uint32_t auto_capture_delay_ms_ = 0;
     VoiceMcpResultCallback voice_mcp_result_callback_;
     bool voice_tts_gate_active_ = false;
+    bool voice_mcp_sync_ = false;
+    bool voice_mcp_result_sent_ = false;
     std::string deferred_voice_tts_url_;
+    bool deferred_voice_tts_pushup_ = false;
     // 云端可能先下发 TTS URL、数秒后才下发 take_photo；保留最近候选供接管。
     std::string recent_tts_url_;
+    bool recent_tts_pushup_ = false;
     int64_t recent_tts_url_at_us_ = 0;
     std::vector<AppEvent::SubscriptionId> subscriptions_;
 };
