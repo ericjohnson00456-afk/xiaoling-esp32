@@ -69,9 +69,10 @@ void AfeAudioProcessor::Initialize(AudioCodec* codec, int frame_duration_ms, srm
 #endif
     }
 
-    // AFE 内部 AGC 保持关闭，独立 AGC 位于 NS 后面。
+    // AFE 内部 AGC 保持关闭；独立 AGC 保留原实现，当前也暂不启用。
     afe_config->agc_init = false;
 #if CONFIG_IDF_TARGET_ESP32S3
+#if 0  // 当前关闭独立人声 AGC/VAD；保留原实现供以后继续调参。
     gain_vad_ = vad_create_with_param(VAD_MODE_1, 16000, 20, 60, 200);
     output_agc_ = esp_agc_open(AGC_MODE_2, 16000);
     if (gain_vad_ != nullptr && output_agc_ != nullptr) {
@@ -86,6 +87,7 @@ void AfeAudioProcessor::Initialize(AudioCodec* codec, int frame_duration_ms, srm
         output_agc_ = nullptr;
         ESP_LOGW(TAG, "人声 AGC 初始化失败，保留 AEC/NS 输出");
     }
+#endif
 #endif
     afe_config->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
     afe_config->afe_perferred_core = 1;
@@ -122,7 +124,7 @@ void AfeAudioProcessor::Initialize(AudioCodec* codec, int frame_duration_ms, srm
     }
     ESP_LOGI(TAG, "AFE/NS 取帧任务栈: %lu bytes", static_cast<unsigned long>(stack_bytes));
 #if CONFIG_IDF_TARGET_ESP32S3
-    ESP_LOGI(TAG, "ESP32-S3 处理顺序: MIC 前置增益 -> AEC(若启用) -> NS -> 人声自适应 AGC");
+    ESP_LOGI(TAG, "ESP32-S3 处理顺序: MIC 前置增益 -> AEC(若启用) -> NS；人声 AGC 临时关闭");
 #endif
 }
 
@@ -182,7 +184,8 @@ void AfeAudioProcessor::EmitOutput(std::vector<int16_t>&& data) {
         }
         data = std::move(cleaned);
     }
-    ApplySpeechAgc(data);
+    // 当前关闭人声 AGC；恢复时与上面的初始化一起启用。
+    // ApplySpeechAgc(data);
     output_callback_(std::move(data));
 }
 
