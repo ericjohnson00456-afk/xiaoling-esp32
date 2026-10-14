@@ -1,13 +1,11 @@
 #include "xiaoling_conn.h"
 
-#include "board.h"
 #include "system/system_info.h"
 #include "event/app_event.h"
 #include "xiaoling/session/session_voice.h"
 #include "xiaoling_config.h"
 
 #include <cJSON.h>
-#include <esp_app_desc.h>
 #include <esp_log.h>
 #include <esp_random.h>
 #include "base64_codec.h"
@@ -112,8 +110,9 @@ std::string XiaolingConn::BuildWebSocketUrl() const {
 
     cJSON* firmware_info = cJSON_CreateObject();
     if (firmware_info != nullptr) {
-        cJSON_AddStringToObject(firmware_info, "type", BOARD_NAME);
-        cJSON_AddStringToObject(firmware_info, "version", esp_app_get_description()->version);
+        // 云端 connect 标识固定，不随板型和本地固件构建版本变化。
+        cJSON_AddStringToObject(firmware_info, "type", "Arcs-mini");
+        cJSON_AddStringToObject(firmware_info, "version", "2.7.0");
         cJSON_AddItemToObject(params, "firmware_info", firmware_info);
     }
 
