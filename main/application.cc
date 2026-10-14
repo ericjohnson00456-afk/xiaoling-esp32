@@ -689,7 +689,8 @@ void Application::InitializeXiaolingConn() {
     listening_mode_ = mode == DuplexMode::kFullDuplex
                           ? kListeningModeRealtime
                           : kListeningModeAutoStop;
-    audio_service_.SetAecEnabled(session_controller_.policy().enable_aec);
+    // 具备参考声道的设备持续运行 AEC，半双工/单工播放时也需保护唤醒输入。
+    audio_service_.SetAecEnabled(audio_service_.SupportsAec());
 
     Ui::SetStatus(Ui::Status::LoadingProtocol);
 
@@ -1564,14 +1565,14 @@ void Application::SetDuplexMode(DuplexMode mode) {
         }
 
         session_controller_.SetMode(mode);
-        const bool enable_aec = session_controller_.policy().enable_aec;
         Ui::SetDuplexMode(mode);
         listening_mode_ = mode == DuplexMode::kFullDuplex
                               ? kListeningModeRealtime
                               : kListeningModeAutoStop;
-        audio_service_.SetAecEnabled(enable_aec);
-        Ui::ShowNotification(enable_aec ? Lang::Strings::RTC_MODE_ON
-                                        : Lang::Strings::RTC_MODE_OFF);
+        // 模式切换只改变云端上报行为，不关闭本地 AEC/唤醒链。
+        Ui::ShowNotification(audio_service_.IsAecEnabled()
+                                 ? Lang::Strings::RTC_MODE_ON
+                                 : Lang::Strings::RTC_MODE_OFF);
 
         if (state == kDeviceStateConnecting ||
             state == kDeviceStateListening ||

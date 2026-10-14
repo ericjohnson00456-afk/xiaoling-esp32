@@ -11,7 +11,6 @@ DuplexPolicy DuplexPolicy::ForMode(DuplexMode mode) {
         break;
     case DuplexMode::kFullDuplex:
         p.mic_during_tts = true;
-        p.enable_aec = true;
         p.auto_restart_listening = true;
         break;
     }

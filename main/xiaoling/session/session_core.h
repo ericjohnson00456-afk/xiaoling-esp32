@@ -2,13 +2,13 @@
 #include <cstdint>
 
 // Policy shared by the application and audio service.  ListeningMode describes
-// the server protocol; DuplexMode describes the local microphone/speaker gate.
+// the server protocol; DuplexMode describes the cloud microphone/speaker gate.
+// Hardware AEC stays enabled independently of this policy.
 enum class DuplexMode { kSimplex, kHalfDuplex, kFullDuplex };
 
 struct DuplexPolicy {
     DuplexMode mode = DuplexMode::kHalfDuplex;
     bool mic_during_tts = false;
-    bool enable_aec = false;
     bool allow_barge_in = true;
     bool auto_restart_listening = false;
 
