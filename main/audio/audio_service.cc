@@ -1183,6 +1183,12 @@ bool AudioService::PushPcm(const uint8_t* data, size_t size, int sample_rate,
     return true;
 }
 
+size_t AudioService::BufferedPlaybackBytes(uint32_t expected_session) {
+    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    return expected_session != 0 && player_session_id_ == expected_session &&
+           player_stream_active_.load() ? queued_player_pcm_bytes_ : 0;
+}
+
 // 新播放器会话重置下行解码/缓冲状态；暂停保存的音乐 PCM 不能被新 TTS 会话清掉。
 bool AudioService::BeginPlayback(const AudioPlaybackConfig& config) {
     if (config.session_id == 0 || !ResetPlayerPlaybackState(false, config.session_id)) return false;

@@ -119,9 +119,9 @@ SpiLcdDisplay::SpiLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_h
 
     ESP_LOGI(TAG, "Initialize LVGL port");
     lvgl_port_cfg_t port_cfg = ESP_LVGL_PORT_INIT_CONFIG();
-    // BOX3 的 AEC/NS/唤醒集中在双核上运行，LCD 不能与实时音频争同级 CPU。
+    // BOX3 与 TTS 解码同级轮转，仍低于 AFE/编码(8)和唤醒(9)。
 #if CONFIG_BOARD_TYPE_ESP_BOX_3
-    port_cfg.task_priority = 5;
+    port_cfg.task_priority = 7;
 #else
     port_cfg.task_priority = 8;
 #endif
@@ -145,10 +145,15 @@ SpiLcdDisplay::SpiLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_h
         .io_handle = panel_io_,
         .panel_handle = panel_,
         .control_handle = nullptr,
-        // 40 行约占屏幕 1/6，减少表情帧的分段数量；仍使用单 DMA 缓冲，
-        // 避免双缓冲继续挤占 Wi-Fi 和音频需要的片上内存。
+        // BOX3 将原来的 40 行拆成两块 20 行：DMA 发送上一块时绘制下一块，
+        // RGB565 总计仍为 width*40*2 字节，不挤占更多音频/Wi-Fi 内存。
+#if CONFIG_BOARD_TYPE_ESP_BOX_3
+        .buffer_size = static_cast<uint32_t>(width_ * 20),
+        .double_buffer = true,
+#else
         .buffer_size = static_cast<uint32_t>(width_ * 40),
         .double_buffer = false,
+#endif
         .trans_size = 0,
         .hres = static_cast<uint32_t>(width_),
         .vres = static_cast<uint32_t>(height_),
@@ -175,15 +180,31 @@ SpiLcdDisplay::SpiLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_h
         return;
     }
 
-    if (spi_bus_arbiter_ != nullptr) {
+#if CONFIG_BOARD_TYPE_ESP_BOX_3
+    flush_ready_ = xSemaphoreCreateBinary();
+    ESP_ERROR_CHECK(flush_ready_ != nullptr ? ESP_OK : ESP_ERR_NO_MEM);
+    lv_display_set_user_data(display_, this);
+    lv_display_set_flush_wait_cb(display_, BlockingFlushWait);
+    lv_display_add_event_cb(display_, RefreshStatsEvent, LV_EVENT_RENDER_START, this);
+    lv_display_add_event_cb(display_, RefreshStatsEvent, LV_EVENT_RENDER_READY, this);
+    lv_display_add_event_cb(display_, RefreshStatsEvent, LV_EVENT_FLUSH_WAIT_START, this);
+    lv_display_add_event_cb(display_, RefreshStatsEvent, LV_EVENT_FLUSH_WAIT_FINISH, this);
+#endif
+
+    if (spi_bus_arbiter_ != nullptr || flush_ready_ != nullptr) {
         const esp_lcd_panel_io_callbacks_t callbacks = {
             .on_color_trans_done = SharedBusFlushDone,
         };
         ESP_ERROR_CHECK(esp_lcd_panel_io_register_event_callbacks(
             panel_io_, &callbacks, this));
-        lv_display_add_event_cb(display_, SharedBusFlushStart,
-                                LV_EVENT_FLUSH_START, this);
+    }
+    if (spi_bus_arbiter_ != nullptr) {
+        lv_display_add_event_cb(display_, SharedBusFlushStart, LV_EVENT_FLUSH_START, this);
         ESP_LOGI(TAG, "SPI bus arbiter enabled");
+    }
+    if (flush_ready_ != nullptr) {
+        ESP_LOGI(TAG, "BOX3 刷新流水线: priority=%d, buffers=2x20 rows, DMA wait=blocking",
+                 port_cfg.task_priority);
     }
 
     if (offset_x != 0 || offset_y != 0) {
@@ -191,6 +212,40 @@ SpiLcdDisplay::SpiLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_h
     }
 
     SetupUI();
+}
+
+void SpiLcdDisplay::BlockingFlushWait(lv_display_t* display) {
+    auto* owner = static_cast<SpiLcdDisplay*>(lv_display_get_user_data(display));
+    // 一次只允许一笔 DMA 在途。完成令牌即使先于等待到达，也会被本次等待取走。
+    // LVGL 在本回调返回后清 flushing；ISR 不清它，避免就绪标志和令牌错代。
+    const auto ready = xSemaphoreTake(owner->flush_ready_, portMAX_DELAY);
+    configASSERT(ready == pdTRUE);
+    (void)ready;
+}
+
+void SpiLcdDisplay::RefreshStatsEvent(lv_event_t* event) {
+    auto* display = static_cast<SpiLcdDisplay*>(lv_event_get_user_data(event));
+    auto& stats = display->refresh_stats_;
+    const auto now = esp_timer_get_time();
+    switch (lv_event_get_code(event)) {
+        case LV_EVENT_RENDER_START: stats.BeginRender(now); break;
+        case LV_EVENT_FLUSH_WAIT_START: stats.BeginFlushWait(now); break;
+        case LV_EVENT_FLUSH_WAIT_FINISH: stats.EndFlushWait(now); break;
+        case LV_EVENT_RENDER_READY: {
+            stats.EndRender(now);
+            DisplayRefreshStats::Report report;
+            if (stats.TakeReport(now, report)) {
+                ESP_LOGI(TAG, "渲染统计: state=%s, fps=%.1f, avg=%.1fms, max=%.1fms, gap_max=%.1fms, dma_wait=%.1fms/frame",
+                         DeviceStatus::GetStateName(DeviceStatus::GetState()),
+                         report.frames * 1e6 / report.interval_us,
+                         report.render_us / (1000.0 * report.frames),
+                         report.max_render_us / 1000.0, report.max_gap_us / 1000.0,
+                         report.flush_wait_us / (1000.0 * report.frames));
+            }
+            break;
+        }
+        default: break;
+    }
 }
 
 void SpiLcdDisplay::SharedBusFlushStart(lv_event_t* event) {
@@ -224,7 +279,11 @@ bool SpiLcdDisplay::SharedBusFlushDone(
         configASSERT(unlocked);
         (void)unlocked;
     }
-    lv_display_flush_ready(display->display_);
+    if (display->flush_ready_ != nullptr) {
+        xSemaphoreGiveFromISR(display->flush_ready_, &task_woken);
+    } else {
+        lv_display_flush_ready(display->display_);
+    }
     return task_woken == pdTRUE;
 }
 

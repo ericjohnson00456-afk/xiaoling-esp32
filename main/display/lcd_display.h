@@ -3,10 +3,13 @@
 
 #include "display/lvgl_display.h"
 #include "ui/utils/emoji/png_animation_player.h"
+#include "display_refresh_stats.h"
 
 #include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>
 #include <font_emoji.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 #include <atomic>
 #include <memory>
@@ -96,6 +99,11 @@ private:
     // 一次 LVGL 刷新可能被绘制缓冲拆成多个 flush；整个刷新期间只持有一次总线。
     std::atomic_bool refresh_bus_locked_{false};
     std::atomic_bool release_bus_on_flush_done_{false};
+    DisplayRefreshStats refresh_stats_;
+    SemaphoreHandle_t flush_ready_ = nullptr;
+
+    static void RefreshStatsEvent(lv_event_t* event);
+    static void BlockingFlushWait(lv_display_t* display);
 
     static void SharedBusFlushStart(lv_event_t* event);
     static bool SharedBusFlushDone(esp_lcd_panel_io_handle_t panel_io,

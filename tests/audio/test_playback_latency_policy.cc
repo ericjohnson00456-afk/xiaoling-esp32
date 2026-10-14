@@ -16,6 +16,14 @@ int main() {
     assert(PlaybackDecodePriority(false) == 6);
     assert(PlaybackDecodePriority(false, true) == 7);
     assert(PlaybackDecodePriority(true, true) == 8);
+    assert(PlaybackDecodePriority(false, true, true) == 8);
+    assert(PlaybackDecodePriority(false, false, true) == 6);
+    assert(TtsDecodeNeedsBoost(false, 8191));
+    assert(!TtsDecodeNeedsBoost(false, 8192));
+    assert(TtsDecodeNeedsBoost(true, 8192)); // 低水位之后不会立刻降回去。
+    assert(TtsDecodeNeedsBoost(true, 16383));
+    assert(!TtsDecodeNeedsBoost(true, 16384));
+    assert(PlaybackDecodeYieldIntervalUs(false, true) == 10'000);
     request.source_type = PlaybackSourceType::kUrl;
     assert(!IsLowLatencyPrompt(request));
     request.source_type = PlaybackSourceType::kRomfs;

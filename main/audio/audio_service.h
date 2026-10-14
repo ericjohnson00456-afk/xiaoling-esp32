@@ -165,6 +165,7 @@ public:
     bool PushPcm(const uint8_t* data, size_t size, int sample_rate,
                  const AudioOutputEvent& output, bool wait = true) override;
     bool BeginPlayback(const AudioPlaybackConfig& config) override;
+    size_t BufferedPlaybackBytes(uint32_t expected_session) override;
     // 暂存音乐暂停瞬间已经解码、但尚未送到 DAC 的 PCM，避免恢复时跳过。
     void SuspendPlayback() override;
     void ResumePlayback(const AudioOutputEvent& output) override;

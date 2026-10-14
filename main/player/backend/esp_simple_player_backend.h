@@ -77,6 +77,7 @@ private:
     DecodeYieldPolicy decode_yield_policy_;
     std::atomic_bool low_latency_prompt_{false};
     std::atomic_bool tts_decode_{false};
+    std::atomic_bool tts_decode_boost_{false};
     // SimplePlayer 的工作任务从 new 到 destroy 常驻；由端口回调获取真实句柄。
     std::atomic<TaskHandle_t> decode_task_handle_{nullptr};
     std::atomic_bool cancelling_decode_{false};

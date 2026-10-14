@@ -57,6 +57,8 @@ public:
     virtual void ClearPlaybackQueue() = 0;
     virtual void WaitForPlaybackComplete(uint32_t expected_session = 0) = 0;
     virtual uint32_t GetOutputLastActivityMs() const = 0;
+    // 只返回指定活动会话排队的 PCM；旧后端不能读取新提示音的水位。
+    virtual size_t BufferedPlaybackBytes(uint32_t expected_session) = 0;
 };
 
 #endif  // AUDIO_OUTPUT_H

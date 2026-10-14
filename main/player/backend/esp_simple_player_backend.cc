@@ -417,8 +417,9 @@ bool EspSimplePlayerBackend::DoPlay(const PlaybackRequest& request) {
     low_latency_prompt_.store(local_prompt);
     const bool tts = request.channel == PlaybackChannel::kTts;
     tts_decode_.store(tts);
+    tts_decode_boost_.store(tts);
     if (const auto task = decode_task_handle_.load(); task != nullptr) {
-        vTaskPrioritySet(task, PlaybackDecodePriority(local_prompt, tts));
+        vTaskPrioritySet(task, PlaybackDecodePriority(local_prompt, tts, tts));
     }
     if (!audio_output_->BeginPlayback(AudioPlaybackConfig{
         .session_id = request.session_id,
@@ -1150,12 +1151,24 @@ esp_gmf_err_io_t EspSimplePlayerBackend::BudgetAcquire(
     // 此回调在真实解码任务中执行，不借助私有 GMF 结构寻找 TaskHandle。
     // 同一流水线复用时按当前音源恢复优先级，不能让后续 TTS 沿用提示音提升。
     engine->decode_task_handle_.store(xTaskGetCurrentTaskHandle());
+    const bool tts = engine->tts_decode_.load();
+    bool boost = false;
+    if (tts) {
+        uint32_t session;
+        {
+            std::lock_guard<std::mutex> lock(engine->mutex_);
+            session = engine->current_request_.session_id;
+        }
+        boost = TtsDecodeNeedsBoost(engine->tts_decode_boost_.load(),
+                                   engine->audio_output_->BufferedPlaybackBytes(session));
+    }
+    engine->tts_decode_boost_.store(boost);
     const auto priority = PlaybackDecodePriority(engine->low_latency_prompt_.load() ||
-                                                 engine->cancelling_decode_.load(), engine->tts_decode_.load());
+                                                 engine->cancelling_decode_.load(), tts, boost);
     if (uxTaskPriorityGet(nullptr) != priority) {
         vTaskPrioritySet(nullptr, priority);
-        ESP_LOGI(TAG, "解码调度切换: priority=%u, prompt=%d", priority,
-                 engine->low_latency_prompt_.load() ? 1 : 0);
+        ESP_LOGI(TAG, "解码调度切换: priority=%u, prompt=%d, tts_low_water=%d", priority,
+                 engine->low_latency_prompt_.load() ? 1 : 0, boost ? 1 : 0);
     }
     return engine->original_output_acquire_(engine->original_output_ctx_, load, wanted, wait_ticks);
 }
@@ -1167,7 +1180,8 @@ esp_gmf_err_io_t EspSimplePlayerBackend::BudgetRelease(
     if (result >= ESP_GMF_IO_OK && load != nullptr &&
         engine->decode_yield_policy_.ShouldYield(esp_timer_get_time(), load->valid_size, load->is_done,
             PlaybackDecodeYieldIntervalUs(engine->low_latency_prompt_.load() ||
-                                          engine->cancelling_decode_.load()))) {
+                                          engine->cancelling_decode_.load(),
+                                          engine->tts_decode_boost_.load()))) {
         vTaskDelay(1);
         engine->decode_yield_policy_.Reset(esp_timer_get_time());
     }
