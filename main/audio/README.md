@@ -127,7 +127,8 @@ AFE/AEC 输出之后使用独立的 WebRTC NS（10 ms 帧，中等强度）；ES
   将唤醒推理持续压到无法及时执行；
   唤醒任务仍每 50 ms 主动让步一次，避免持续推理饿死 Idle。
   启停会清队列并更新 generation，推理与模型启停串行化，避免旧输入污染
-  新一轮唤醒检测。
+  新一轮唤醒检测。其 TFLite Micro、ESP-NN 和特征提取组件版本固定为
+  ESPHome 2026.9.1 的组合；本工程的 AFE/AEC 输入与任务调度仍独立维护。
 - ESP-SR 根据芯片和模型包选择 AFE、自定义命令词或直接 Wakenet 实现，
   输入帧均由 `AudioInputTask` 提供。
 
