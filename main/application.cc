@@ -200,11 +200,11 @@ void Application::HandlePlaybackEvent(const PlaybackEvent& event) {
     }
     if (exit_requested_.load()) {
         // Exit 结束本轮上报，但不阻止用户通过新的唤醒打断告别 TTS。
-        ESP_LOGI(TAG, "退出请求：TTS 播放结束，恢复唤醒检测但保持待命");
+        ESP_LOGI(TAG, "退出请求：TTS 播放结束，保持唤醒检测并进入待命");
         if (GetDeviceState() != kDeviceStateIdle) {
             SetDeviceState(kDeviceStateIdle);
         }
-        audio_service_.EnableWakeWordDetection(false);
+        // 退出期间唤醒模型持续运行；幂等开启即可，避免 Stop/Start 卸载重载模型。
         audio_service_.EnableWakeWordDetection(true);
         exit_requested_.store(false);
         return;
