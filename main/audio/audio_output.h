@@ -27,13 +27,15 @@ struct AudioPlaybackConfig {
 
 // 16 kHz、单声道、16-bit PCM 每秒约 32 KiB。
 constexpr size_t kAudioPlayerInitialPrebufferBytes = 16 * 1024;
-constexpr size_t kAudioTtsInitialPrebufferBytes = 4 * 1024;
-constexpr size_t kAudioTtsRecoveryPrebufferBytes = 8 * 1024;
-constexpr uint32_t kAudioTtsPrebufferMaxWaitMs = 200;
+// 云端分块 TTS 实测生成速度低于播放速度。优先积累约 3 秒 PCM；
+// 短回复 EOF 时立即放行，避免为了水位等待不存在的后续数据。
+constexpr size_t kAudioTtsInitialPrebufferBytes = 96 * 1024;
+constexpr size_t kAudioTtsRecoveryPrebufferBytes = 64 * 1024;
+constexpr uint32_t kAudioTtsPrebufferMaxWaitMs = 0;
 constexpr uint32_t kAudioTtsUnderrunGraceMs = 60;
-// TTS 最多解码约 1 秒，回落到半秒再继续生产，避免高优先级解码超前数秒。
-constexpr size_t kAudioTtsMaxBufferedPcmBytes = 32 * 1024;
-constexpr size_t kAudioTtsProducerResumeBytes = 16 * 1024;
+// 预缓冲门槛必须低于生产者上限，否则解码线程会被反压，导致永不首播。
+constexpr size_t kAudioTtsMaxBufferedPcmBytes = 128 * 1024;
+constexpr size_t kAudioTtsProducerResumeBytes = 112 * 1024;
 // 本地提示音首块立即输出；欠载恢复也只等约一帧，不套用网络流缓冲。
 constexpr size_t kAudioPromptInitialPrebufferBytes = 0;
 constexpr size_t kAudioPromptRecoveryPrebufferBytes = 1152;

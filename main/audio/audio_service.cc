@@ -885,6 +885,7 @@ void AudioService::AudioOutputTask() {
 // 同一工作任务兼顾下行 Opus 解码和上行 PCM 编码；两侧共享队列锁。
 // 上报关闭时不做无消费者的上行编码；下行解码不受影响。
 void AudioService::OpusCodecTask() {
+    AudioYieldPolicy yield_policy;
     bool encoder_has_generation = false;
     uint32_t encoder_generation = 0;
     int64_t stats_started_us = esp_timer_get_time();
@@ -945,7 +946,7 @@ void AudioService::OpusCodecTask() {
             lock.unlock();
 
             // 编码器由此任务独占复位，防止停止/重开上报时携带旧会话状态。
-            if (const auto ticks = AudioYieldDelayTicks(xTaskGetTickCount(), pdMS_TO_TICKS(100)); ticks) {
+            if (const auto ticks = yield_policy.DelayTicks(xTaskGetTickCount(), pdMS_TO_TICKS(100)); ticks) {
                 vTaskDelay(ticks);
             }
             if (opus_encoder_ != nullptr &&

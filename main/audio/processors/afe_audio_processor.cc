@@ -233,6 +233,7 @@ void AfeAudioProcessor::ApplySpeechAgc(std::vector<int16_t>& data) {
 }
 
 void AfeAudioProcessor::AudioProcessorTask() {
+    AudioYieldPolicy yield_policy;
     size_t processed_frames = 0;
     int64_t stats_started_us = esp_timer_get_time();
     uint32_t output_frames = 0;
@@ -256,7 +257,7 @@ void AfeAudioProcessor::AudioProcessorTask() {
             continue;
         }
         // 在 fetch 返回后检查，避免阻塞等待跨过共同让步窗口。
-        if (const auto ticks = AudioYieldDelayTicks(xTaskGetTickCount(), pdMS_TO_TICKS(100)); ticks) {
+        if (const auto ticks = yield_policy.DelayTicks(xTaskGetTickCount(), pdMS_TO_TICKS(100)); ticks) {
             vTaskDelay(ticks);
         }
         if (++processed_frames % 300 == 0) {

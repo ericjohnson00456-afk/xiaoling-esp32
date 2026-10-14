@@ -5,19 +5,25 @@
 #include <cstdio>
 
 int main() {
-    assert(StreamingReadBytes(1024, false) == 256);
-    assert(StreamingReadBytes(1024, true) == 1024);
-    assert(StreamingReadBytes(128, true) == 128);
-    assert(StreamingReadBytes(0, false) == 0);
-    assert(AudioYieldDelayTicks(100, 10) == 1);
-    assert(AudioYieldDelayTicks(101, 10) == 0);
-    assert(AudioYieldDelayTicks(109, 10) == 0);
-    assert(AudioYieldDelayTicks(110, 10) == 1);
-    assert(AudioYieldDelayTicks(110, 0) == 0);
+    assert(StreamingReadBytes(1024, false, true) == 256);
+    assert(StreamingReadBytes(1024, true, true) == 256);
+    assert(StreamingReadBytes(1024, true, false) == 1024);
+    assert(StreamingReadBytes(128, true, true) == 128);
+    assert(StreamingReadBytes(0, false, false) == 0);
+    AudioYieldPolicy yield_policy;
+    assert(yield_policy.DelayTicks(101, 10) == 0);
+    assert(yield_policy.DelayTicks(103, 10) == 0);
+    assert(yield_policy.DelayTicks(111, 10) == 1); // 每 20 ms 一帧，错过 phase==0 也会让步。
+    assert(yield_policy.DelayTicks(113, 10) == 0);
+    assert(yield_policy.DelayTicks(121, 10) == 1);
+    assert(yield_policy.DelayTicks(129, 0) == 0);
     assert(kAudioTtsInitialPrebufferBytes < kAudioTtsProducerResumeBytes);
     assert(kAudioTtsRecoveryPrebufferBytes < kAudioTtsProducerResumeBytes);
     assert(kAudioTtsProducerResumeBytes < kAudioTtsMaxBufferedPcmBytes);
-    assert(kAudioTtsMaxBufferedPcmBytes == 32 * 1024);
+    assert(kAudioTtsMaxBufferedPcmBytes == 128 * 1024);
+    assert(kAudioTtsInitialPrebufferBytes == 96 * 1024);
+    assert(kAudioTtsRecoveryPrebufferBytes == 64 * 1024);
+    assert(kAudioTtsPrebufferMaxWaitMs == 0);
     const auto grace = kAudioTtsUnderrunGraceMs;
     // 取走队尾、下一帧在 DMA 仍播放时到达：不许人为添加恢复停顿。
     assert(!ShouldRebufferPlayback(grace, 0, true, true, false, true));

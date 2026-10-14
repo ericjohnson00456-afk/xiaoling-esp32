@@ -39,7 +39,7 @@ namespace {
 // 实时 TTS 响应可能只包含下一个 MP3 帧的一部分。云端按片段生成语音，
 // 每次返回的数据可能不足一个完整 MP3 帧，因此要尽快把已有字节交给解码器，
 // 不要让 esp_http_client_read() 等待更大的数据块。
-// 首帧先读 256 字节；解码开始后按 1 KiB 突发拉流，减少持续播放的碎片开销。
+// 实时 chunked TTS 一直按 256 字节读取；文件式响应首帧后按 1 KiB 读取。
 // 保留短正文超时，允许不足 1 KiB 时返回部分内容；下面的
 // 50 ms 正文超时也能在数据不足时及时返回部分内容。
 constexpr size_t kStreamingHttpReadSize = 1024;
@@ -1029,8 +1029,9 @@ int EspSimplePlayerBackend::HandleHttpIoEvent(http_stream_event_msg_t* event) {
         int read_len = 0;
         int read_errno = 0;
         uint32_t eagain_retries = 0;
+        const bool chunked = esp_http_client_is_chunked_response(client);
         const auto requested_bytes = StreamingReadBytes(
-            static_cast<size_t>(event->buffer_len), output_chunks_.load() != 0);
+            static_cast<size_t>(event->buffer_len), output_chunks_.load() != 0, chunked);
         do {
             errno = 0;
             read_len = esp_http_client_read(

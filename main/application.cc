@@ -546,7 +546,9 @@ void Application::ProcessMainEvents(EventBits_t bits) {
         PublishWifiIcon();
         Ui::UpdateStatusBar();
 
-        if (GetDeviceState() == kDeviceStateListening && listening_started_at_us_ > 0) {
+        // TTS 已接纳但仍在积累首播 PCM 时，录音空闲超时不应截断回复。
+        if (GetDeviceState() == kDeviceStateListening && listening_started_at_us_ > 0 &&
+            !tts_waiting_for_playback_.load()) {
             const int32_t timeout_ms = KvUser::GetIdleExitTimeoutMs();
             const int64_t elapsed_ms =
                 (esp_timer_get_time() - listening_started_at_us_) / 1000;
