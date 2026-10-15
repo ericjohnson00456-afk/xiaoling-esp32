@@ -39,10 +39,11 @@ constexpr size_t kAudioTtsProducerResumeBytes = 112 * 1024;
 // 本地提示音首块立即输出；欠载恢复也只等约一帧，不套用网络流缓冲。
 constexpr size_t kAudioPromptInitialPrebufferBytes = 0;
 constexpr size_t kAudioPromptRecoveryPrebufferBytes = 1152;
-// TF 本地音乐用约 1 秒启动/恢复，并在 1.5～2 秒之间形成反压回差。
-constexpr size_t kAudioLocalFilePrebufferBytes = 32 * 1024;
-constexpr size_t kAudioLocalFileProducerResumeBytes = 48 * 1024;
-constexpr size_t kAudioLocalFileMaxBufferedBytes = 64 * 1024;
+// CoreS3 SD 与 LCD 共用 SPI；增加本地 PCM 储备以吸收读卡/刷屏抖动。
+// 按 16 kHz 单声道约 6 秒启动/恢复，12～16 秒形成生产者反压回差。
+constexpr size_t kAudioLocalFilePrebufferBytes = 192 * 1024;
+constexpr size_t kAudioLocalFileProducerResumeBytes = 384 * 1024;
+constexpr size_t kAudioLocalFileMaxBufferedBytes = 512 * 1024;
 
 class AudioOutput {
 public:

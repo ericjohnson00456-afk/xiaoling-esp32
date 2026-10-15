@@ -46,7 +46,9 @@
 /* TTS HTTP delivers MP3 in bursty chunks. Keep enough decoded PCM to absorb
  * multi-second gaps between network reads; the queue is allocated in PSRAM
  * on this board. Short clips bypass the gate when the stream finishes. */
-#define MAX_PLAYER_PLAYBACK_TASKS_IN_QUEUE 192
+// Local SD playback may hold several hundred small decoded PCM chunks while
+// the shared SPI bus is temporarily owned by the LCD.
+#define MAX_PLAYER_PLAYBACK_TASKS_IN_QUEUE 768
 #define MAX_DECODE_PACKETS_IN_QUEUE (2400 / OPUS_FRAME_DURATION_MS)
 /* 上报期间只保留最近 2.4 秒 Opus；关闭上报时不进行无消费者的编码。 */
 #define MAX_OPUS_PACKETS_IN_QUEUE (2400 / OPUS_FRAME_DURATION_MS)

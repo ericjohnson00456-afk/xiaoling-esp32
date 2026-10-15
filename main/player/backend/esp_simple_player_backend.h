@@ -75,6 +75,8 @@ private:
     port_release original_output_release_ = nullptr;
     void* original_output_ctx_ = nullptr;
     DecodeYieldPolicy decode_yield_policy_;
+    esp_gmf_io_t* file_input_ = nullptr;
+    int64_t file_stats_logged_us_ = 0;
     std::atomic_bool low_latency_prompt_{false};
     std::atomic_bool tts_decode_{false};
     std::atomic_bool tts_decode_boost_{false};

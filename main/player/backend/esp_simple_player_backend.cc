@@ -48,8 +48,8 @@ constexpr size_t kStreamingHttpBufferSize = 32 * 1024;
 // especially important when an SD card shares its SPI bus with the LCD: a
 // synchronous fread/decode chain cannot sustain high-bitrate tracks while
 // display flushes are active.
-constexpr size_t kFileReadSize = 4 * 1024;
-constexpr size_t kFileBufferSize = 32 * 1024;
+constexpr size_t kFileReadSize = 16 * 1024;
+constexpr size_t kFileBufferSize = 256 * 1024;
 constexpr size_t kFileInputStackSize = 4 * 1024;
 constexpr char kBufferedFileIoName[] = "io_file_buffered";
 // 建链阶段由 HTTP 客户端先在 10 秒返回，外层 12 秒看门狗负责兜底；请求
@@ -69,6 +69,7 @@ constexpr UBaseType_t kPlayerInputPriority = 6;
 constexpr UBaseType_t kPlayerDecodePriority = 6;
 #if CONFIG_FREERTOS_NUMBER_OF_CORES > 1
 constexpr BaseType_t kPlayerCommandCore = 1;
+constexpr BaseType_t kCoreS3FileInputCore = 0;
 #else
 constexpr BaseType_t kPlayerCommandCore = tskNO_AFFINITY;
 #endif
@@ -145,6 +146,9 @@ int EspSimplePlayerBackend::ConfigureInputIo(esp_asp_handle_t handle, void* ctx)
     const bool is_file = input_tag != nullptr &&
                          strcasecmp(input_tag, kBufferedFileIoName) == 0;
 
+    engine->file_input_ = is_file ? static_cast<esp_gmf_io_t*>(input) : nullptr;
+    engine->file_stats_logged_us_ = esp_timer_get_time();
+
     if (is_file) {
         ESP_LOGI(TAG,
                  "文件输入任务已配置: read=%u, buffer=%u bytes, "
@@ -152,7 +156,7 @@ int EspSimplePlayerBackend::ConfigureInputIo(esp_asp_handle_t handle, void* ctx)
                  static_cast<unsigned>(kFileReadSize),
                  static_cast<unsigned>(kFileBufferSize),
                  static_cast<unsigned>(kPlayerInputPriority),
-                 kPlayerCommandCore);
+                 engine->file_input_->io_cfg.thread.core);
         return ESP_GMF_ERR_OK;
     }
 
@@ -277,10 +281,15 @@ bool EspSimplePlayerBackend::Initialize(AudioOutput* audio_output, EventCallback
     esp_asp_cfg_t config = {};
     config.out.cb = OutputCallback;
     config.out.user_ctx = this;
-    // 解码任务与网络输入任务一样运行在次级核心。
+    // CoreS3 的 AFE、唤醒与 LCD 已占用 CPU1；解码放到空闲的 CPU0，
+    // 文件预读与解码在 CPU0 协同，避免 PCM 持续供给低于播放速度。
     config.task_prio = kPlayerDecodePriority;
     config.task_stack = 8 * 1024;
+#if CONFIG_BOARD_TYPE_M5STACK_CORE_S3
+    config.task_core = 0;
+#else
     config.task_core = 1;
+#endif
     // 解码任务使用 8 KiB 栈，并放在 PSRAM 中，以便在多个 TLS 流并发时
     // 为 Wi-Fi/lwIP 和 DMA 保留紧张的片上 SRAM。
     config.task_stack_in_ext = true;
@@ -303,7 +312,12 @@ bool EspSimplePlayerBackend::Initialize(AudioOutput* audio_output, EventCallback
     file_cfg.name = kBufferedFileIoName;
     file_cfg.io_cfg.thread.stack = kFileInputStackSize;
     file_cfg.io_cfg.thread.prio = kPlayerInputPriority;
-    file_cfg.io_cfg.thread.core = kPlayerCommandCore;
+    file_cfg.io_cfg.thread.core =
+#if CONFIG_BOARD_TYPE_M5STACK_CORE_S3
+        kCoreS3FileInputCore;
+#else
+        kPlayerCommandCore;
+#endif
     file_cfg.io_cfg.thread.stack_in_ext = true;
     file_cfg.io_cfg.buffer_cfg.io_size = kFileReadSize;
     file_cfg.io_cfg.buffer_cfg.buffer_size = kFileBufferSize;
@@ -1149,6 +1163,21 @@ int EspSimplePlayerBackend::HandleOutput(uint8_t* data, int data_size) {
 esp_gmf_err_io_t EspSimplePlayerBackend::BudgetAcquire(
         void* ctx, esp_gmf_payload_t* load, uint32_t wanted, int wait_ticks) {
     auto* engine = static_cast<EspSimplePlayerBackend*>(ctx);
+    const auto now = esp_timer_get_time();
+    if (engine->file_input_ != nullptr && now - engine->file_stats_logged_us_ >= 5000000) {
+        uint32_t filled = 0;
+        if (engine->file_input_->data_bus != nullptr) {
+            esp_gmf_db_get_filled_size(engine->file_input_->data_bus, &filled);
+        }
+        uint32_t session;
+        {
+            std::lock_guard<std::mutex> lock(engine->mutex_);
+            session = engine->current_request_.session_id;
+        }
+        ESP_LOGI(TAG, "FilePerf: compressed=%lu, pcm=%u", static_cast<unsigned long>(filled),
+                 static_cast<unsigned>(engine->audio_output_->BufferedPlaybackBytes(session)));
+        engine->file_stats_logged_us_ = now;
+    }
     // 此回调在真实解码任务中执行，不借助私有 GMF 结构寻找 TaskHandle。
     // 同一流水线复用时按当前音源恢复优先级，不能让后续 TTS 沿用提示音提升。
     engine->decode_task_handle_.store(xTaskGetCurrentTaskHandle());
