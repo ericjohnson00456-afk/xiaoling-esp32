@@ -77,6 +77,8 @@ public:
     virtual AudioCodec* GetAudioCodec() = 0;
     // 未提供配置的版型不启用 SPI SD 卡服务。
     virtual const SdSpiCardConfig* GetSdCardConfig() { return nullptr; }
+    // TF 卡与 LCD 共用 SPI 总线的版型应返回 true，让播放器避开显示任务所在核心。
+    virtual bool IsSdCardSpiSharedWithDisplay() const { return false; }
     virtual bool GetTemperature(float& esp32temp);
     virtual Display* GetDisplay();
     virtual Camera* GetCamera();

@@ -3,6 +3,7 @@
 #include "audio/playback_stream_policy.h"
 
 #include "resource/resource.h"
+#include "boards/common/board.h"
 #include "xiaoling/conn/network_diagnostics.h"
 
 #include <esp_err.h>
@@ -69,7 +70,6 @@ constexpr UBaseType_t kPlayerInputPriority = 6;
 constexpr UBaseType_t kPlayerDecodePriority = 6;
 #if CONFIG_FREERTOS_NUMBER_OF_CORES > 1
 constexpr BaseType_t kPlayerCommandCore = 1;
-constexpr BaseType_t kCoreS3FileInputCore = 0;
 #else
 constexpr BaseType_t kPlayerCommandCore = tskNO_AFFINITY;
 #endif
@@ -281,15 +281,11 @@ bool EspSimplePlayerBackend::Initialize(AudioOutput* audio_output, EventCallback
     esp_asp_cfg_t config = {};
     config.out.cb = OutputCallback;
     config.out.user_ctx = this;
-    // CoreS3 的 AFE、唤醒与 LCD 已占用 CPU1；解码放到空闲的 CPU0，
-    // 文件预读与解码在 CPU0 协同，避免 PCM 持续供给低于播放速度。
+    // TF 与 LCD 共用 SPI 的版型将文件预读和解码放到 CPU0，
+    // 避免与显示、AFE 和唤醒任务争用同一个核心。
     config.task_prio = kPlayerDecodePriority;
     config.task_stack = 8 * 1024;
-#if CONFIG_BOARD_TYPE_M5STACK_CORE_S3
-    config.task_core = 0;
-#else
-    config.task_core = 1;
-#endif
+    config.task_core = Board::GetInstance().IsSdCardSpiSharedWithDisplay() ? 0 : 1;
     // 解码任务使用 8 KiB 栈，并放在 PSRAM 中，以便在多个 TLS 流并发时
     // 为 Wi-Fi/lwIP 和 DMA 保留紧张的片上 SRAM。
     config.task_stack_in_ext = true;
@@ -313,11 +309,7 @@ bool EspSimplePlayerBackend::Initialize(AudioOutput* audio_output, EventCallback
     file_cfg.io_cfg.thread.stack = kFileInputStackSize;
     file_cfg.io_cfg.thread.prio = kPlayerInputPriority;
     file_cfg.io_cfg.thread.core =
-#if CONFIG_BOARD_TYPE_M5STACK_CORE_S3
-        kCoreS3FileInputCore;
-#else
-        kPlayerCommandCore;
-#endif
+        Board::GetInstance().IsSdCardSpiSharedWithDisplay() ? 0 : kPlayerCommandCore;
     file_cfg.io_cfg.thread.stack_in_ext = true;
     file_cfg.io_cfg.buffer_cfg.io_size = kFileReadSize;
     file_cfg.io_cfg.buffer_cfg.buffer_size = kFileBufferSize;

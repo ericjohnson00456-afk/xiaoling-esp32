@@ -419,6 +419,8 @@ public:
         return &config;
     }
 
+    bool IsSdCardSpiSharedWithDisplay() const override { return true; }
+
     virtual Display* GetDisplay() override {
         return display_;
     }
