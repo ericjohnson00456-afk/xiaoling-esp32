@@ -4,6 +4,7 @@
 #include <esp_log.h>
 #include <esp_heap_caps.h>
 // #include <esp_cache.h>
+#include <cstdio>
 #include <cstring>
 #include <algorithm>
 #include <numeric>
@@ -11,6 +12,23 @@
 static const char *TAG = "StreamingModel";
 
 namespace micro_wake_word {
+
+namespace {
+
+std::string FormatProbabilityScores(const float* scores, size_t capacity,
+                                    size_t first, size_t count) {
+    std::string result;
+    result.reserve(count * 8);
+    for (size_t i = 0; i < count; ++i) {
+        char score[32];
+        std::snprintf(score, sizeof(score), "%s%.3f", i == 0 ? "" : ", ",
+                      scores[(first + i) % capacity]);
+        result += score;
+    }
+    return result;
+}
+
+}  // namespace
 
 bool StreamingModel::PerformStreamingInference(const int8_t features[PREPROCESSOR_FEATURE_SIZE]) {
     std::lock_guard<std::mutex> lock(inference_mutex_);
@@ -179,6 +197,16 @@ bool StreamingModel::PerformStreamingInference(const int8_t features[PREPROCESSO
 
     recent_streaming_probabilities_[last_n_index_] = probability;
     last_n_index_ = (last_n_index_ + 1) % sliding_window_size_;
+    if (wake_score_trace_.Push(probability)) {
+        const auto scores = FormatProbabilityScores(
+            wake_score_trace_.After().data(), WakeScoreTrace::kCount, 0,
+            WakeScoreTrace::kCount);
+        ESP_LOGW(TAG,
+                 "Wake scores AFTER20: model='%s', trace=%lu, count=%u, order=oldest->newest, scores=[%s]",
+                 wake_score_capture_name_.c_str(),
+                 static_cast<unsigned long>(wake_score_trace_.Id()),
+                 static_cast<unsigned>(WakeScoreTrace::kCount), scores.c_str());
+    }
 
     return true;
 }
@@ -186,6 +214,7 @@ bool StreamingModel::PerformStreamingInference(const int8_t features[PREPROCESSO
 void StreamingModel::ResetProbabilities() {
     std::fill(recent_streaming_probabilities_.begin(), recent_streaming_probabilities_.end(), 0);
     last_n_index_ = 0;
+    wake_score_trace_.Reset();
 }
 
 bool StreamingModel::ResetState() {
@@ -380,6 +409,7 @@ void WakeWordModel::LogModelConfig() {
     ESP_LOGI(TAG, "  Probability cutoff: %.4f", probability_cutoff_);
     ESP_LOGI(TAG, "  Sliding window size: %d", sliding_window_size_);
     ESP_LOGI(TAG, "  Tensor arena size: %d bytes", tensor_arena_size_);
+    ESP_LOGI(TAG, "  Wake score trace: before=20, trigger=separate, after=20");
 }
 
 bool WakeWordModel::DetermineDetected() {
@@ -419,6 +449,19 @@ bool WakeWordModel::DetermineDetected() {
                  "probability is %.3f",
                  wake_word_.c_str(), sliding_window_average,
                  recent_streaming_probabilities_[(last_n_index_ + sliding_window_size_ - 1) % sliding_window_size_]);
+        wake_score_capture_name_ = wake_word_;
+        if (wake_score_trace_.Begin()) {
+            const auto scores = FormatProbabilityScores(
+                wake_score_trace_.Before().data(), WakeScoreTrace::kCount, 0,
+                wake_score_trace_.BeforeCount());
+            ESP_LOGW(TAG,
+                     "Wake scores BEFORE20: model='%s', trace=%lu, trigger=%.3f, count=%u, order=oldest->newest, scores=[%s]",
+                     wake_word_.c_str(),
+                     static_cast<unsigned long>(wake_score_trace_.Id()),
+                     wake_score_trace_.Trigger(),
+                     static_cast<unsigned>(wake_score_trace_.BeforeCount()),
+                     scores.c_str());
+        }
         return true;
     }
 

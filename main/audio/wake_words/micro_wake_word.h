@@ -34,6 +34,7 @@ public:
     void Start() override;
     void Pause();
     bool ResetInputState();
+    bool IsWakeScoreCaptureActive() const { return wake_score_capture_active_.load(); }
     void Stop() override;
     size_t GetFeedSize() override;
     const std::string& GetLastDetectedWakeWord() const override { return last_detected_wake_word_; }
@@ -55,6 +56,7 @@ private:
     std::mutex mutex_;
     bool initialized_ = false;
     std::atomic_bool running_{false};
+    std::atomic_bool wake_score_capture_active_{false};
     bool detected_ = false;
     bool frontend_initialized_ = false;
     bool models_loaded_ = false;  // 添加模型加载状态标志
@@ -89,6 +91,7 @@ private:
     bool DetectWakeWords();
     bool GenerateFeaturesForWindow(int8_t features[PREPROCESSOR_FEATURE_SIZE]);
     void ResetStates();
+    bool ResetInputStateLocked();
     bool RegisterStreamingOps(tflite::MicroMutableOpResolver<20> &op_resolver);
     bool HasEnoughSamples();
     uint16_t GetNewSamplesToGet() { return features_step_size_ * 16; } // 16kHz / 1000ms * step_size

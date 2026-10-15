@@ -1479,13 +1479,17 @@ void AudioService::EnableWakeWordDetection(bool enable) {
     }
 }
 
-// MicroWakeWord 使用轻量 Pause；其他实现退回普通 Stop。
+// MicroWakeWord 仅在前后评分采样期暂缓 Pause，采满后恢复原有复位流程。
 void AudioService::PauseWakeWordDetection() {
 #if CONFIG_USE_MICRO_WAKE_WORD
     if (!wake_word_) {
         return;
     }
     std::lock_guard<std::mutex> inference_lock(wake_inference_mutex_);
+    if (static_cast<MicroWakeWord*>(wake_word_.get())->IsWakeScoreCaptureActive()) {
+        // 首次唤醒已投递，避免后组 20 次真实评分被 Pause/Start 截断。
+        return;
+    }
     wake_word_running_.store(false);
     ClearProcessedWakeQueue();
     static_cast<MicroWakeWord*>(wake_word_.get())->Pause();
@@ -2180,10 +2184,11 @@ void AudioService::SetMicroWakeWordModel(const void* model_data, size_t model_si
             ESP_LOGI(TAG, "本地压力测试捕获唤醒: %s (不创建云端会话)", wake_word.c_str());
             return;
         }
-        // The callback runs under MicroWakeWord's model lock, so Stop() would
-        // deadlock here. Stop feeding immediately; the application task will
-        // reset and restart the detector synchronously.
-        wake_word_running_.store(false);
+        // 回调持有模型锁；评分采样期间保持喂帧，收满后由模型自行复位。
+        // 不在这里同步 Stop，否则会与模型锁死锁。
+        if (!static_cast<MicroWakeWord*>(wake_word_.get())->IsWakeScoreCaptureActive()) {
+            wake_word_running_.store(false);
+        }
         if (callbacks_.on_wake_word_detected) {
             callbacks_.on_wake_word_detected(wake_word);
         }

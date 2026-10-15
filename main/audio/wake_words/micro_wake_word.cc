@@ -119,20 +119,38 @@ void MicroWakeWord::Feed(const std::vector<int16_t>& data) {
 
     // Process available data
     while (HasEnoughSamples()) {
+        const bool capturing = wake_score_capture_active_.load();
         UpdateModelProbabilities();
+
+        if (capturing) {
+            const bool pending = std::any_of(
+                wake_word_models_.begin(), wake_word_models_.end(),
+                [](const auto& model) { return model->IsWakeScoreCaptureActive(); });
+            if (!pending) {
+                // 后组采满后才执行原有复位，避免把新会话的分数混入本轮日志。
+                wake_score_capture_active_ = false;
+                if (!ResetInputStateLocked()) {
+                    ESP_LOGE(TAG, "Wake score capture completed, model reset failed");
+                    ResetStates();
+                } else {
+                    ESP_LOGI(TAG, "Wake score capture completed; wake model reset after AFTER20");
+                }
+            }
+            continue;
+        }
         
         if (DetectWakeWords()) {
             last_detected_wake_word_ = detected_wake_word_;
             detected_ = true;
+            wake_score_capture_active_ = true;
             
             if (detection_callback_) {
                 detection_callback_(detected_wake_word_);
             }
             
-            // Reset for next detection
+            // 保持流式状态收集后续 20 次评分，再恢复原有复位行为。
             detected_wake_word_.clear();
             detected_ = false;
-            ResetStates();
         }
     }
 }
@@ -193,6 +211,10 @@ bool MicroWakeWord::ResetInputState() {
     if (!running_) {
         return true;
     }
+    return ResetInputStateLocked();
+}
+
+bool MicroWakeWord::ResetInputStateLocked() {
     if (!frontend_initialized_ || !models_loaded_) {
         ESP_LOGE(TAG, "Cannot reset input state before frontend and models are ready");
         return false;
@@ -214,6 +236,7 @@ void MicroWakeWord::Stop() {
     std::lock_guard<std::mutex> lock(mutex_);
     bool was_running = running_;
     running_ = false;
+    wake_score_capture_active_ = false;
     if (models_loaded_ || frontend_initialized_) {
         UnloadModels();
     }
@@ -401,6 +424,7 @@ bool MicroWakeWord::GenerateFeaturesForWindow(int8_t features[PREPROCESSOR_FEATU
 }
 
 void MicroWakeWord::ResetStates() {
+    wake_score_capture_active_ = false;
     ring_buffer_read_pos_ = 0;
     ring_buffer_write_pos_ = 0;
     ignore_windows_ = -MIN_SLICES_BEFORE_DETECTION;

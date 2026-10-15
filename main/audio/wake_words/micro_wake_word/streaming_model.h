@@ -1,5 +1,7 @@
 #pragma once
 
+#include "wake_score_trace.h"
+
 #include <vector>
 #include <string>
 #include <memory>
@@ -27,6 +29,7 @@ namespace micro_wake_word {
         virtual bool DetermineDetected() = 0;
 
         bool PerformStreamingInference(const int8_t features[PREPROCESSOR_FEATURE_SIZE]);
+        bool IsWakeScoreCaptureActive() const { return wake_score_trace_.Collecting(); }
 
         /// @brief Sets all recent_streaming_probabilities to 0
         void ResetProbabilities();
@@ -52,6 +55,8 @@ namespace micro_wake_word {
         size_t last_n_index_{0};
         size_t tensor_arena_size_;
         std::vector<float> recent_streaming_probabilities_;
+        WakeScoreTrace wake_score_trace_;
+        std::string wake_score_capture_name_;
 
         const uint8_t *model_start_;
         uint8_t *tensor_arena_{nullptr};
