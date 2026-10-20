@@ -130,9 +130,11 @@ bool XiaolingConn::EnsureAuthenticated() {
     return Authenticate();
 }
 
-bool XiaolingConn::ResolveKuwoMusicUrl(const std::string& item_id, std::string& url) {
+bool XiaolingConn::ResolveKuwoMusicUrl(const std::string& item_id,
+                                       const std::string& host,
+                                       std::string& url) {
     url.clear();
-    if (item_id.empty() || !EnsureAuthenticated()) {
+    if (item_id.empty() || host.empty() || !EnsureAuthenticated()) {
         return false;
     }
 
@@ -158,7 +160,7 @@ bool XiaolingConn::ResolveKuwoMusicUrl(const std::string& item_id, std::string& 
     int status_code = 0;
     std::string response_body;
     const std::string url_endpoint =
-        std::string("http://") + XiaolingConfig::GetHost() + "/v1/kuwo/tranklink";
+        std::string("http://") + host + "/v1/kuwo/tranklink";
     if (!PostJsonForToken(url_endpoint, request_body, headers, status_code, response_body, 3000) ||
         status_code < 200 || status_code >= 300) {
         ESP_LOGW(TAG, "获取酷我歌曲 URL 失败: itemid=%s status=%d", item_id.c_str(), status_code);

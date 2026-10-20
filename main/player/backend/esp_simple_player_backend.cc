@@ -63,7 +63,8 @@ constexpr uint64_t kTtsPcmStallTimeoutUs = 5ULL * 1000ULL * 1000ULL;
 // 稀疏的实时 TTS 数据一到达就返回部分正文，同时保留 GMF 对请求头和连接阶段
 // 的默认超时设置。
 constexpr int kStreamingHttpBodyReadTimeoutMs = 50;
-constexpr size_t kPlayerCommandStackSize = 8 * 1024;
+// player_ctl 的栈优先分配在 PSRAM；为 GMF 播放启动和 C++ 调用链保留余量。
+constexpr size_t kPlayerCommandStackSize = 16 * 1024;
 // 控制命令保持高优先级；拉流/解码低于 AFE 与本地唤醒，不能挤掉唤醒帧。
 constexpr UBaseType_t kPlayerCommandPriority = 8;
 constexpr UBaseType_t kPlayerInputPriority = 6;
@@ -360,6 +361,9 @@ bool EspSimplePlayerBackend::Initialize(AudioOutput* audio_output, EventCallback
         handle_ = nullptr;
         return false;
     }
+    ESP_LOGI(TAG, "播放器控制任务栈: %s, size=%u bytes",
+             command_task_stack_external_ ? "PSRAM" : "internal RAM",
+             static_cast<unsigned>(kPlayerCommandStackSize));
     const esp_timer_create_args_t timer_args = {
         .callback = [](void* arg) {
             static_cast<EspSimplePlayerBackend*>(arg)->HandleTtsPcmTimeout();

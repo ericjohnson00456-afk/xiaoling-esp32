@@ -4,12 +4,14 @@
 #include "playback_intent_manager.h"
 #include "system/psram_task.h"
 #include "ui/ui.h"
+#include "xiaoling/conn/xiaoling_config.h"
 
 #include <esp_log.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
 #include <memory>
+#include <new>
 #include <utility>
 
 namespace {
@@ -19,6 +21,7 @@ constexpr char kTag[] = "MusicIntent";
 struct KuwoUrlTaskContext {
   MusicIntent *intent;
   std::string item_id;
+  std::string host;
   AudioPlayer::MusicUrlResolveCallback callback;
   bool external_stack = false;
 };
@@ -195,18 +198,31 @@ bool MusicIntent::QueueKuwoUrlResolve(
   if (item_id.empty() || !callback) {
     return false;
   }
-  auto context = std::make_unique<KuwoUrlTaskContext>();
+  auto *context = new (std::nothrow) KuwoUrlTaskContext();
+  if (context == nullptr) {
+    return false;
+  }
   context->intent = this;
   context->item_id = item_id;
   context->callback = std::move(callback);
-  const BaseType_t task_result = PsramTask::Create(
-      ResolveKuwoUrlTask, "kuwo_resolve", 8192, context.get(), 4, nullptr,
-      &context->external_stack);
-  if (task_result != pdPASS) {
+
+  // Configuration reads must happen on the internal-RAM Application task.
+  // The resolver itself is deliberately kept on a PSRAM worker because it
+  // performs HTTP/TLS work and can use a large temporary stack.
+  app_->Schedule([context]() {
+    context->host = XiaolingConfig::GetHost();
+    const BaseType_t task_result = PsramTask::Create(
+        ResolveKuwoUrlTask, "kuwo_resolve", 8192, context, 4, nullptr,
+        &context->external_stack);
+    if (task_result == pdPASS) {
+      return;
+    }
+
     ESP_LOGE(kTag, "创建酷我 URL 解析任务失败");
-    return false;
-  }
-  context.release();
+    auto callback = std::move(context->callback);
+    delete context;
+    callback(false, {});
+  });
   return true;
 }
 
@@ -221,7 +237,8 @@ void MusicIntent::ResolveKuwoUrlTask(void *arg) {
   {
     std::lock_guard<std::mutex> lock(app->xiaoling_conn_mutex_);
     success = app->xiaoling_conn_ != nullptr &&
-              app->xiaoling_conn_->ResolveKuwoMusicUrl(context->item_id, url);
+              app->xiaoling_conn_->ResolveKuwoMusicUrl(
+                  context->item_id, context->host, url);
   }
   app->Schedule([callback = std::move(context->callback), success,
                  url = std::move(url)]() mutable {
