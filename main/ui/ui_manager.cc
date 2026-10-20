@@ -79,6 +79,21 @@ void UiManager::Dispatch(std::function<void()>&& task) {
     }
 }
 
+void UiManager::DispatchUrgent(std::function<void()>&& task) {
+    if (!task) {
+        return;
+    }
+    TaskHandle_t task_handle = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(task_mutex_);
+        urgent_tasks_.push_back(std::move(task));
+        task_handle = task_handle_;
+    }
+    if (task_handle != nullptr) {
+        xTaskNotifyGive(task_handle);
+    }
+}
+
 void UiManager::TaskEntry(void* arg) {
     static_cast<UiManager*>(arg)->TaskLoop();
 }
@@ -88,13 +103,23 @@ void UiManager::TaskLoop() {
         // 没有 UI 命令时阻塞休眠，不占用 CPU。
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
-        // 一次取走当前全部命令。执行期间不持有队列锁，其他任务仍可继续投递。
-        std::deque<std::function<void()>> pending;
-        {
-            std::lock_guard<std::mutex> lock(task_mutex_);
-            pending.swap(tasks_);
-        }
-        for (auto& task : pending) {
+        // 每次只取一个命令，urgent 命令可以插入普通命令之间，避免一批后台
+        // 刷新任务把唤醒提示、字幕清理等会话状态拖到后面。
+        while (true) {
+            std::function<void()> task;
+            {
+                std::lock_guard<std::mutex> lock(task_mutex_);
+                if (!urgent_tasks_.empty()) {
+                    task = std::move(urgent_tasks_.front());
+                    urgent_tasks_.pop_front();
+                } else if (!tasks_.empty()) {
+                    task = std::move(tasks_.front());
+                    tasks_.pop_front();
+                }
+            }
+            if (!task) {
+                break;
+            }
             task();
         }
     }

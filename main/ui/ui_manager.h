@@ -28,6 +28,8 @@ class LegacyDisplayAdapter;
  *     -> StartTask()               启动 UI 命令任务
  *
  * 运行链路：业务任务 -> Ui::XXX() -> Dispatch() -> FIFO 队列 -> UI 任务。
+ * 需要立即反映的会话状态使用 DispatchUrgent()；UI 任务会在普通命令之间
+ * 优先处理 urgent FIFO，避免字幕/唤醒提示被后台刷新任务阻塞。
  *
  * 导航操作内部都会持有 display lock，页面回调里可以直接操作 LVGL 对象。
  */
@@ -49,6 +51,12 @@ public:
      * 即使任务尚未启动，命令也会暂存在队列中，StartTask() 后统一处理。
      */
     void Dispatch(std::function<void()>&& task);
+
+    /*
+     * 投递需要尽快显示的 UI 命令。urgent 队列自身仍按先进先出执行，保证
+     * 同一语音会话内的字幕开始、更新、结束顺序不被打乱。
+     */
+    void DispatchUrgent(std::function<void()>&& task);
 
     bool initialized() const { return display_ != nullptr; }
     Display* display() const { return display_; }
@@ -81,5 +89,6 @@ private:
     std::unique_ptr<LegacyDisplayAdapter> legacy_display_adapter_;
     TaskHandle_t task_handle_ = nullptr;
     std::mutex task_mutex_;
+    std::deque<std::function<void()>> urgent_tasks_;
     std::deque<std::function<void()>> tasks_;
 };

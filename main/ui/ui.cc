@@ -169,7 +169,7 @@ bool Initialize() {
 
 void SetStatus(Status status) {
     // 这里只把操作放入队列，不在调用者（网络、音频或 Application）任务中直接改 UI。
-    UiManager::GetInstance().Dispatch([status]() {
+    UiManager::GetInstance().DispatchUrgent([status]() {
         current_localized_status = status;
         HomePresenter::GetInstance().SetStatus(LocalizeStatus(status),
                                                status == Status::Standby);
@@ -177,7 +177,7 @@ void SetStatus(Status status) {
 }
 
 void SetStatusText(std::string text) {
-    UiManager::GetInstance().Dispatch([text = std::move(text)]() mutable {
+    UiManager::GetInstance().DispatchUrgent([text = std::move(text)]() mutable {
         current_localized_status.reset();
         HomePresenter::GetInstance().SetStatus(std::move(text), false);
     });
@@ -230,7 +230,7 @@ void SetChatMessage(std::string role, std::string content) {
 }
 
 void SetVoicePrompt(std::string text) {
-    UiManager::GetInstance().Dispatch([text = std::move(text)]() mutable {
+    UiManager::GetInstance().DispatchUrgent([text = std::move(text)]() mutable {
         HomePresenter::GetInstance().SetText(std::move(text));
     });
 }
@@ -263,7 +263,7 @@ void SetEmotion(std::string emotion) {
     if (ShouldIgnoreStandbyEmotion(emotion)) {
         return;
     }
-    UiManager::GetInstance().Dispatch([emotion = std::move(emotion)]() mutable {
+    UiManager::GetInstance().DispatchUrgent([emotion = std::move(emotion)]() mutable {
         HomePresenter::GetInstance().SetEmotion(std::move(emotion));
     });
 }

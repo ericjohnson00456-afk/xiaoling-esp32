@@ -137,7 +137,7 @@ void VoiceSubtitleController::Start() {
     event_subscriptions_.push_back(AppEvent::Subscribe(
         AppEvent::Id::VoiceSessionStarted, [this](const AppEvent::Event& event) {
             const auto scope = event.Scope();
-            UiManager::GetInstance().Dispatch([this, scope]() {
+            UiManager::GetInstance().DispatchUrgent([this, scope]() {
                 if (!scope.IsCurrent()) return;
                 tts_progress_generation_.fetch_add(1);
                 latest_tts_audio_clock_ms_.store(0);
@@ -158,11 +158,11 @@ void VoiceSubtitleController::Start() {
     event_subscriptions_.push_back(AppEvent::Subscribe(
         AppEvent::Id::XiaolingTtsTextStart, [this](const AppEvent::Event& event) {
             const auto scope = event.Scope();
-            UiManager::GetInstance().Dispatch([this, scope]() { if (scope.IsCurrent()) OnTtsTextStart(); });
+            UiManager::GetInstance().DispatchUrgent([this, scope]() { if (scope.IsCurrent()) OnTtsTextStart(); });
         }));
     event_subscriptions_.push_back(AppEvent::Subscribe(
         AppEvent::Id::XiaolingTtsTextUpdate, [this](const AppEvent::Event& event) {
-            UiManager::GetInstance().Dispatch(
+            UiManager::GetInstance().DispatchUrgent(
                 [this, text = std::string(event.Text()), scope = event.Scope()]() {
                     if (scope.IsCurrent()) OnTtsTextUpdate(text);
                 });
@@ -170,12 +170,12 @@ void VoiceSubtitleController::Start() {
     event_subscriptions_.push_back(AppEvent::Subscribe(
         AppEvent::Id::XiaolingTtsTextEnd, [this](const AppEvent::Event& event) {
             const auto scope = event.Scope();
-            UiManager::GetInstance().Dispatch([this, scope]() { if (scope.IsCurrent()) OnTtsTextEnd(); });
+            UiManager::GetInstance().DispatchUrgent([this, scope]() { if (scope.IsCurrent()) OnTtsTextEnd(); });
         }));
     event_subscriptions_.push_back(AppEvent::Subscribe(
         AppEvent::Id::XiaolingTtsTextInterrupt, [this](const AppEvent::Event& event) {
             const auto scope = event.Scope();
-            UiManager::GetInstance().Dispatch([this, scope]() { if (scope.IsCurrent()) OnTtsTextInterrupt(); });
+            UiManager::GetInstance().DispatchUrgent([this, scope]() { if (scope.IsCurrent()) OnTtsTextInterrupt(); });
         }));
     event_subscriptions_.push_back(AppEvent::Subscribe(
         AppEvent::Id::XiaolingTtsStarted, [this](const AppEvent::Event& event) {
@@ -183,7 +183,7 @@ void VoiceSubtitleController::Start() {
             const uint32_t generation = tts_progress_generation_.fetch_add(1) + 1;
             latest_tts_audio_clock_ms_.store(0);
             tts_progress_dispatch_pending_.store(false);
-            UiManager::GetInstance().Dispatch([this, generation, scope]() {
+            UiManager::GetInstance().DispatchUrgent([this, generation, scope]() {
                 if (scope.IsCurrent() && generation == tts_progress_generation_.load()) {
                     OnTtsPlaying();
                 }
@@ -209,7 +209,7 @@ void VoiceSubtitleController::Start() {
             const uint32_t generation = tts_progress_generation_.fetch_add(1) + 1;
             latest_tts_audio_clock_ms_.store(0);
             tts_progress_dispatch_pending_.store(false);
-            UiManager::GetInstance().Dispatch([this, generation, scope]() {
+            UiManager::GetInstance().DispatchUrgent([this, generation, scope]() {
                 if (scope.IsCurrent() && generation == tts_progress_generation_.load()) {
                     OnTtsStopped();
                 }
@@ -251,7 +251,7 @@ void VoiceSubtitleController::QueueIatText(std::string text, AppEvent::EpochSnap
         }
     }
     if (schedule) {
-        UiManager::GetInstance().Dispatch([this]() { DrainIatText(); });
+        UiManager::GetInstance().DispatchUrgent([this]() { DrainIatText(); });
     }
 }
 
@@ -293,7 +293,7 @@ void VoiceSubtitleController::DrainIatText() {
         }
     }
     if (reschedule) {
-        UiManager::GetInstance().Dispatch([this]() { DrainIatText(); });
+        UiManager::GetInstance().DispatchUrgent([this]() { DrainIatText(); });
     }
 }
 
@@ -307,7 +307,7 @@ void VoiceSubtitleController::QueueTtsAudioProgress(uint32_t audio_clock_ms) {
     bool expected = false;
     if (!tts_progress_dispatch_pending_.compare_exchange_strong(expected, true)) return;
     const uint32_t generation = tts_progress_generation_.load();
-    UiManager::GetInstance().Dispatch([this, generation]() {
+    UiManager::GetInstance().DispatchUrgent([this, generation]() {
         if (generation != tts_progress_generation_.load()) return;
         const uint32_t handled_clock = latest_tts_audio_clock_ms_.load();
         OnTtsAudioProgress(handled_clock);
