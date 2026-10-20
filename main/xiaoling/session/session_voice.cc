@@ -1203,7 +1203,9 @@ void XiaolingSessionVoice::SetPendingSubtitleUrl(const std::string& url,
         timeline_valid_ = timeline_stream;
         reply_sid_ = reply_sid;
         pending_subtitle_url_ = url;
-        start_now = tts_audio_playing_;
+        // 音频会话建立后立即并行拉取字幕，让两条流各自先准备一小段。
+        // 首个真实 PCM 仍由 Application 发布 XiaolingTtsStarted，作为字幕时钟起点。
+        start_now = tts_audio_pending_ || tts_pipeline_running_ || tts_audio_playing_;
     }
     if (timeline_stream && reply_sid.empty()) {
         ESP_LOGW(TAG, "timeline 字幕帧缺少旧回复 sid，本次可显示字幕但不做打断位置上报");
@@ -1213,7 +1215,7 @@ void XiaolingSessionVoice::SetPendingSubtitleUrl(const std::string& url,
              static_cast<unsigned>(url.size()), timeline_stream ? 1 : 0,
              static_cast<unsigned>(reply_sid.size()), start_now ? 1 : 0);
     if (start_now) {
-        ESP_LOGI(TAG, "TTS 首帧 PCM 已输出，字幕 URL 到达后立即请求");
+        ESP_LOGI(TAG, "TTS 音频会话已建立，字幕与音频并行请求");
         StartPendingSubtitleStream();
     } else {
         ESP_LOGI(TAG, "%s字幕 URL 已暂存，等待 TTS 音频流水线运行",
@@ -1254,7 +1256,7 @@ void XiaolingSessionVoice::StartPendingSubtitleStream() {
         std::lock_guard<std::mutex> lock(subtitle_state_mutex_);
         if (pending_subtitle_url_.empty()) {
             ESP_LOGW(TAG,
-                     "扬声器已出声但没有待启动字幕 URL: timeline=%d, negotiated=%d",
+                     "没有待启动字幕 URL: timeline=%d, negotiated=%d",
                      timeline_subtitle_stream_ ? 1 : 0,
                      timeline_negotiated_ ? 1 : 0);
             return;
@@ -1274,10 +1276,10 @@ void XiaolingSessionVoice::OnTtsPipelinePlaying() {
         std::lock_guard<std::mutex> lock(subtitle_state_mutex_);
         tts_pipeline_running_ = true;
     }
-    // PLAYING means the HTTP request was sent, not that response audio has
-    // arrived. Keep the subtitle URL pending so two TLS handshakes do not
-    // overlap at the internal-memory peak.
-    ESP_LOGI(TAG, "TTS 音频 HTTPS 已就绪，字幕继续等待首帧 PCM");
+    // 音频 HTTP 已发出即可启动字幕 HTTP。字幕内容先缓存，等音频首个
+    // PCM 实际交给 codec 后再启动 UI 时钟，避免字幕先跑或落后太多。
+    ESP_LOGI(TAG, "TTS 音频 HTTPS 已就绪，启动字幕并行请求");
+    StartPendingSubtitleStream();
 }
 
 void XiaolingSessionVoice::OnTtsStarted() {
@@ -1296,8 +1298,6 @@ void XiaolingSessionVoice::OnTtsStarted() {
              "TTS 首个 PCM 已实际输出，字幕时钟启动: pending_url=%u, timeline=%d",
              static_cast<unsigned>(pending_subtitle_bytes),
              timeline_stream ? 1 : 0);
-    // 等 DAC 首帧输出后再启动字幕流，保证字幕和扬声器播放时序一致。
-    StartPendingSubtitleStream();
 }
 
 void XiaolingSessionVoice::OnTtsAudioProgress(uint32_t audio_clock_ms) {
@@ -1380,7 +1380,6 @@ void XiaolingSessionVoice::ResetTimelineStateLocked() {
 }
 
 void XiaolingSessionVoice::HandleSubtitleEvent(int event, const std::string& text, uint32_t generation) {
-    std::lock_guard<std::recursive_mutex> session_lock(session_mutex_);
     if (generation != event_generation_.load() ||
         !Xiaoling::voice_session_epoch.IsCurrent(generation)) return;
     if (event == 0) {
