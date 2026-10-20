@@ -16,7 +16,7 @@ public:
 
     static SdMusicService& GetInstance();
 
-    void Initialize(AuthorizationProvider authorization_provider);
+    void Initialize(std::string host, AuthorizationProvider authorization_provider);
     void OnCardInserted();
     void OnCardRemoved();
     void OnUnsupportedFileSystem();
@@ -38,16 +38,18 @@ private:
 
     void TryStartSync();
     void RunSync(uint32_t generation, const std::string& authorization,
-                 bool boot_initial_card);
+                 const std::string& host, bool boot_initial_card);
     void FinishWorker(uint32_t generation);
     void PublishState(const SdMusicSyncState& state) const;
     void ReportRemovedAsync(std::string card_id);
-    void ReconcileBootRemoval(const std::string& authorization);
+    void ReconcileBootRemoval(const std::string& authorization,
+                              const std::string& host);
     bool IsCurrent(uint32_t generation) const;
     static void SyncTaskEntry(void* arg);
     static void RemovedTaskEntry(void* arg);
 
     mutable std::mutex mutex_;
+    std::string host_;
     AuthorizationProvider authorization_provider_;
     std::string current_card_id_;
     TaskHandle_t worker_task_ = nullptr;

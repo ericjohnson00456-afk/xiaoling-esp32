@@ -1,7 +1,6 @@
 #include "sd_music_http.h"
 
 #include "board.h"
-#include "xiaoling/conn/xiaoling_config.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -131,12 +130,14 @@ void AppendRequestLogPreview(std::string& preview, const std::string& chunk,
 
 }  // namespace
 
-SdMusicHttp::SdMusicHttp(std::string authorization)
-    : authorization_(std::move(authorization)) {}
+SdMusicHttp::SdMusicHttp(std::string authorization, std::string host)
+    : authorization_(std::move(authorization)), host_(std::move(host)) {}
 
 SdMusicHttpResult SdMusicHttp::PostJson(const char* path,
                                         const std::string& body) const {
-    if (authorization_.empty()) return {ESP_ERR_INVALID_STATE, 0};
+    if (authorization_.empty() || host_.empty()) {
+        return {ESP_ERR_INVALID_STATE, 0};
+    }
     auto* network = Board::GetInstance().GetNetwork();
     if (network == nullptr) return {ESP_ERR_INVALID_STATE, 0};
     auto http = network->CreateHttp(0);
@@ -145,8 +146,7 @@ SdMusicHttpResult SdMusicHttp::PostJson(const char* path,
     http->SetHeader("Content-Type", "application/json");
     http->SetHeader("Authorization", authorization_);
     http->SetContent(std::string(body));
-    const std::string url = std::string("https://") +
-                            XiaolingConfig::GetHost() + path;
+    const std::string url = std::string("https://") + host_ + path;
     if (!http->Open("POST", url)) {
         http->Close();
         return {ESP_FAIL, 0};
@@ -200,7 +200,9 @@ SdMusicHttpResult SdMusicHttp::ReportFiles(
 SdMusicHttpResult SdMusicHttp::PostFiles(
         const std::string& card_id, const std::string& scan_id,
         const std::vector<SdMusicTrack>& tracks, bool is_last_batch) const {
-    if (authorization_.empty()) return {ESP_ERR_INVALID_STATE, 0};
+    if (authorization_.empty() || host_.empty()) {
+        return {ESP_ERR_INVALID_STATE, 0};
+    }
     auto* network = Board::GetInstance().GetNetwork();
     if (network == nullptr) return {ESP_ERR_INVALID_STATE, 0};
     auto http = network->CreateHttp(0);
@@ -210,8 +212,7 @@ SdMusicHttpResult SdMusicHttp::PostFiles(
     http->SetHeader("Content-Type", "application/json");
     http->SetHeader("Authorization", authorization_);
     http->SetHeader("Transfer-Encoding", "chunked");
-    const std::string url = std::string("https://") +
-                            XiaolingConfig::GetHost() + kFilesImportPath;
+    const std::string url = std::string("https://") + host_ + kFilesImportPath;
     if (!http->Open("POST", url)) {
         http->Close();
         return {ESP_FAIL, 0};

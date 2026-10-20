@@ -4,6 +4,7 @@
 #include "sd_card/sd_card_manager.h"
 #include "sd_card/sd_music_service.h"
 #include "xiaoling/conn/xiaoling_conn.h"
+#include "xiaoling/conn/xiaoling_config.h"
 
 #include <esp_log.h>
 
@@ -17,7 +18,10 @@ void Application::InitializeSdCard() {
 
     auto& manager = SdCardManager::GetInstance();
     auto& music_service = SdMusicService::GetInstance();
-    music_service.Initialize([this]() {
+    // Capture the cached environment host before SD workers move to PSRAM
+    // stacks, keeping the worker context independent from configuration state.
+    const std::string host = XiaolingConfig::GetHost();
+    music_service.Initialize(host, [this]() {
         std::lock_guard<std::mutex> lock(xiaoling_conn_mutex_);
         return xiaoling_conn_ != nullptr
                    ? xiaoling_conn_->GetHttpAuthorization()

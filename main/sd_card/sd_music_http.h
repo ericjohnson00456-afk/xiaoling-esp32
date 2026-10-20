@@ -15,7 +15,7 @@ struct SdMusicHttpResult {
 
 class SdMusicHttp {
 public:
-    explicit SdMusicHttp(std::string authorization);
+    SdMusicHttp(std::string authorization, std::string host);
 
     SdMusicHttpResult ReportCardEvent(const std::string& card_id,
                                       const char* event_type,
@@ -33,4 +33,5 @@ private:
                                 bool is_last_batch) const;
 
     std::string authorization_;
+    std::string host_;
 };

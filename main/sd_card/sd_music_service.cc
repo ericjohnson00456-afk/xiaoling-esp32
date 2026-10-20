@@ -99,6 +99,7 @@ struct SdMusicService::WorkerContext {
     SdMusicService* service = nullptr;
     uint32_t generation = 0;
     std::string authorization;
+    std::string host;
     bool boot_initial_card = false;
     bool external_stack = false;
 };
@@ -106,6 +107,7 @@ struct SdMusicService::WorkerContext {
 struct SdMusicService::RemovedContext {
     std::string card_id;
     std::string authorization;
+    std::string host;
     bool external_stack = false;
 };
 
@@ -114,8 +116,10 @@ SdMusicService& SdMusicService::GetInstance() {
     return service;
 }
 
-void SdMusicService::Initialize(AuthorizationProvider authorization_provider) {
+void SdMusicService::Initialize(std::string host,
+                                AuthorizationProvider authorization_provider) {
     std::lock_guard<std::mutex> lock(mutex_);
+    host_ = std::move(host);
     authorization_provider_ = std::move(authorization_provider);
     initialized_ = true;
 }
@@ -158,10 +162,10 @@ void SdMusicService::OnCardRemoved() {
     generation_.fetch_add(1);
     busy_.store(false);
     card_ready_.store(false);
-    {
+    RunOnInternalNvsStack([] {
         Settings settings(kSettingsNamespace, true);
         settings.EraseKey(kPresentCardKey);
-    }
+    });
     Ui::SetTfCardPresent(false);
     Ui::DismissSdMusicSync();
     Ui::ShowToast("设备已弹出TF卡", 3000);
@@ -187,13 +191,15 @@ void SdMusicService::OnCloudReady() {
     Ui::SetTfCardPresent(card_ready_.load());
 
     AuthorizationProvider provider;
+    std::string host;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         provider = authorization_provider_;
+        host = host_;
     }
     const std::string authorization = provider ? provider() : std::string{};
     if (!SdCardManager::GetInstance().IsMounted()) {
-        ReconcileBootRemoval(authorization);
+        ReconcileBootRemoval(authorization, host);
     }
     TryStartSync();
 }
@@ -235,6 +241,7 @@ bool SdMusicService::ClearFingerprint() {
 
 void SdMusicService::TryStartSync() {
     AuthorizationProvider provider;
+    std::string host;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!initialized_ || !pending_sync_ || worker_task_ != nullptr ||
@@ -242,6 +249,7 @@ void SdMusicService::TryStartSync() {
             return;
         }
         provider = authorization_provider_;
+        host = host_;
     }
     const std::string authorization = provider ? provider() : std::string{};
     if (authorization.empty()) {
@@ -253,6 +261,7 @@ void SdMusicService::TryStartSync() {
     context->service = this;
     context->generation = generation_.load();
     context->authorization = authorization;
+    context->host = std::move(host);
     TaskHandle_t task = nullptr;
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -279,7 +288,7 @@ void SdMusicService::SyncTaskEntry(void* arg) {
     std::unique_ptr<WorkerContext> context(static_cast<WorkerContext*>(arg));
     const bool external_stack = context->external_stack;
     context->service->RunSync(context->generation, context->authorization,
-                              context->boot_initial_card);
+                              context->host, context->boot_initial_card);
     context->service->FinishWorker(context->generation);
     context.reset();
     PsramTask::Delete(external_stack);
@@ -292,6 +301,7 @@ bool SdMusicService::IsCurrent(uint32_t generation) const {
 
 void SdMusicService::RunSync(uint32_t generation,
                              const std::string& authorization,
+                             const std::string& host,
                              bool boot_initial_card) {
     busy_.store(true);
     // 上电已有卡时先完成指纹判断；只有确实需要同步时才显示扫描页。
@@ -327,7 +337,7 @@ void SdMusicService::RunSync(uint32_t generation,
         }
     }
 
-    SdMusicHttp http(authorization);
+    SdMusicHttp http(authorization, host);
     const SdMusicHttpResult inserted =
         http.ReportCardEvent(info.card_id, "inserted", info.capacity_bytes);
     if (!IsCurrent(generation)) {
@@ -484,9 +494,11 @@ bool SdMusicService::WaitForFileAccessToStop(uint32_t timeout_ms) const {
 void SdMusicService::ReportRemovedAsync(std::string card_id) {
     if (card_id.empty()) return;
     AuthorizationProvider provider;
+    std::string host;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         provider = authorization_provider_;
+        host = host_;
     }
     const std::string authorization = provider ? provider() : std::string{};
     if (authorization.empty()) {
@@ -496,6 +508,7 @@ void SdMusicService::ReportRemovedAsync(std::string card_id) {
     auto context = std::make_unique<RemovedContext>();
     context->card_id = std::move(card_id);
     context->authorization = authorization;
+    context->host = std::move(host);
     if (PsramTask::Create(RemovedTaskEntry, "sd_removed", 8192,
                           context.get(), kTaskPriority, nullptr,
                           &context->external_stack) != pdPASS) {
@@ -508,7 +521,7 @@ void SdMusicService::ReportRemovedAsync(std::string card_id) {
 void SdMusicService::RemovedTaskEntry(void* arg) {
     std::unique_ptr<RemovedContext> context(static_cast<RemovedContext*>(arg));
     const bool external_stack = context->external_stack;
-    SdMusicHttp http(context->authorization);
+    SdMusicHttp http(context->authorization, context->host);
     const auto result = http.ReportCardEvent(context->card_id, "removed", 0);
     if (result.error != ESP_OK) {
         ESP_LOGW(kTag, "removed 事件上报失败: status=%d, error=%s",
@@ -518,7 +531,8 @@ void SdMusicService::RemovedTaskEntry(void* arg) {
     PsramTask::Delete(external_stack);
 }
 
-void SdMusicService::ReconcileBootRemoval(const std::string& authorization) {
+void SdMusicService::ReconcileBootRemoval(const std::string& authorization,
+                                          const std::string& host) {
     std::string previous_card_id;
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -549,6 +563,7 @@ void SdMusicService::ReconcileBootRemoval(const std::string& authorization) {
     auto context = std::make_unique<RemovedContext>();
     context->card_id = std::move(previous_card_id);
     context->authorization = authorization;
+    context->host = host;
     if (PsramTask::Create(RemovedTaskEntry, "sd_boot_removed", 8192,
                           context.get(), kTaskPriority, nullptr,
                           &context->external_stack) == pdPASS) {

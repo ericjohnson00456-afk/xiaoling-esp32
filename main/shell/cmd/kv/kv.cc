@@ -7,6 +7,7 @@
 #include "system/settings.h"
 #include "ui/ui.h"
 #include "xiaoling/session/session_core.h"
+#include "xiaoling/conn/xiaoling_config.h"
 
 #include <cerrno>
 #include <algorithm>
@@ -676,8 +677,11 @@ int32_t GetDeviceMode() {
 }
 
 void SetDeviceMode(int32_t value) {
-    Settings settings(KvUser::kNamespace, true);
-    settings.SetInt("device_mode", value);
+    {
+        Settings settings(KvUser::kNamespace, true);
+        settings.SetInt("device_mode", value);
+    }
+    XiaolingConfig::Refresh();
 }
 
 int32_t GetIntMode() {

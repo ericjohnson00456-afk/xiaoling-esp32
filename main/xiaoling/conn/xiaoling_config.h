@@ -3,6 +3,8 @@
 
 #include "shell/cmd/kv/kv_user.h"
 
+#include <atomic>
+#include <cstdint>
 #include <string>
 
 #define LSC_HOST             "api.listenai.com"
@@ -20,8 +22,28 @@ enum class Environment {
     Integration = 2,
 };
 
+namespace detail {
+
+inline std::atomic<int32_t>& CachedDeviceMode() {
+    static std::atomic<int32_t> mode{-1};
+    return mode;
+}
+
+}  // namespace detail
+
+// Read the environment once on an internal-RAM startup task. Network workers
+// may use the resulting host without entering NVS while Flash cache is off.
+inline void Refresh() {
+    detail::CachedDeviceMode().store(KvUser::GetDeviceMode(),
+                                     std::memory_order_release);
+}
+
+inline void Initialize() {
+    Refresh();
+}
+
 inline Environment GetEnvironment() {
-    switch (KvUser::GetDeviceMode()) {
+    switch (detail::CachedDeviceMode().load(std::memory_order_acquire)) {
         case static_cast<int32_t>(Environment::Staging):
             return Environment::Staging;
         case static_cast<int32_t>(Environment::Integration):

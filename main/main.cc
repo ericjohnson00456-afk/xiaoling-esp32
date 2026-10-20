@@ -5,6 +5,7 @@
 #include <esp_ota_ops.h>
 
 #include "application.h"
+#include "xiaoling/conn/xiaoling_config.h"
 
 #define TAG "main"
 
@@ -30,6 +31,7 @@ extern "C" void app_main(void)
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
+    XiaolingConfig::Initialize();
 
     const auto* running_partition = esp_ota_get_running_partition();
     if (running_partition != nullptr) {
