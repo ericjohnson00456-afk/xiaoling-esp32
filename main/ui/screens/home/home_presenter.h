@@ -35,6 +35,10 @@ public:
     void SetWifiIcon(std::string icon);
     void SetTfCardPresent(bool present);
     void SetAlarmActive(bool active);
+    // WebSocket 连接成功后才允许播放插入充电器提示动画。
+    // 置为 true 时会先同步当前电池状态，避免把连接前已存在的充电状态
+    // 误判为新的插入事件。
+    void SetChargingAnimationReady(bool ready);
     void UpdateBattery();
     void SetStatus(std::string status, bool standby = false);
     void SetMusicTrack(MusicTrack track);
@@ -82,6 +86,7 @@ private:
     bool alarm_active_ = false;
     int battery_level_ = 0;
     bool battery_charging_ = false;
+    bool charging_animation_ready_ = false;
     std::string status_text_;
     MusicTrack music_track_;
     bool music_paused_ = false;

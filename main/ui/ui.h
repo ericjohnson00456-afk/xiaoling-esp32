@@ -87,6 +87,8 @@ void SetMusicTrack(MusicTrack track);
 void SetMusicPaused(bool paused);
 // 在 Home 页电池图标旁显示倒计时运行标记。
 void SetAlarmActive(bool active);
+// WebSocket 连接成功后建立充电动画触发基线。
+void SetChargingAnimationReady(bool ready);
 void ShowAlarmRing(const AlarmSnapshot& alarm);
 void DismissAlarmRing();
 void ShowAlarmSuccess(const AlarmSnapshot& alarm, bool newly_created = false);

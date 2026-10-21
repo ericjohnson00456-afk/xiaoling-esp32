@@ -190,6 +190,27 @@ void HomePresenter::SetAlarmActive(bool active) {
     }
 }
 
+void HomePresenter::SetChargingAnimationReady(bool ready) {
+    charging_animation_ready_ = ready;
+    if (!ready) {
+        return;
+    }
+
+    // 连接成功时建立新的充电基线。若 USB 在连接建立前已经插入，
+    // 这里同步状态但不播放动画；之后的 false -> true 才代表新插入。
+    int level = 0;
+    bool charging = false;
+    bool discharging = false;
+    if (!Board::GetInstance().GetBatteryLevel(level, charging, discharging)) {
+        return;
+    }
+    battery_level_ = level;
+    battery_charging_ = charging;
+    if (view_ != nullptr) {
+        view_->SetBattery(battery_level_, battery_charging_);
+    }
+}
+
 void HomePresenter::UpdateBattery() {
     int level = 0;
     bool charging = false;
@@ -198,10 +219,16 @@ void HomePresenter::UpdateBattery() {
         return;
     }
 
+    // 充电表情是插入 USB 时的提示动画。只在充电状态发生上升沿时播放，
+    // 避免状态栏每秒刷新时反复重启动画。
+    const bool charging_started = charging && !battery_charging_;
     battery_level_ = level;
     battery_charging_ = charging;
     if (view_ != nullptr) {
         view_->SetBattery(battery_level_, battery_charging_);
+        if (charging_started && charging_animation_ready_) {
+            view_->ShowEmotionOnce("充电");
+        }
     }
 }
 

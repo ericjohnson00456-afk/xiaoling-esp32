@@ -299,6 +299,12 @@ void SetAlarmActive(bool active) {
     });
 }
 
+void SetChargingAnimationReady(bool ready) {
+    UiManager::GetInstance().Dispatch([ready]() {
+        HomePresenter::GetInstance().SetChargingAnimationReady(ready);
+    });
+}
+
 void ShowAlarmRing(const AlarmSnapshot& alarm) {
     UiManager::GetInstance().Dispatch([alarm]() {
         if (UiManager::GetInstance().lvgl_display() == nullptr) {

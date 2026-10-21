@@ -738,6 +738,8 @@ void Application::InitializeXiaolingConn() {
     xiaoling_conn_ = std::make_unique<XiaolingConn>();
 
     xiaoling_conn_->OnConnected([this, codec, &board]() {
+        // 连接成功时同步当前充电状态作为基线；只有此后的插入事件播放充电表情。
+        Ui::SetChargingAnimationReady(true);
         SdMusicService::GetInstance().OnCloudReady();
         if (GetDeviceState() == kDeviceStateIdle) {
             Ui::SetStatus(Ui::Status::Standby);
@@ -796,6 +798,7 @@ void Application::InitializeXiaolingConn() {
 #endif  // 小聆平台
 
     xiaoling_conn_->OnDisconnected([this, &board]() {
+        Ui::SetChargingAnimationReady(false);
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
         SdMusicService::GetInstance().OnCloudDisconnected();
         Ui::SetDuplexVisible(false);
