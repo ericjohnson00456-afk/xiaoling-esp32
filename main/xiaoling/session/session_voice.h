@@ -55,6 +55,8 @@ public:
     void SendStopListening();
     // 半双工收到 TTS 后只结束上行，保留当前回复的音频和字幕状态。
     bool StopListeningForTts();
+    // 退出工具只关闭音频上报，保留云端会话以接收告别 TTS 和字幕。
+    void DisableAudioUploadForExit();
     bool EndSession();
     bool CancelSession();
     // 在停止本地 TTS 前冻结实际 PCM 播放位置对应的 timeline 游标。

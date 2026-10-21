@@ -226,7 +226,11 @@ void Application::HandlePlaybackEvent(const PlaybackEvent& event) {
     }
     if (exit_requested_.load()) {
         // Exit 结束本轮上报，但不阻止用户通过新的唤醒打断告别 TTS。
-        ESP_LOGI(TAG, "退出请求：TTS 播放结束，保持唤醒检测并进入待命");
+        // 播放自然结束后才清理云端会话，避免提前清掉告别字幕。
+        if (xiaoling_conn_ && !xiaoling_conn_->EndSession()) {
+            ESP_LOGW(TAG, "退出请求：TTS 播放结束，但结束云端会话失败");
+        }
+        ESP_LOGI(TAG, "退出请求：TTS/字幕播放结束，保持唤醒检测并进入待命");
         if (GetDeviceState() != kDeviceStateIdle) {
             SetDeviceState(kDeviceStateIdle);
         }
@@ -1074,23 +1078,15 @@ void Application::AbortSpeaking(AbortReason reason) {
     ESP_LOGI(TAG, "Abort speaking");
     if (reason == kAbortReasonExit) {
         exit_requested_.store(true);
-        // exit MCP 工具只结束当前上行对话。TTS 可能已经开始下载或播放，
-        // 因此这里不操作播放器。
+        // exit MCP 工具只结束当前上行对话。云端告别 TTS 可能尚未返回，
+        // 因此只关掉音频上报，不取消会话，也不清理 TTS/字幕状态。
         iat_utterance_active_ = false;
         audio_service_.EnableAudioUpload(false);
         session_controller_.EndSession();
-        if (xiaoling_conn_) xiaoling_conn_->SendStopListening();
-        const bool tts_active = tts_waiting_for_playback_.load() ||
-                                active_tts_session_id_ != 0 ||
-                                audio_player_.IsPlaying();
-        if (tts_active) {
-            audio_service_.EnableWakeWordDetection(true);
-            ESP_LOGI(TAG, "退出请求：保留 TTS 播放和唤醒检测，允许开启新对话");
-        } else {
-            exit_requested_.store(false);
-        }
+        if (xiaoling_conn_) xiaoling_conn_->DisableAudioUploadForExit();
+        audio_service_.EnableWakeWordDetection(true);
+        ESP_LOGI(TAG, "退出请求：已停止音频上报，保留 TTS/字幕和唤醒检测");
         SetDeviceState(kDeviceStateIdle);
-        ESP_LOGI(TAG, "退出请求：已停止上行，保留播放器继续播放");
         return;
     }
     aborted_ = true;

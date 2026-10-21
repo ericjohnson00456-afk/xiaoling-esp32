@@ -203,6 +203,12 @@ bool XiaolingConn::StopListeningForTts() {
     return voice_ != nullptr && voice_->StopListeningForTts();
 }
 
+void XiaolingConn::DisableAudioUploadForExit() {
+    if (voice_ != nullptr) {
+        voice_->DisableAudioUploadForExit();
+    }
+}
+
 bool XiaolingConn::EndSession() {
     return voice_ != nullptr && voice_->EndSession();
 }

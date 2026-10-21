@@ -783,6 +783,17 @@ bool XiaolingSessionVoice::StopListeningForTts() {
     return sent;
 }
 
+void XiaolingSessionVoice::DisableAudioUploadForExit() {
+    std::lock_guard<std::recursive_mutex> lock(session_mutex_);
+    // tool_exit 的响应仍可能在网络上排队。只关闭麦克风上行，保留
+    // accepting_session_messages_、session_id_ 和 TTS/字幕状态，直到告别
+    // TTS 播放完成后再由 Application::HandlePlaybackEvent 结束会话。
+    SetAudioUploadEnabled(false, "exit");
+    pending_wake_word_.clear();
+    uplink_audio_format_checked_ = false;
+    ESP_LOGI(TAG, "退出工具已停止音频上报，保留云端会话等待 TTS");
+}
+
 bool XiaolingSessionVoice::EndSession() {
     return CancelSession();
 }

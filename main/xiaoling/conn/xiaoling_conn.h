@@ -68,6 +68,7 @@ public:
     void CheckVoiceStartTimeout();
     void SendStopListening();
     bool StopListeningForTts();
+    void DisableAudioUploadForExit();
     bool EndSession();
     bool CancelSession();
     void PrepareAbortSpeaking(AbortReason reason);
