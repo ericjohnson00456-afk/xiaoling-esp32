@@ -1,7 +1,7 @@
 {
   "type": "micro",
   "wake_word": "小聆小聆",
-  "author": "local-real-female-voice-finetune-from-volcengine-v11",
+  "author": "local-v14-prompt-negative-balanced-replay",
   "model": "xiaolingxiaoling.tflite",
   "trained_languages": [
     "zh"
