@@ -3,6 +3,7 @@
 #include "ui/utils/image/lvgl_image.h"
 #include "ui/utils/emoji/png_animation_player.h"
 #include "player/types/music_track.h"
+#include "subtitle_pagination.h"
 
 #include <lvgl.h>
 
@@ -30,6 +31,8 @@ public:
     void HideImage();
 #endif
     void SetText(const std::string& text);
+    std::vector<SubtitlePagination::Page> PaginateSubtitle(const std::string& text,
+                                                         uint8_t max_lines = 3);
     void SetSubtitleText(const std::string& text, uint8_t max_lines = 3);
     void SetChatMessage(const std::string& role, const std::string& text);
     void ShowNotification(const std::string& text, int duration_ms);

@@ -569,6 +569,34 @@ void HomeView::SetText(const std::string& text) {
     SetChatMessage("system", text);
 }
 
+std::vector<SubtitlePagination::Page> HomeView::PaginateSubtitle(
+        const std::string& text, uint8_t max_lines) {
+    if (text.empty() || max_lines == 0) return {};
+    if (lvgl_ == nullptr) {
+        return SubtitlePagination::Split(text, [](std::string_view) { return true; });
+    }
+    DisplayLockGuard lock(display_);
+    if (!lock.locked() || subtitle_label_ == nullptr) return {};
+    // 标签刚创建或布局改变时，必须先拿到实际内容宽度。
+    lv_obj_update_layout(subtitle_label_);
+    const auto* font = lv_obj_get_style_text_font(subtitle_label_, LV_PART_MAIN);
+    const int32_t width = lv_obj_get_content_width(subtitle_label_);
+    if (font == nullptr || width <= 0) return {};
+    const int32_t letter_space =
+        lv_obj_get_style_text_letter_space(subtitle_label_, LV_PART_MAIN);
+    const int32_t line_space =
+        lv_obj_get_style_text_line_space(subtitle_label_, LV_PART_MAIN);
+    const int32_t height = lv_font_get_line_height(font) * max_lines +
+                           line_space * (max_lines - 1);
+    return SubtitlePagination::Split(text, [&](std::string_view page) {
+        const std::string terminated(page);
+        lv_point_t size{};
+        lv_text_get_size(&size, terminated.c_str(), font, letter_space, line_space,
+                         width, LV_TEXT_FLAG_NONE);
+        return size.y <= height;
+    });
+}
+
 void HomeView::SetSubtitleText(const std::string& text, uint8_t max_lines) {
     if (lvgl_ == nullptr) {
         if (display_ != nullptr) {

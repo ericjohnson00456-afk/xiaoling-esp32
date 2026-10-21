@@ -322,6 +322,9 @@ void VoiceSubtitleController::QueueTtsAudioProgress(uint32_t audio_clock_ms) {
 void VoiceSubtitleController::ResetSubtitles(bool clear_text) {
     subtitle_segments_.clear();
     subtitle_index_ = 0;
+    subtitle_pages_.clear();
+    subtitle_page_index_ = 0;
+    subtitle_page_shown_ = false;
     subtitle_audio_started_ = false;
     subtitle_audio_clock_ms_ = 0;
     plain_subtitle_text_.clear();
@@ -471,21 +474,36 @@ void VoiceSubtitleController::ScheduleSubtitle() {
     while (subtitle_index_ < subtitle_segments_.size() &&
            subtitle_segments_[subtitle_index_].end_ms <= elapsed_ms) {
         ++subtitle_index_;
+        subtitle_pages_.clear();
+        subtitle_page_shown_ = false;
     }
     if (subtitle_index_ >= subtitle_segments_.size()) return;
     const auto& segment = subtitle_segments_[subtitle_index_];
     if (elapsed_ms < segment.start_ms) return;
     if (presenter_.view_ != nullptr) {
-        presenter_.view_->SetSubtitleText(segment.text, 3);
-        ESP_LOGI(TAG, "字幕 UI 显示: cloud_index=%lu, queue_index=%u, bytes=%u, interval=%lu-%lums, clock=%lums",
+        if (subtitle_pages_.empty()) {
+            subtitle_pages_ = presenter_.view_->PaginateSubtitle(segment.text, 3);
+            if (subtitle_pages_.empty()) return;
+        }
+        const size_t page_index = SubtitlePagination::PageAt(
+            subtitle_pages_, segment.start_ms, segment.end_ms, subtitle_audio_clock_ms_);
+        if (subtitle_page_shown_ && subtitle_page_index_ == page_index) return;
+        const auto& page = subtitle_pages_[page_index];
+        presenter_.view_->SetSubtitleText(
+            segment.text.substr(page.start_byte, page.end_byte - page.start_byte), 3);
+        subtitle_page_index_ = page_index;
+        subtitle_page_shown_ = true;
+        ESP_LOGI(TAG, "字幕 UI 显示: cloud_index=%lu, queue_index=%u, bytes=%u, page=%u/%u, page_bytes=%u, interval=%lu-%lums, clock=%lums",
                  static_cast<unsigned long>(segment.cloud_index),
                  static_cast<unsigned>(subtitle_index_),
                  static_cast<unsigned>(segment.text.size()),
+                 static_cast<unsigned>(page_index + 1),
+                 static_cast<unsigned>(subtitle_pages_.size()),
+                 static_cast<unsigned>(page.end_byte - page.start_byte),
                  static_cast<unsigned long>(segment.start_ms),
                  static_cast<unsigned long>(segment.end_ms),
                  static_cast<unsigned long>(elapsed_ms));
     }
-    ++subtitle_index_;
 }
 
 void VoiceSubtitleController::AppendPlainSubtitle(const std::string& text) {

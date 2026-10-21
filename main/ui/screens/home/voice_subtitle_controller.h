@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 #include "event/event_epoch.h"
+#include "subtitle_pagination.h"
 
 class HomePresenter;
 
@@ -53,6 +54,9 @@ private:
     std::vector<uint32_t> event_subscriptions_;
     std::vector<SubtitleSegment> subtitle_segments_;
     size_t subtitle_index_ = 0;
+    std::vector<SubtitlePagination::Page> subtitle_pages_;
+    size_t subtitle_page_index_ = 0;
+    bool subtitle_page_shown_ = false;
     bool subtitle_audio_started_ = false;
     uint32_t subtitle_audio_clock_ms_ = 0;
     std::string plain_subtitle_text_;
