@@ -61,11 +61,17 @@ void AfeAudioProcessor::Initialize(AudioCodec* codec, int frame_duration_ms, srm
     } else {
         afe_config->ns_init = false;
 #if CONFIG_SR_NSN_WEBRTC
+#if CONFIG_BOARD_TYPE_ESP_BOX_3 && CONFIG_USE_DEVICE_AEC
+        // BOX3 全双工时 CPU1 同时运行 AFE、唤醒、TTS 和 LCD。这里保留
+        // ESP-SR AEC，跳过额外的 WebRTC NS，避免每 10 ms 再执行一次降噪。
+        ESP_LOGI(TAG, "BOX3 AEC 后置 WebRTC NS: disabled for full-duplex CPU budget");
+#else
         // 此版本 VC AFE 的 WebRTC NS 初始化会解引用空接口。使用独立的
         // 10 ms NS 放在 AEC 后，避免非线性降噪影响回声滤波器收敛。
         output_ns_ = ns_pro_create(10, 1, 16000);
         ESP_LOGI(TAG, "AEC 后置 WebRTC NS: %s, mode=medium, frame=10ms",
                  output_ns_ != nullptr ? "enabled" : "allocation failed");
+#endif
 #endif
     }
 

@@ -3,9 +3,10 @@
 #include <cstddef>
 #include <cstdint>
 
-// 分块实时流每次读取立即交付压缩帧；非分块文件在首帧后保留 1 KiB 吞吐。
+// 分块实时流缩短单次读取目标，让小批量压缩数据尽快交给解码器；
+// 非分块文件在首帧后保留 1 KiB 吞吐。
 inline size_t StreamingReadBytes(size_t capacity, bool pcm_started, bool chunked) {
-    return std::min(capacity, pcm_started && !chunked ? size_t{1024} : size_t{256});
+    return std::min(capacity, pcm_started && !chunked ? size_t{1024} : size_t{128});
 }
 
 // 取走队尾并不等于扬声器断流。仅在确实等不到后续帧时进入恢复缓冲。

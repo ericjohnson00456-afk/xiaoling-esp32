@@ -40,7 +40,7 @@ namespace {
 // 实时 TTS 响应可能只包含下一个 MP3 帧的一部分。云端按片段生成语音，
 // 每次返回的数据可能不足一个完整 MP3 帧，因此要尽快把已有字节交给解码器，
 // 不要让 esp_http_client_read() 等待更大的数据块。
-// 实时 chunked TTS 一直按 256 字节读取；文件式响应首帧后按 1 KiB 读取。
+// 实时 chunked TTS 一直按 128 字节读取；文件式响应首帧后按 1 KiB 读取。
 // 保留短正文超时，允许不足 1 KiB 时返回部分内容；下面的
 // 50 ms 正文超时也能在数据不足时及时返回部分内容。
 constexpr size_t kStreamingHttpReadSize = 1024;
