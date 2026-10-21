@@ -32,7 +32,7 @@ extern "C" vad_state_t vad_process(vad_handle_t handle, int16_t* pcm, int rate, 
 
 int main() {
     {
-        // Current wake descriptor: 15 scoring slices * 10ms + 30ms frontend.
+        // Generic sample-clock boundary test, independent of model stride.
         WakeSpeechGate gate(15 * 10 + 30);
         std::vector<int16_t> silence(16000, 0);
         std::vector<int16_t> speech(160, 7);
@@ -76,6 +76,41 @@ int main() {
         fail_create = true;
         assert(!gate.Reset() && !gate.HasRecentSpeech() && live_handles == 0);
         fail_create = false;
+    }
+    assert(live_handles == 0);
+
+    {
+        // Regression: [1,3,40] produces one score per THREE 10ms features.
+        constexpr size_t history_ms = WakeSpeechGate::HistoryForScoringWindow(10, 3, 10, 30);
+        static_assert(history_ms == 330);
+        static_assert(WakeSpeechGate::HistoryForScoringWindow(15, 3, 10, 30) == 480);
+        static_assert(WakeSpeechGate::HistoryForScoringWindow(10, 1, 10, 30) == 130);
+        WakeSpeechGate gate(130);
+        std::vector<int16_t> speech(160, 7), silence(16000, 0);
+        assert(gate.Reset());
+        gate.Feed(speech.data(), speech.size());
+        gate.Feed(silence.data(), 3200);
+        assert(!gate.HasRecentSpeech());  // Old 130ms expired too soon.
+        assert(gate.Reset(history_ms));
+        assert(gate.HistoryMs() == history_ms && gate.SpeechAgeMs() == -1);
+        gate.Feed(speech.data(), speech.size());
+        assert(gate.SpeechFrames() == 1 && gate.ClassifiedFrames() == 1);
+        assert(gate.LastFrameMeanSquare() == 49 && gate.LastFramePeak() == 7);
+        gate.Feed(silence.data(), 3200);
+        assert(gate.HasRecentSpeech() && gate.SpeechAgeMs() == 200);
+        gate.Feed(silence.data(), 2080);
+        assert(gate.HasRecentSpeech() && gate.SpeechAgeMs() == 330);
+        assert(gate.ConsumedSamples() == 5440);
+        assert(gate.ClassifiedFrames() == 34 && gate.SpeechFrames() == 1);
+        gate.Feed(silence.data(), 1);
+        assert(!gate.HasRecentSpeech());
+        gate.Stop();
+        assert(gate.SpeechAgeMs() == -1 && gate.ClassifiedFrames() == 0);
+        assert(gate.Reset());
+        std::vector<int16_t> negative_full_scale(160, -32768);
+        gate.Feed(negative_full_scale.data(), negative_full_scale.size());
+        assert(gate.LastFramePeak() == 32768);
+        assert(gate.LastFrameMeanSquare() == 1073741824U);
     }
     assert(live_handles == 0);
 

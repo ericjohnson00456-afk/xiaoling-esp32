@@ -1,6 +1,7 @@
 #include "application.h"
 
 #include "board.h"
+#include "audio/wake_audio_recorder.h"
 #include "sd_card/sd_card_manager.h"
 #include "sd_card/sd_music_service.h"
 #include "xiaoling/conn/xiaoling_conn.h"
@@ -30,6 +31,7 @@ void Application::InitializeSdCard() {
     const esp_err_t ret = manager.StartMonitoring(
         *config, [&manager, &music_service](SdCardEvent event) {
             if (event == SdCardEvent::kInserted) {
+                WakeAudioRecorder::GetInstance().SetCardAvailable(true);
                 music_service.OnCardInserted();
                 return;
             }
@@ -37,6 +39,7 @@ void Application::InitializeSdCard() {
                 music_service.OnUnsupportedFileSystem();
                 return;
             }
+            WakeAudioRecorder::GetInstance().SetCardAvailable(false);
             music_service.OnCardRemoved();
             Application::GetInstance().Schedule([]() {
                 Application::GetInstance()

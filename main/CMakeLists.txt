@@ -1,5 +1,6 @@
 # Define source files
 set(SOURCES "audio/codecs/audio_codec.cc"
+            "audio/wake_audio_recorder.cc"
             "audio/audio_service.cc"
             "audio/opus_encoder/opus_wb_encoder.cc"
             "player/audio_player.cc"
@@ -782,11 +783,21 @@ endif()
 
 include(${PROJECT_DIR}/main/audio/wake_words/micro_wake_word/models/models.cmake)
 
+set(MWW_EMBED_FILES)
+if(CONFIG_USE_MICRO_WAKE_WORD)
+    list(APPEND MWW_EMBED_FILES "audio/wake_words/micro_wake_word/models/vad/vad.tflite")
+endif()
+
 idf_component_register(SRCS ${SOURCES}
                     INCLUDE_DIRS ${INCLUDE_DIRS}
                     REQUIRES espressif__adc_battery_estimation esp_adc efuse console spi_flash app_update esp_app_format esp_psram 78__esp-opus bt fatfs
                     WHOLE_ARCHIVE
+                    EMBED_FILES ${MWW_EMBED_FILES}
                     )
+
+if(CONFIG_USE_MICRO_WAKE_WORD)
+    target_include_directories(${COMPONENT_LIB} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
+endif()
 
 # Enforce the short send deadline selected by RealtimeTransportScope without
 # patching the esp-ml307 managed component. Calls outside that scope pass

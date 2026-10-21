@@ -1,5 +1,6 @@
 #include "streaming_model.h"
 #include "preprocessor_settings.h"
+#include "vad_probability_policy.h"
 
 #include <esp_log.h>
 #include <esp_heap_caps.h>
@@ -32,6 +33,7 @@ std::string FormatProbabilityScores(const float* scores, size_t capacity,
 
 bool StreamingModel::PerformStreamingInference(const int8_t features[PREPROCESSOR_FEATURE_SIZE]) {
     std::lock_guard<std::mutex> lock(inference_mutex_);
+    probability_updated_ = false;
     
 #ifdef CONFIG_MICRO_WAKE_WORD_DEBUG
     // 调试：检查输入特征
@@ -196,6 +198,7 @@ bool StreamingModel::PerformStreamingInference(const int8_t features[PREPROCESSO
 #endif
 
     recent_streaming_probabilities_[last_n_index_] = probability;
+    probability_updated_ = true;
     last_n_index_ = (last_n_index_ + 1) % sliding_window_size_;
     if (wake_score_trace_.Push(probability)) {
         const auto scores = FormatProbabilityScores(
@@ -211,10 +214,26 @@ bool StreamingModel::PerformStreamingInference(const int8_t features[PREPROCESSO
     return true;
 }
 
+size_t StreamingModel::GetInputStride() const {
+    std::lock_guard<std::mutex> lock(inference_mutex_);
+    if (!model_loaded_.load() || !interpreter_) return 0;
+    const auto* input = interpreter_->input(0);
+    if (!input || !input->dims || input->dims->size < 2 || input->dims->data[1] <= 0) return 0;
+    return static_cast<size_t>(input->dims->data[1]);
+}
+
 void StreamingModel::ResetProbabilities() {
     std::fill(recent_streaming_probabilities_.begin(), recent_streaming_probabilities_.end(), 0);
     last_n_index_ = 0;
     wake_score_trace_.Reset();
+    probability_updated_ = false;
+}
+
+float StreamingModel::GetAverageProbability() const {
+    if (recent_streaming_probabilities_.empty()) return 0;
+    return std::accumulate(recent_streaming_probabilities_.begin(),
+                           recent_streaming_probabilities_.end(), 0.0f) /
+           recent_streaming_probabilities_.size();
 }
 
 bool StreamingModel::ResetState() {
@@ -332,6 +351,9 @@ bool StreamingModel::LoadModel(tflite::MicroMutableOpResolver<20> &op_resolver) 
     }
 
     // Initialize sliding window
+    // Stop/reload can occur partway through an input stride. Never reuse that
+    // position with the newly allocated input tensor (wake model or VAD).
+    current_stride_step_ = 0;
     recent_streaming_probabilities_.resize(sliding_window_size_, 0);
     ResetProbabilities();
 
@@ -442,30 +464,25 @@ bool WakeWordModel::DetermineDetected() {
     }
 #endif
 
-    // 检测唤醒词 - 如果滑动窗口平均值超过阈值
-    if (sliding_window_average > probability_cutoff_) {
-        ESP_LOGW(TAG,
-                 "The '%s' model sliding average probability is %.3f and most recent "
-                 "probability is %.3f",
-                 wake_word_.c_str(), sliding_window_average,
-                 recent_streaming_probabilities_[(last_n_index_ + sliding_window_size_ - 1) % sliding_window_size_]);
-        wake_score_capture_name_ = wake_word_;
-        if (wake_score_trace_.Begin()) {
-            const auto scores = FormatProbabilityScores(
-                wake_score_trace_.Before().data(), WakeScoreTrace::kCount, 0,
-                wake_score_trace_.BeforeCount());
-            ESP_LOGW(TAG,
-                     "Wake scores BEFORE20: model='%s', trace=%lu, trigger=%.3f, count=%u, order=oldest->newest, scores=[%s]",
-                     wake_word_.c_str(),
-                     static_cast<unsigned long>(wake_score_trace_.Id()),
-                     wake_score_trace_.Trigger(),
-                     static_cast<unsigned>(wake_score_trace_.BeforeCount()),
-                     scores.c_str());
-        }
-        return true;
-    }
+    // The caller logs candidates after applying VAD; sustained rejection must
+    // not flood the serial port once per inference.
+    return sliding_window_average > probability_cutoff_;
+}
 
-    return false;
+void WakeWordModel::BeginWakeScoreCapture() {
+    wake_score_capture_name_ = wake_word_;
+    if (wake_score_trace_.Begin()) {
+        const auto scores = FormatProbabilityScores(
+            wake_score_trace_.Before().data(), WakeScoreTrace::kCount, 0,
+            wake_score_trace_.BeforeCount());
+        ESP_LOGW(TAG,
+                 "Wake scores BEFORE20: model='%s', trace=%lu, trigger=%.3f, count=%u, order=oldest->newest, scores=[%s]",
+                 wake_word_.c_str(),
+                 static_cast<unsigned long>(wake_score_trace_.Id()),
+                 wake_score_trace_.Trigger(),
+                 static_cast<unsigned>(wake_score_trace_.BeforeCount()),
+                 scores.c_str());
+    }
 }
 
 // VADModel implementation
@@ -489,16 +506,19 @@ void VADModel::LogModelConfig() {
 }
 
 bool VADModel::DetermineDetected() {
-    if (recent_streaming_probabilities_.empty()) {
-        return false;
+    return model_loaded_.load() &&
+           VadWindowHasSpeech(recent_streaming_probabilities_.data(),
+                              recent_streaming_probabilities_.size(), GetEffectiveProbabilityCutoff());
+}
+
+float VADModel::GetEffectiveProbabilityCutoff() const {
+    if (interpreter_) {
+        const auto* output = interpreter_->output(0);
+        if (output && output->type == kTfLiteUInt8 && output->params.scale > 0) {
+            return VadQuantizedCutoff(probability_cutoff_, output->params.scale, output->params.zero_point);
+        }
     }
-
-    // Find max probability
-    auto max_it = std::max_element(recent_streaming_probabilities_.begin(), 
-                                  recent_streaming_probabilities_.end());
-    float max_prob = *max_it;
-
-    return max_prob >= probability_cutoff_;
+    return probability_cutoff_;
 }
 
 } // namespace micro_wake_word

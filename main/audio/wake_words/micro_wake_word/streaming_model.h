@@ -29,6 +29,9 @@ namespace micro_wake_word {
         virtual bool DetermineDetected() = 0;
 
         bool PerformStreamingInference(const int8_t features[PREPROCESSOR_FEATURE_SIZE]);
+        size_t GetInputStride() const;
+        bool HasNewProbability() const { return probability_updated_; }
+        float GetAverageProbability() const;
         bool IsWakeScoreCaptureActive() const { return wake_score_trace_.Collecting(); }
 
         /// @brief Sets all recent_streaming_probabilities to 0
@@ -49,6 +52,7 @@ namespace micro_wake_word {
         void UnloadModelLocked();
 
         uint8_t current_stride_step_{0};
+        bool probability_updated_ = false;
 
         float probability_cutoff_;
         size_t sliding_window_size_;
@@ -82,6 +86,7 @@ namespace micro_wake_word {
         /// @brief Checks for the wake word by comparing the mean probability in the sliding window
         /// @return True if wake word detected, false otherwise
         bool DetermineDetected() override;
+        void BeginWakeScoreCapture();
 
         const std::string &GetWakeWord() const {
             return wake_word_;
@@ -100,9 +105,10 @@ namespace micro_wake_word {
 
         void LogModelConfig() override;
 
-        /// @brief Checks for voice activity by comparing the max probability in the sliding window
+        /// @brief Checks the average against the ESPHome quantized cutoff
         /// @return True if voice activity detected, false otherwise
         bool DetermineDetected() override;
+        float GetEffectiveProbabilityCutoff() const;
     };
 
 } // namespace micro_wake_word

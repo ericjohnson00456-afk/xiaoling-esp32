@@ -1,7 +1,9 @@
 #include "micro_wake_word.h"
+#include "audio/wake_audio_recorder.h"
 #include "micro_wake_word/model_wake_word.h"
 #include "micro_wake_word/streaming_model.h"
 #include "micro_wake_word/preprocessor_settings.h"
+#include "model_vad.h"
 
 #include <esp_log.h>
 #include <esp_heap_caps.h>
@@ -13,6 +15,8 @@
 #include <algorithm>
 
 #define TAG "MicroWakeWord"
+
+extern const uint8_t vad_model_data[] asm("_binary_vad_tflite_start");
 
 MicroWakeWord::MicroWakeWord(const void* model_data, size_t model_size,
                              const MicroWakeWordConfig& config)
@@ -36,6 +40,15 @@ bool MicroWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list) {
     }
 
     codec_ = codec;
+
+    if (config_.feature_step_size == 0 || config_.feature_step_size * 16 >= BUFFER_SIZE) {
+        ESP_LOGE(TAG, "Invalid feature step size: %u", config_.feature_step_size);
+        return false;
+    }
+    if (config_.feature_step_size != micro_wake_word::kVadFeatureStepMs) {
+        ESP_LOGE(TAG, "Wake/VAD feature steps differ; shared frontend unavailable");
+        return false;
+    }
     
     if (!RegisterStreamingOps(streaming_op_resolver_)) {
         ESP_LOGE(TAG, "Failed to register streaming operations");
@@ -88,6 +101,9 @@ bool MicroWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list) {
         config_.tensor_arena_size);
 
     wake_word_models_.push_back(std::move(model));
+    vad_model_ = std::make_unique<micro_wake_word::VADModel>(
+        vad_model_data, micro_wake_word::kVadProbabilityCutoff,
+        micro_wake_word::kVadWindowSize, micro_wake_word::kVadTensorArenaSize);
 
     initialized_ = true;
     ESP_LOGI(TAG, "MicroWakeWord initialized successfully");
@@ -114,43 +130,50 @@ void MicroWakeWord::Feed(const std::vector<int16_t>& data) {
     }
 #endif
 
-    // Write to ring buffer
-    WriteToRingBuffer(data.data(), data.size());
+    // Bound each write so large Feed calls cannot overwrite unconsumed PCM.
+    for (size_t offset = 0; offset < data.size();) {
+        const size_t count = std::min({data.size() - offset, size_t(GetNewSamplesToGet()),
+                                       ring_buffer_size_ - 1 - GetRingBufferAvailable()});
+        WriteToRingBuffer(data.data() + offset, count);
+        offset += count;
 
-    // Process available data
-    while (HasEnoughSamples()) {
-        const bool capturing = wake_score_capture_active_.load();
-        UpdateModelProbabilities();
+        while (HasEnoughSamples()) {
+            const bool capturing = wake_score_capture_active_.load();
+            const bool updated = UpdateModelProbabilities();
+            if (!running_) return;
+            if (!updated) continue;
 
-        if (capturing) {
-            const bool pending = std::any_of(
-                wake_word_models_.begin(), wake_word_models_.end(),
-                [](const auto& model) { return model->IsWakeScoreCaptureActive(); });
-            if (!pending) {
-                // 后组采满后才执行原有复位，避免把新会话的分数混入本轮日志。
-                wake_score_capture_active_ = false;
-                if (!ResetInputStateLocked()) {
-                    ESP_LOGE(TAG, "Wake score capture completed, model reset failed");
-                    ResetStates();
-                } else {
-                    ESP_LOGI(TAG, "Wake score capture completed; wake model reset after AFTER20");
+            if (capturing) {
+                const bool pending = std::any_of(
+                    wake_word_models_.begin(), wake_word_models_.end(),
+                    [](const auto& model) { return model->IsWakeScoreCaptureActive(); });
+                if (!pending) {
+                    // 后组采满后才执行原有复位，避免把新会话的分数混入本轮日志。
+                    wake_score_capture_active_ = false;
+                    if (!ResetInputStateLocked()) {
+                        ESP_LOGE(TAG, "Wake score capture completed, model reset failed");
+                        running_ = false;
+                        return;
+                    } else {
+                        ESP_LOGI(TAG, "Wake score capture completed; wake model reset after AFTER20");
+                    }
                 }
+                continue;
             }
-            continue;
-        }
-        
-        if (DetectWakeWords()) {
-            last_detected_wake_word_ = detected_wake_word_;
-            detected_ = true;
-            wake_score_capture_active_ = true;
-            
-            if (detection_callback_) {
-                detection_callback_(detected_wake_word_);
+
+            if (DetectWakeWords()) {
+                last_detected_wake_word_ = detected_wake_word_;
+                detected_ = true;
+                wake_score_capture_active_ = true;
+
+                if (detection_callback_) {
+                    detection_callback_(detected_wake_word_);
+                }
+
+                // 保持流式状态收集后续 20 次评分，再恢复原有复位行为。
+                detected_wake_word_.clear();
+                detected_ = false;
             }
-            
-            // 保持流式状态收集后续 20 次评分，再恢复原有复位行为。
-            detected_wake_word_.clear();
-            detected_ = false;
         }
     }
 }
@@ -183,6 +206,10 @@ void MicroWakeWord::Start() {
                     break;
                 }
             }
+            if (models_loaded_ && (!vad_model_ || !vad_model_->ResetState())) {
+                ESP_LOGE(TAG, "Failed to reset VAD model; reloading");
+                UnloadModels();
+            }
         }
     }
 
@@ -191,9 +218,12 @@ void MicroWakeWord::Start() {
         return;
     }
 
-    ResetStates();
+    if (!ResetStates()) return;
     running_ = true;
-    ESP_LOGI(TAG, "MicroWakeWord started");
+    ESP_LOGI(TAG, "MicroWakeWord started; VAD backend=esphome-neural, cutoff=%.3f, effective=%.6f, window=%u, score_step=%ums",
+             micro_wake_word::kVadProbabilityCutoff, vad_model_->GetEffectiveProbabilityCutoff(),
+             unsigned(micro_wake_word::kVadWindowSize),
+             unsigned(vad_model_->GetInputStride() * features_step_size_));
 }
 
 void MicroWakeWord::Pause() {
@@ -227,7 +257,11 @@ bool MicroWakeWord::ResetInputStateLocked() {
             return false;
         }
     }
-    ResetStates();
+    if (!vad_model_ || !vad_model_->ResetState()) {
+        ESP_LOGE(TAG, "Failed to reset VAD model state");
+        return false;
+    }
+    if (!ResetStates()) return false;
     ESP_LOGI(TAG, "Wake word input state reset");
     return true;
 }
@@ -293,12 +327,19 @@ bool MicroWakeWord::LoadModels() {
         model->LogModelConfig();
     }
 
+    if (!vad_model_ || !vad_model_->LoadModel(streaming_op_resolver_)) {
+        ESP_LOGE(TAG, "Failed to load neural VAD; detection disabled (no bypass)");
+        UnloadModels();
+        return false;
+    }
+    vad_model_->LogModelConfig();
     ESP_LOGI(TAG, "All models loaded successfully");
     models_loaded_ = true;
     return true;
 }
 
 void MicroWakeWord::UnloadModels() {
+    if (vad_model_) vad_model_->UnloadModel();
     for (auto &model : wake_word_models_) {
         if (model) {
             model->UnloadModel();
@@ -336,15 +377,16 @@ void MicroWakeWord::DeallocateBuffers() {
     }
 }
 
-void MicroWakeWord::UpdateModelProbabilities() {
+bool MicroWakeWord::UpdateModelProbabilities() {
     if (!models_loaded_) {
         ESP_LOGW(TAG, "Models not loaded, skipping inference");
-        return;
+        running_ = false;
+        return false;
     }
     
     int8_t audio_features[PREPROCESSOR_FEATURE_SIZE];
     if (!GenerateFeaturesForWindow(audio_features)) {
-        return;
+        return false;
     }
 
     ignore_windows_ = std::min(ignore_windows_ + 1, 0);
@@ -353,7 +395,8 @@ void MicroWakeWord::UpdateModelProbabilities() {
         if (!model || !model->PerformStreamingInference(audio_features)) {
             ESP_LOGW(TAG, "Model inference failed: %s", 
                     model ? model->GetWakeWord().c_str() : "null");
-            continue;
+            running_ = false;
+            return false;
         }
         
 #ifdef CONFIG_MICRO_WAKE_WORD_DEBUG
@@ -364,6 +407,12 @@ void MicroWakeWord::UpdateModelProbabilities() {
         }
 #endif
     }
+    if (!vad_model_ || !vad_model_->PerformStreamingInference(audio_features)) {
+        ESP_LOGE(TAG, "Neural VAD inference failed; detection disabled (no bypass)");
+        running_ = false;
+        return false;
+    }
+    return true;
 }
 
 bool MicroWakeWord::DetectWakeWords() {
@@ -378,12 +427,29 @@ bool MicroWakeWord::DetectWakeWords() {
     }
 
     for (auto &model : wake_word_models_) {
+        if (!model->HasNewProbability()) continue;
         if (model->DetermineDetected()) {
+            const bool speech = vad_model_->DetermineDetected();
+            if (speech || !vad_reject_logged_) {
+                ESP_LOGW(TAG, "Wake VAD %s: '%s', backend=esphome-neural, wake_avg=%.4f, vad_avg=%.4f, cutoff=%.3f, effective=%.6f, window=%u, pcm_sample_ms=%llu",
+                         speech ? "ACCEPT" : "REJECT", model->GetWakeWord().c_str(),
+                         model->GetAverageProbability(), vad_model_->GetAverageProbability(),
+                         micro_wake_word::kVadProbabilityCutoff, vad_model_->GetEffectiveProbabilityCutoff(),
+                         unsigned(micro_wake_word::kVadWindowSize),
+                         static_cast<unsigned long long>(consumed_samples_ / 16));
+            }
+            vad_reject_logged_ = !speech;
+            if (!speech) {
+                // ESPHome retains wake scores when VAD blocks a candidate.
+                // Recheck on the next fresh score without a cooldown/reset.
+                continue;
+            }
+            model->BeginWakeScoreCapture();
             detected_wake_word_ = model->GetWakeWord();
             ignore_windows_ = -MIN_SLICES_BEFORE_DETECTION; // Reset ignore counter
-            ESP_LOGI(TAG, "Wake word candidate: '%s'", detected_wake_word_.c_str());
             return true;
         }
+        vad_reject_logged_ = false;
     }
     return false;
 }
@@ -400,6 +466,12 @@ bool MicroWakeWord::GenerateFeaturesForWindow(int8_t features[PREPROCESSOR_FEATU
         ESP_LOGD(TAG, "Partial read: got %zu samples, needed %zu", samples_read, samples_needed);
         return false;
     }
+
+    // Tap only the PCM actually consumed by the model frontend, after wake-queue
+    // drops/generation checks. SD I/O runs on a separate task.
+    WakeAudioRecorder::GetInstance().Feed(preprocessor_audio_buffer_, samples_read);
+
+    consumed_samples_ += samples_read;
 
     size_t num_samples_read;
     
@@ -423,7 +495,7 @@ bool MicroWakeWord::GenerateFeaturesForWindow(int8_t features[PREPROCESSOR_FEATU
     return true;
 }
 
-void MicroWakeWord::ResetStates() {
+bool MicroWakeWord::ResetStates() {
     wake_score_capture_active_ = false;
     ring_buffer_read_pos_ = 0;
     ring_buffer_write_pos_ = 0;
@@ -432,6 +504,15 @@ void MicroWakeWord::ResetStates() {
     for (auto &model : wake_word_models_) {
         model->ResetProbabilities();
     }
+    if (!vad_model_ || vad_model_->GetInputStride() == 0) {
+        running_ = false;
+        ESP_LOGE(TAG, "Neural VAD unavailable; wake detection disabled (no bypass)");
+        return false;
+    }
+    vad_model_->ResetProbabilities();
+    vad_reject_logged_ = false;
+    consumed_samples_ = 0;
+    return true;
 }
 
 bool MicroWakeWord::RegisterStreamingOps(tflite::MicroMutableOpResolver<20> &op_resolver) {

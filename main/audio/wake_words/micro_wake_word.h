@@ -35,6 +35,7 @@ public:
     void Pause();
     bool ResetInputState();
     bool IsWakeScoreCaptureActive() const { return wake_score_capture_active_.load(); }
+    bool IsRunning() const { return running_.load(); }
     void Stop() override;
     size_t GetFeedSize() override;
     const std::string& GetLastDetectedWakeWord() const override { return last_detected_wake_word_; }
@@ -43,6 +44,9 @@ private:
     const void* model_data_;
     size_t model_size_;
     MicroWakeWordConfig config_;
+    std::unique_ptr<micro_wake_word::VADModel> vad_model_;
+    bool vad_reject_logged_ = false;
+    uint64_t consumed_samples_ = 0;
 
     // Core members
     AudioCodec* codec_ = nullptr;
@@ -87,10 +91,10 @@ private:
     void UnloadModels();
     bool AllocateBuffers();
     void DeallocateBuffers();
-    void UpdateModelProbabilities();
+    bool UpdateModelProbabilities();
     bool DetectWakeWords();
     bool GenerateFeaturesForWindow(int8_t features[PREPROCESSOR_FEATURE_SIZE]);
-    void ResetStates();
+    bool ResetStates();
     bool ResetInputStateLocked();
     bool RegisterStreamingOps(tflite::MicroMutableOpResolver<20> &op_resolver);
     bool HasEnoughSamples();

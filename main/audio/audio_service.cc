@@ -606,8 +606,8 @@ void AudioService::QueueWakeFrame(std::vector<int16_t> data, uint32_t generation
                      static_cast<unsigned long>(dropped_frames));
         }
     }
-    ++wake_produced_frames_;
-    processed_wake_queue_.push_back({std::move(data), generation, esp_timer_get_time()});
+    const uint32_t sequence = ++wake_produced_frames_;
+    processed_wake_queue_.push_back({std::move(data), generation, sequence, esp_timer_get_time()});
     processed_wake_cv_.notify_one();
 }
 
@@ -619,6 +619,8 @@ void AudioService::ProcessedWakeTask() {
     uint32_t previous_dropped = wake_dropped_frames_.load();
     uint32_t processed = 0;
     int64_t inference_us = 0, max_inference_us = 0, max_age_us = 0;
+    bool have_previous_frame = false;
+    uint32_t previous_sequence = 0, previous_generation = 0;
     while (true) {
         if (esp_timer_get_time() - last_yield_us >= kWakeYieldIntervalUs) {
             vTaskDelay(kAudioInputYieldTicks);
@@ -641,7 +643,27 @@ void AudioService::ProcessedWakeTask() {
             data.generation == wake_input_generation_.load()) {
             const int64_t started_us = esp_timer_get_time();
             max_age_us = std::max(max_age_us, started_us - data.enqueued_us);
+            const bool discontinuity = have_previous_frame &&
+                (data.generation != previous_generation || data.sequence != uint32_t(previous_sequence + 1));
+            previous_sequence = data.sequence;
+            previous_generation = data.generation;
+            have_previous_frame = true;
+            if (discontinuity) {
+                ESP_LOGW(TAG, "Wake PCM discontinuity; resetting model and VAD history");
+                if (!static_cast<MicroWakeWord*>(wake_word_.get())->ResetInputState()) {
+                    ESP_LOGE(TAG, "Wake input reset failed; stopping wake detection");
+                    wake_word_running_.store(false);
+                    ClearProcessedWakeQueue();
+                    wake_word_->Stop();
+                    continue;
+                }
+            }
             wake_word_->Feed(data.pcm);
+            if (!static_cast<MicroWakeWord*>(wake_word_.get())->IsRunning()) {
+                wake_word_running_.store(false);
+                ClearProcessedWakeQueue();
+                wake_word_->Stop();
+            }
             const int64_t elapsed_us = esp_timer_get_time() - started_us;
             inference_us += elapsed_us;
             max_inference_us = std::max(max_inference_us, elapsed_us);
@@ -1468,7 +1490,11 @@ void AudioService::EnableWakeWordDetection(bool enable) {
             wake_word_initialized_ = true;
         }
         wake_word_->Start();
+#if CONFIG_USE_MICRO_WAKE_WORD
+        wake_word_running_.store(static_cast<MicroWakeWord*>(wake_word_.get())->IsRunning());
+#else
         wake_word_running_.store(true);
+#endif
     } else {
         /* 先关闭输入开关再 Stop，避免采集任务继续喂给唤醒算法。 */
         wake_word_running_.store(false);

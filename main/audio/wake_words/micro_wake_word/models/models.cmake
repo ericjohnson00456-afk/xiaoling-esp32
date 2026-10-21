@@ -33,4 +33,15 @@ if(CONFIG_USE_MICRO_WAKE_WORD)
     if(NOT EXISTS "${MWW_MODEL_DESCRIPTOR}")
         message(FATAL_ERROR "MicroWakeWord descriptor not found: ${MWW_MODEL_DESCRIPTOR}")
     endif()
+
+    # Pin and embed the accompanying VAD in the application, independent of the
+    # replaceable wake-word resource partition. Defaults come from upstream JSON.
+    set(MWW_VAD_DIR "${CMAKE_CURRENT_LIST_DIR}/vad")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${MWW_VAD_DIR}/vad.json")
+    file(READ "${MWW_VAD_DIR}/vad.json" MWW_VAD_JSON)
+    foreach(FIELD probability_cutoff sliding_window_size feature_step_size tensor_arena_size)
+        string(JSON MWW_VAD_${FIELD} GET "${MWW_VAD_JSON}" micro ${FIELD})
+    endforeach()
+    configure_file("${CMAKE_CURRENT_LIST_DIR}/../model_vad.h.in"
+                   "${CMAKE_CURRENT_BINARY_DIR}/generated/model_vad.h" @ONLY)
 endif()

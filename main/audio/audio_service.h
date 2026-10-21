@@ -214,6 +214,7 @@ private:
     struct WakeInputFrame {
         std::vector<int16_t> pcm;
         uint32_t generation;
+        uint32_t sequence;
         int64_t enqueued_us;
     };
     std::deque<WakeInputFrame> processed_wake_queue_;

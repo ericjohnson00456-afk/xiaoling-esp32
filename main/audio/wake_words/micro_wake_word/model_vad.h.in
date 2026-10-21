@@ -1,0 +1,10 @@
+#pragma once
+
+#include <cstddef>
+
+namespace micro_wake_word {
+inline constexpr float kVadProbabilityCutoff = @MWW_VAD_probability_cutoff@f;
+inline constexpr size_t kVadWindowSize = @MWW_VAD_sliding_window_size@;
+inline constexpr size_t kVadFeatureStepMs = @MWW_VAD_feature_step_size@;
+inline constexpr size_t kVadTensorArenaSize = @MWW_VAD_tensor_arena_size@;
+}  // namespace micro_wake_word

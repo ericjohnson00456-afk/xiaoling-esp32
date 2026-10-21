@@ -1,0 +1,21 @@
+{
+  "repository": "https://github.com/esphome/micro-wake-word-models",
+  "commit": "9a72109cc935f77e34cf8ffe7b868155c37ec201",
+  "files": {
+    "vad.json": {
+      "url": "https://raw.githubusercontent.com/esphome/micro-wake-word-models/9a72109cc935f77e34cf8ffe7b868155c37ec201/models/v2/vad.json",
+      "sha256": "bd8c9cd4350814f761e651685ae5196e2a56521aaf5670071ba742927de58ed7",
+      "bytes": 373
+    },
+    "vad.tflite": {
+      "url": "https://raw.githubusercontent.com/esphome/micro-wake-word-models/9a72109cc935f77e34cf8ffe7b868155c37ec201/models/v2/vad.tflite",
+      "sha256": "7aa4db6d5fb7c5358609f6931e7847d303c16a43d178638bc14104f50d7eff5f",
+      "bytes": 34328
+    },
+    "LICENSE": {
+      "url": "https://raw.githubusercontent.com/esphome/micro-wake-word-models/9a72109cc935f77e34cf8ffe7b868155c37ec201/LICENSE",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "bytes": 11357
+    }
+  }
+}
