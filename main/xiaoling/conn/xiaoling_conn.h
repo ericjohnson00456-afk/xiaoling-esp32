@@ -67,7 +67,6 @@ public:
     void SendStartListening(ListeningMode mode);
     void CheckVoiceStartTimeout();
     void SendStopListening();
-    bool FinishListeningForTts();
     bool StopListeningForTts();
     void DisableAudioUploadForExit();
     bool EndSession();

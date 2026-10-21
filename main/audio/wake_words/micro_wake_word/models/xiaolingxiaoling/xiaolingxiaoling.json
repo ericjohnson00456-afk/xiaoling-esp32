@@ -1,15 +1,15 @@
 {
   "type": "micro",
   "wake_word": "小聆小聆",
-  "author": "local-volcengine-tts-replay-adaptation",
+  "author": "local-real-female-voice-finetune-from-volcengine-v11",
   "model": "xiaolingxiaoling.tflite",
   "trained_languages": [
     "zh"
   ],
   "version": 2,
   "micro": {
-    "probability_cutoff": 0.88,
-    "sliding_window_size": 10,
+    "probability_cutoff": 0.85,
+    "sliding_window_size": 15,
     "feature_step_size": 10,
     "tensor_arena_size": 49152,
     "minimum_esphome_version": "2024.7.0"

@@ -22,14 +22,9 @@ namespace {
 // AXP2101 的电源键中断使能和状态寄存器。状态位写 1 清除。
 constexpr uint8_t kAxp2101IrqEnable1Reg = 0x41;
 constexpr uint8_t kAxp2101IrqStatus1Reg = 0x49;
-constexpr uint8_t kPowerKeyPositiveEdgeMask = 1 << 0;
-constexpr uint8_t kPowerKeyNegativeEdgeMask = 1 << 1;
 constexpr uint8_t kPowerKeyLongPressMask = 1 << 2;
 constexpr uint8_t kPowerKeyShortPressMask = 1 << 3;
-constexpr uint8_t kPowerKeyEventMask = kPowerKeyPositiveEdgeMask |
-                                        kPowerKeyNegativeEdgeMask |
-                                        kPowerKeyLongPressMask |
-                                        kPowerKeyShortPressMask;
+constexpr uint8_t kPowerKeyEventMask = kPowerKeyLongPressMask | kPowerKeyShortPressMask;
 
 // 等待后续短按以识别双击、多击；Application 会根据最终击次执行业务。
 constexpr int64_t kPowerKeyMultiClickTimeoutUs = 400 * 1000;
@@ -168,7 +163,6 @@ private:
     PowerSaveTimer* power_save_timer_;
     uint8_t pending_power_key_clicks_ = 0;
     int64_t last_power_key_click_time_us_ = 0;
-    bool power_key_long_press_ = false;
     SpiBusArbiter spi_bus_arbiter_;
 
     void InitializePowerSaveTimer() {
@@ -233,31 +227,20 @@ private:
     void PollPowerKey() {
         const uint8_t events = pmic_->ReadAndClearPowerKeyEvents();
 
-        // AXP2101 的负边沿表示按下，正边沿表示松开。长按事件到达后，
-        // 进入按住说话；松开时结束上报，让云端返回 TTS 和字幕。
-        if ((events & kPowerKeyNegativeEdgeMask) != 0) {
-            power_key_long_press_ = false;
-        }
+        // 某些按压过程可能同时留下多个状态位，长按优先，避免再触发短按业务。
         if ((events & kPowerKeyLongPressMask) != 0) {
-            power_key_long_press_ = true;
             pending_power_key_clicks_ = 0;
             ESP_LOGI(TAG, "Power key long press");
             Application::GetInstance().HandleButtonLongPress();
+            return;
         }
 
-        if ((events & kPowerKeyShortPressMask) != 0 && !power_key_long_press_) {
+        if ((events & kPowerKeyShortPressMask) != 0) {
             // Application 当前只区分 1~5 击和 8 击以上，饱和到 8 可避免溢出。
             if (pending_power_key_clicks_ < 8) {
                 ++pending_power_key_clicks_;
             }
             last_power_key_click_time_us_ = esp_timer_get_time();
-        }
-
-        if ((events & kPowerKeyPositiveEdgeMask) != 0) {
-            if (power_key_long_press_) {
-                power_key_long_press_ = false;
-                Application::GetInstance().HandleButtonPressUp();
-            }
         }
 
         if (pending_power_key_clicks_ == 0 ||
