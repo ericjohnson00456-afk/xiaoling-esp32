@@ -50,7 +50,17 @@ void Application::HandleButtonLongPress() {
     });
 }
 
-// 长按优先停止正在响铃的闹钟；如果正在等待固件升级确认，则跳过本次升级。
+void Application::HandleButtonPressUp() {
+    if (GetDeviceState() == kDeviceStateActivating) {
+        return;
+    }
+    Schedule([this]() {
+        ProcessButtonPressUp();
+    });
+}
+
+// 长按优先停止正在响铃的闹钟；如果正在等待固件升级确认，则跳过本次升级；
+// 没有更高优先级业务时进入按住说话模式。
 void Application::ProcessButtonLongPress() {
     const auto state = GetDeviceState();
     if (state == kDeviceStateActivating) {
@@ -72,7 +82,28 @@ void Application::ProcessButtonLongPress() {
         ESP_LOGI(kTag, "Long press: exit camera preview");
         return;
     }
-    HandleOtaConfirmation(false);
+    if (HandleOtaConfirmation(false)) {
+        return;
+    }
+    if (GetDeviceState() == kDeviceStateIdle ||
+        GetDeviceState() == kDeviceStateSpeaking) {
+        ESP_LOGI(kTag, "长按开始按住说话");
+        // 长按本身就是明确的唤醒动作，不再播放短按唤醒提示音。
+        StartListeningWithoutPrompt();
+    }
+}
+
+void Application::ProcessButtonPressUp() {
+    const auto state = GetDeviceState();
+    if (state == kDeviceStateListening || state == kDeviceStateConnecting) {
+        ESP_LOGI(kTag, "松开按键，结束按住说话并等待 TTS");
+    }
+    // 即使 START 事件尚未处理，也要先排入 STOP；主事件循环按 START
+    // 再 STOP 的顺序处理，避免极快松手后会话继续保持监听。
+    if (state == kDeviceStateIdle || state == kDeviceStateListening ||
+        state == kDeviceStateConnecting || state == kDeviceStateSpeaking) {
+        StopListening();
+    }
 }
 
 // 在应用主任务中处理短击次数，优先响应闹钟和 OTA 确认，

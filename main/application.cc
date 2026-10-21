@@ -47,6 +47,7 @@ static constexpr EventBits_t kAllMainEvents =
     MAIN_EVENT_TOGGLE_CHAT |
     MAIN_EVENT_START_LISTENING |
     MAIN_EVENT_STOP_LISTENING |
+    MAIN_EVENT_START_LISTENING_SILENT |
     MAIN_EVENT_STATE_CHANGED;
 
 Application::Application() {
@@ -199,6 +200,7 @@ void Application::HandlePlaybackEvent(const PlaybackEvent& event) {
     // 确认 session 后才清标志；旧终态不能清掉新 TTS 的待播放状态。
     tts_waiting_for_playback_.store(false);
     tts_output_started_.store(false);
+    manual_stop_waiting_for_tts_ = false;
     const char* reason_text = "interrupted";
     if (event.reason == PlaybackEndReason::kNaturalEnd) {
         reason_text = "natural";
@@ -259,7 +261,8 @@ void Application::HandlePlaybackEvent(const PlaybackEvent& event) {
             SetDeviceState(kDeviceStateListening);
         } else if (!exit_requested_.load() &&
                    event.state == PlaybackState::kCompleted &&
-                   session_controller_.policy().mode == DuplexMode::kHalfDuplex) {
+                   session_controller_.policy().mode == DuplexMode::kHalfDuplex &&
+                   listening_mode_ != kListeningModeManualStop) {
             ESP_LOGI(TAG, "半双工 TTS 播放完成，重新开始上行");
             SetDeviceState(kDeviceStateListening);
         } else {
@@ -544,6 +547,10 @@ void Application::ProcessMainEvents(EventBits_t bits) {
 
     if (bits & MAIN_EVENT_START_LISTENING) {
         HandleStartListeningEvent();
+    }
+
+    if (bits & MAIN_EVENT_START_LISTENING_SILENT) {
+        HandleStartListeningEvent(false);
     }
 
     if (bits & MAIN_EVENT_STOP_LISTENING) {
@@ -887,6 +894,7 @@ void Application::InitializeXiaolingConn() {
                     intent_manager_.Pop(PlaybackIntentId::kVoiceSession);
                     return;
                 }
+                manual_stop_waiting_for_tts_ = false;
                 intent_manager_.Pop(PlaybackIntentId::kVoiceSession);
                 const auto state = GetDeviceState();
                 if (natural_finish &&
@@ -936,6 +944,10 @@ void Application::ToggleChatState() {
 
 void Application::StartListening() {
     xEventGroupSetBits(event_group_, MAIN_EVENT_START_LISTENING);
+}
+
+void Application::StartListeningWithoutPrompt() {
+    xEventGroupSetBits(event_group_, MAIN_EVENT_START_LISTENING_SILENT);
 }
 
 void Application::StopListening() {
@@ -997,7 +1009,7 @@ void Application::HandleToggleChatEvent() {
     }
 }
 
-void Application::HandleStartListeningEvent() {
+void Application::HandleStartListeningEvent(bool play_wakeup_tone) {
     if (audio_player_.IsWakeupPending()) {
         return;
     }
@@ -1022,12 +1034,12 @@ void Application::HandleStartListeningEvent() {
             return;
         }
 
-        BeginWakeup(kListeningModeManualStop);
+        BeginWakeup(kListeningModeManualStop, {}, play_wakeup_tone);
     } else if (state == kDeviceStateSpeaking) {
         AbortSpeaking(kAbortReasonWakeWordDetected);
         SetDeviceState(kDeviceStateIdle);
         if (EnsureXiaolingReadyForWakeup()) {
-            BeginWakeup(kListeningModeManualStop);
+            BeginWakeup(kListeningModeManualStop, {}, play_wakeup_tone);
         }
     }
 }
@@ -1044,10 +1056,19 @@ void Application::HandleStopListeningEvent() {
         SetDeviceState(kDeviceStateWifiConfiguring);
         return;
     } else if (state == kDeviceStateListening) {
+        bool waiting_for_tts = false;
         if (xiaoling_conn_) {
-            xiaoling_conn_->SendStopListening();
+            waiting_for_tts = xiaoling_conn_->FinishListeningForTts();
+            if (!waiting_for_tts) {
+                ESP_LOGW(TAG, "按住说话结束上报失败");
+            }
         }
+        manual_stop_waiting_for_tts_ = waiting_for_tts;
         SetDeviceState(kDeviceStateIdle);
+        // 手动按住说话只影响当前会话；下一次唤醒恢复设备配置的默认模式。
+        listening_mode_ = session_controller_.policy().mode == DuplexMode::kFullDuplex
+                              ? kListeningModeRealtime
+                              : kListeningModeAutoStop;
     }
 }
 
@@ -1118,7 +1139,8 @@ void Application::AbortSpeaking(AbortReason reason) {
     }
 }
 
-void Application::BeginWakeup(ListeningMode mode, const std::string& wake_word) {
+void Application::BeginWakeup(ListeningMode mode, const std::string& wake_word,
+                              bool play_wakeup_tone) {
     bool interrupted_tts = false;
     if (!xiaoling_conn_ || !ResetVoiceSessionForWakeup(interrupted_tts)) return;
     // 重开会话继续持有 VoiceSessionIntent，避免两轮对话之间恢复被暂停的音乐。
@@ -1130,43 +1152,47 @@ void Application::BeginWakeup(ListeningMode mode, const std::string& wake_word) 
     }
     iat_utterance_active_ = false;
     audio_service_.EnableAudioUpload(false);
-    if (!intent_manager_.Push(PlaybackIntentId::kPromptTone)) {
-        ESP_LOGE(TAG, "唤醒提示音事件入栈失败");
-        SetDeviceState(kDeviceStateIdle);
-        intent_manager_.Pop(PlaybackIntentId::kVoiceSession);
-        return;
-    }
     const auto generation = Xiaoling::voice_session_epoch.Current();
-    wakeup_recording_gate_.Begin(generation, audio_service_.IsAecEnabled());
-    if (wakeup_recording_gate_.Blocked()) {
-        audio_service_.SetMicrophoneSuppressed(true);
-        audio_service_.PauseWakeWordDetection();
-        ESP_LOGI(TAG, "无 AEC：按提示音实际播放终态丢弃录音，不限制 tone 长度");
-    }
-    audio_player_.PlayWakeup([this, generation](bool proceed) {
-        Schedule([this, generation, proceed]() {
-            if (!Xiaoling::voice_session_epoch.IsCurrent(generation)) return;
-            const bool deferred_recording = wakeup_recording_gate_.Complete(generation);
-            if (deferred_recording) audio_service_.SetMicrophoneSuppressed(false);
-            intent_manager_.Pop(PlaybackIntentId::kPromptTone);
-            if (!proceed) {
-                if (GetDeviceState() == kDeviceStateListening && xiaoling_conn_) {
-                    xiaoling_conn_->SendStopListening();
+    if (play_wakeup_tone) {
+        if (!intent_manager_.Push(PlaybackIntentId::kPromptTone)) {
+            ESP_LOGE(TAG, "唤醒提示音事件入栈失败");
+            SetDeviceState(kDeviceStateIdle);
+            intent_manager_.Pop(PlaybackIntentId::kVoiceSession);
+            return;
+        }
+        wakeup_recording_gate_.Begin(generation, audio_service_.IsAecEnabled());
+        if (wakeup_recording_gate_.Blocked()) {
+            audio_service_.SetMicrophoneSuppressed(true);
+            audio_service_.PauseWakeWordDetection();
+            ESP_LOGI(TAG, "无 AEC：按提示音实际播放终态丢弃录音，不限制 tone 长度");
+        }
+        audio_player_.PlayWakeup([this, generation](bool proceed) {
+            Schedule([this, generation, proceed]() {
+                if (!Xiaoling::voice_session_epoch.IsCurrent(generation)) return;
+                const bool deferred_recording = wakeup_recording_gate_.Complete(generation);
+                if (deferred_recording) audio_service_.SetMicrophoneSuppressed(false);
+                intent_manager_.Pop(PlaybackIntentId::kPromptTone);
+                if (!proceed) {
+                    if (GetDeviceState() == kDeviceStateListening && xiaoling_conn_) {
+                        xiaoling_conn_->SendStopListening();
+                    }
+                    if (xiaoling_conn_) xiaoling_conn_->SendWakeWordDetected("");
+                    SetDeviceState(kDeviceStateIdle);
+                    intent_manager_.Pop(PlaybackIntentId::kVoiceSession);
+                    return;
                 }
-                if (xiaoling_conn_) xiaoling_conn_->SendWakeWordDetected("");
-                SetDeviceState(kDeviceStateIdle);
-                intent_manager_.Pop(PlaybackIntentId::kVoiceSession);
-                return;
-            }
-            if (deferred_recording && GetDeviceState() == kDeviceStateConnecting) {
-                audio_service_.EnableWakeWordDetection(true);
-                ESP_LOGI(TAG, "无 AEC：提示音及 DMA 已结束，开始新录音会话");
-                SetListeningMode(listening_mode_);
-                return;
-            }
-            ESP_LOGI(TAG, "Wakeup tone finished; recording session remains active");
+                if (deferred_recording && GetDeviceState() == kDeviceStateConnecting) {
+                    audio_service_.EnableWakeWordDetection(true);
+                    ESP_LOGI(TAG, "无 AEC：提示音及 DMA 已结束，开始新录音会话");
+                    SetListeningMode(listening_mode_);
+                    return;
+                }
+                ESP_LOGI(TAG, "Wakeup tone finished; recording session remains active");
+            });
         });
-    });
+    } else {
+        ESP_LOGI(TAG, "跳过唤醒提示音，直接进入聆听");
+    }
     if (GetDeviceState() != kDeviceStateConnecting) {
         return;
     }
@@ -1305,6 +1331,7 @@ bool Application::ResetVoiceSessionForWakeup(bool& interrupted_tts) {
     pending_tts_session_id_ = 0;
     tts_waiting_for_playback_.store(false);
     tts_output_started_.store(false);
+    manual_stop_waiting_for_tts_ = false;
     session_controller_.EndSession();
     // 先冻结旧回复游标，再立即停止本地声音；网络 cancel/event 不得拖住静音。
     if (xiaoling_conn_ && interrupted_tts) {
@@ -1391,7 +1418,8 @@ void Application::HandleStateChangedEvent() {
         case kDeviceStateIdle:
             listening_started_at_us_ = 0;
             session_controller_.EndSession();
-            if (tts_waiting_for_playback_.load() && !exit_requested_.load()) {
+            if ((manual_stop_waiting_for_tts_ || tts_waiting_for_playback_.load()) &&
+                !exit_requested_.load()) {
                 Ui::SetStatusText("思考中...");
                 Ui::SetEmotion("等待");
             } else {

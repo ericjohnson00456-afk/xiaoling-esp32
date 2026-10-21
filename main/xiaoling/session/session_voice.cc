@@ -755,6 +755,23 @@ void XiaolingSessionVoice::SendStopListening() {
     CancelSession();
 }
 
+bool XiaolingSessionVoice::FinishListeningForTts() {
+    std::lock_guard<std::recursive_mutex> lock(session_mutex_);
+    const bool was_active = session_active_.load();
+    const bool sent = !was_active ||
+        (text_sender_ && text_sender_("{\"action\":\"end\"}"));
+
+    // action:end 请求云端生成本轮结果。只关闭音频上报，保留会话标识、
+    // accepting_session_messages_ 和 TTS/字幕状态，等待 result/finish 到达。
+    SetAudioUploadEnabled(false, "send_end_for_tts");
+    pending_wake_word_.clear();
+    uplink_audio_format_checked_ = false;
+    SetSessionActive(false);
+    ESP_LOGI(TAG, "按住说话已停止音频上报，等待 TTS/字幕: sent=%d, active=%d",
+             sent ? 1 : 0, was_active ? 1 : 0);
+    return sent;
+}
+
 bool XiaolingSessionVoice::StopListeningForTts() {
     std::lock_guard<std::recursive_mutex> lock(session_mutex_);
     const bool was_active = session_active_.load();

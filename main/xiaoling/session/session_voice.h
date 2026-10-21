@@ -53,6 +53,8 @@ public:
     // 使用应用现有的一秒时钟检查，等待 started 不得阻塞唤醒主任务。
     void CheckStartTimeout();
     void SendStopListening();
+    // 按住说话松开后结束音频上报，保留会话结果以接收 TTS 和字幕。
+    bool FinishListeningForTts();
     // 半双工收到 TTS 后只结束上行，保留当前回复的音频和字幕状态。
     bool StopListeningForTts();
     // 退出工具只关闭音频上报，保留云端会话以接收告别 TTS 和字幕。

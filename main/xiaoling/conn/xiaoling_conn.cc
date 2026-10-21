@@ -195,6 +195,10 @@ void XiaolingConn::SendStopListening() {
     }
 }
 
+bool XiaolingConn::FinishListeningForTts() {
+    return voice_ != nullptr && voice_->FinishListeningForTts();
+}
+
 void XiaolingConn::CheckVoiceStartTimeout() {
     if (voice_ != nullptr) voice_->CheckStartTimeout();
 }

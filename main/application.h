@@ -36,6 +36,7 @@
 #define MAIN_EVENT_START_LISTENING      (1 << 10)
 #define MAIN_EVENT_STOP_LISTENING       (1 << 11)
 #define MAIN_EVENT_STATE_CHANGED        (1 << 12)
+#define MAIN_EVENT_START_LISTENING_SILENT (1 << 13)
 
 class Application {
 public:
@@ -103,6 +104,12 @@ public:
     void StartListening();
 
     /**
+     * 以事件方式开始监听，但跳过唤醒提示音；用于按住说话等明确的
+     * 物理唤醒操作。
+     */
+    void StartListeningWithoutPrompt();
+
+    /**
      * 以事件方式停止监听，可跨任务安全调用。
      * 实际处理由主循环中的 MAIN_EVENT_STOP_LISTENING 事件完成。
      */
@@ -115,6 +122,8 @@ public:
     void HandleButtonClick(uint8_t click_count);
     // 投递一次长按事件。
     void HandleButtonLongPress();
+    // 投递一次按键释放事件，用于长按按住说话模式。
+    void HandleButtonPressUp();
     // 清除 Wi-Fi 配置、重置小聆连接并进入配网状态；五击和串口 wifi 命令共用。
     void ClearNetworkConfiguration();
 
@@ -187,6 +196,8 @@ private:
     std::atomic_uint32_t prompt_tone_session_id_{0};
     // TTS URL 到达后保持该标志，直到 DAC 首帧输出或当前 TTS 会话结束。
     std::atomic_bool tts_waiting_for_playback_{false};
+    // 按住说话松开后，在云端返回 TTS 前保持“思考中”状态。
+    bool manual_stop_waiting_for_tts_ = false;
     // DAC 首个 PCM 输出和播放器 kPlaying 事件可能乱序到达，暂存首帧状态。
     std::atomic_bool tts_output_started_{false};
     /* Incremented synchronously when each TTS URL is admitted. Delayed IAT
@@ -272,7 +283,7 @@ private:
     // 主事件处理函数。
     void HandleStateChangedEvent();
     void HandleToggleChatEvent();
-    void HandleStartListeningEvent();
+    void HandleStartListeningEvent(bool play_wakeup_tone = true);
     void HandleStopListeningEvent();
     void HandleNetworkConnectedEvent();
     void HandleNetworkDisconnectedEvent();
@@ -292,7 +303,8 @@ private:
     void RefreshListeningAudioUpload();
     void PauseWakeWordDetection();
     bool ResetVoiceSessionForWakeup(bool& interrupted_tts);
-    void BeginWakeup(ListeningMode mode, const std::string& wake_word = {});
+    void BeginWakeup(ListeningMode mode, const std::string& wake_word = {},
+                     bool play_wakeup_tone = true);
     void CancelWakeup();
     void PublishWifiIcon();
 
@@ -300,8 +312,10 @@ private:
     // 按键业务实现。application_button.cc 负责短击、长按、重新配网和恢复出厂。
     // 在 Application 主任务中执行短击次数对应的业务。
     void ProcessButtonClick(uint8_t click_count);
-    // 在 Application 主任务中处理长按，用于停止闹钟或跳过 OTA。
+    // 在 Application 主任务中处理长按，用于停止闹钟、跳过 OTA 或开始按住说话。
     void ProcessButtonLongPress();
+    // 在 Application 主任务中结束按住说话并等待 TTS。
+    void ProcessButtonPressUp();
     // 启动恢复出厂任务。
     void StartFactoryReset();
     // 播放提示音后执行恢复出厂和重启。
