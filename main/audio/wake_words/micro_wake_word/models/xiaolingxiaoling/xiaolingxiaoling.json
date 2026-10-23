@@ -1,7 +1,7 @@
 {
   "type": "micro",
   "wake_word": "小聆小聆",
-  "author": "local-v14-prompt-negative-balanced-replay",
+  "author": "local-v16-per-layer-reset-aware-refined-adaptation",
   "model": "xiaolingxiaoling.tflite",
   "trained_languages": [
     "zh"
