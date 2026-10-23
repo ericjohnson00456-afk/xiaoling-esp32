@@ -132,7 +132,7 @@ MCP_REGISTER_TOOL(RegisterAlarmClock, McpToolGroup::kCommon, 150) {
                    JsonSchema{R"({"type":"string","description":"提醒的完整文本内容。例如：'给妈妈打电话庆祝生日'。"})"},
                    false),
           Property("snooze_enabled", kPropertyTypeJson,
-                   JsonSchema{R"({"type":"boolean","default":true,"description":"是否开启稍后提醒。默认开启。"})"},
+                   JsonSchema{R"({"type":"boolean","default":false,"description":"是否开启稍后提醒。默认关闭；仅用户明确要求开启时传 true，要求关闭或未提及时传 false。"})"},
                    false),
           Property("snooze_interval", kPropertyTypeJson,
                    JsonSchema{R"({"type":"integer","default":5,"minimum":1,"maximum":30,"description":"稍后提醒的间隔时间（分钟）。默认 5 分钟，范围 1-30。"})"},
@@ -176,7 +176,7 @@ MCP_REGISTER_TOOL(RegisterAlarmClock, McpToolGroup::kCommon, 150) {
         spec.day_of_week = IntegerArgument(properties, "day_of_week", 0);
         spec.day_of_month = IntegerArgument(properties, "day_of_month", 0);
         spec.month_of_year = IntegerArgument(properties, "month_of_year", 0);
-        spec.snooze_enabled = BooleanArgument(properties, "snooze_enabled", true);
+        spec.snooze_enabled = BooleanArgument(properties, "snooze_enabled", spec.snooze_enabled);
         spec.snooze_interval = IntegerArgument(properties, "snooze_interval", 5);
         spec.snooze_count = IntegerArgument(properties, "snooze_count", 3);
 

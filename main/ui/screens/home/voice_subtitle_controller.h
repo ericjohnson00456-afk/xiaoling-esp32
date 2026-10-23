@@ -18,6 +18,7 @@ public:
 
     void Start();
     void Stop();
+    bool IsTtsPlaying() const { return subtitle_audio_started_; }
 
 private:
     struct SubtitleSegment {

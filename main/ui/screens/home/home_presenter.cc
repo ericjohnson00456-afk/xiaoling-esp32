@@ -255,7 +255,8 @@ void HomePresenter::RenderMusicTrack() {
     if (view_ != nullptr) {
         view_->SetMusicTrack(
             music_track_,
-            standby_ && !music_paused_ && !music_track_.name.empty());
+            standby_ && !voice_subtitles_.IsTtsPlaying() &&
+                !music_paused_ && !music_track_.name.empty());
     }
 }
 

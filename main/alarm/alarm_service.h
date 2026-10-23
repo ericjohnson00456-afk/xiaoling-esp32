@@ -34,7 +34,8 @@ struct AlarmSpec {
     int month_of_year = 0;
     std::string holiday_name;
     std::string text;
-    bool snooze_enabled = true;
+    // 云端指令和列表未提供该字段时关闭稍后提醒，仅显式 true 时开启。
+    bool snooze_enabled = false;
     int snooze_interval = 5;
     int snooze_count = 3;
 };

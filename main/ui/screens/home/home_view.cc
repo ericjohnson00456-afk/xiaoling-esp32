@@ -624,6 +624,9 @@ void HomeView::SetSubtitleText(const std::string& text, uint8_t max_lines) {
         if (text.empty()) {
             lv_obj_add_flag(subtitle_label_, LV_OBJ_FLAG_HIDDEN);
         } else {
+            if (music_bar_ != nullptr) {
+                lv_obj_add_flag(music_bar_, LV_OBJ_FLAG_HIDDEN);
+            }
             lv_obj_remove_flag(subtitle_label_, LV_OBJ_FLAG_HIDDEN);
             // Image/animation widgets may be created or refreshed after the
             // subtitle label. Keep spoken text on the top visual layer.
@@ -679,6 +682,9 @@ void HomeView::SetChatMessage(const std::string& role, const std::string& text) 
     }
     lv_obj_scroll_to_view_recursive(bubble, LV_ANIM_ON);
 #else
+    if (!text.empty() && music_bar_ != nullptr) {
+        lv_obj_add_flag(music_bar_, LV_OBJ_FLAG_HIDDEN);
+    }
     if (chat_message_label_ != nullptr) {
         const std::string visible_text = role == "system"
             ? LatestWrappedLines(chat_message_label_, text, 3) : text;
@@ -855,7 +861,10 @@ void HomeView::SetMusicTrack(const MusicTrack& track, bool visible) {
     if (!lock.locked()) {
         return;
     }
-    if (!visible || track.name.empty()) {
+    // 歌名与字幕共用底部区域；待机状态可能早于 TTS 播放结束到达。
+    const bool subtitle_visible = subtitle_label_ != nullptr &&
+        !lv_obj_has_flag(subtitle_label_, LV_OBJ_FLAG_HIDDEN);
+    if (!visible || track.name.empty() || subtitle_visible) {
         lv_obj_add_flag(music_bar_, LV_OBJ_FLAG_HIDDEN);
         return;
     }
