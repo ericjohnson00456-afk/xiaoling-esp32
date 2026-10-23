@@ -26,3 +26,10 @@ inline size_t AmplifyMicrophonePcm(std::vector<int16_t>& pcm, size_t channels,
     }
     return clipped;
 }
+
+// AFE/AEC 输出已拆分给唤醒旁路；仅对上行单声道 PCM 追加编码前增益。
+inline constexpr int32_t kUplinkPcmGain = 3;
+
+inline size_t AmplifyUplinkPcm(std::vector<int16_t>& pcm) {
+    return AmplifyMicrophonePcm(pcm, 1, false, kUplinkPcmGain);
+}

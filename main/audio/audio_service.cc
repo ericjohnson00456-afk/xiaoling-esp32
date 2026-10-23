@@ -174,8 +174,8 @@ void AudioService::Initialize(AudioCodec* codec) {
 #if CONFIG_USE_MICRO_WAKE_WORD
         const uint32_t wake_generation = wake_input_generation_.load();
 #endif
-        // 测试模式从云端编码器的同一输入点旁路取样，保证 A/B 对比包含
-        // AFE/AEC 的影响，而不是录到空闲时的原始麦克风旁路。
+        // 测试模式保留上行增益前的 AFE/AEC PCM；Opus 对比回放再施加
+        // 同样的编码前增益，便于比较处理输出和云端实际接收的音频。
         CaptureUplinkPcmForTesting(data);
 #if CONFIG_USE_MICRO_WAKE_WORD
         if (IsWakeWordRunning()) {
@@ -915,6 +915,8 @@ void AudioService::OpusCodecTask() {
     uint32_t previous_dropped = encode_dropped_frames_.load();
     uint32_t encoded = 0;
     int64_t encoding_us = 0;
+    size_t gain_samples = 0;
+    size_t gain_clipped_samples = 0;
     while (true) {
         std::unique_lock<std::mutex> lock(audio_queue_mutex_);
         audio_queue_cv_.wait(lock, [this]() {
@@ -981,6 +983,11 @@ void AudioService::OpusCodecTask() {
             packet->frame_duration = OPUS_FRAME_DURATION_MS;
             packet->sample_rate = 16000;
             const int64_t encoding_started_us = esp_timer_get_time();
+            if (task->type == kAudioTaskTypeEncodeToOpusQueue) {
+                // 这里只修改编码队列持有的单声道副本，唤醒/AFE 输入不受影响。
+                gain_samples += task->pcm.size();
+                gain_clipped_samples += AmplifyUplinkPcm(task->pcm);
+            }
 #ifdef CONFIG_LSPLATFORM
             const bool raw_uplink = task->type == kAudioTaskTypeEncodeToOpusQueue &&
                                     std::strcmp(XiaolingConfig::kUplinkAudioEncoding, "raw") == 0;
@@ -1010,15 +1017,21 @@ void AudioService::OpusCodecTask() {
                 const uint32_t produced = encode_produced_frames_.load();
                 const uint32_t dropped = encode_dropped_frames_.load();
                 const double seconds = (stats_now_us - stats_started_us) / 1000000.0;
-                ESP_LOGI(TAG, "编码吞吐: input=%.1ffps, output=%.1ffps, dropped=%lu, avg=%.1fms",
+                ESP_LOGI(TAG, "编码吞吐: input=%.1ffps, output=%.1ffps, dropped=%lu, avg=%.1fms, "
+                             "pcm_gain=%ld, gain_clipped=%u/%u",
                          (produced - previous_produced) / seconds, encoded / seconds,
                          static_cast<unsigned long>(dropped - previous_dropped),
-                         encoded ? encoding_us / (encoded * 1000.0) : 0.0);
+                         encoded ? encoding_us / (encoded * 1000.0) : 0.0,
+                         static_cast<long>(kUplinkPcmGain),
+                         static_cast<unsigned>(gain_clipped_samples),
+                         static_cast<unsigned>(gain_samples));
                 stats_started_us = stats_now_us;
                 previous_produced = produced;
                 previous_dropped = dropped;
                 encoded = 0;
                 encoding_us = 0;
+                gain_samples = 0;
+                gain_clipped_samples = 0;
             }
 
             if (task->type == kAudioTaskTypeEncodeToOpusQueue) {
@@ -1600,8 +1613,8 @@ bool AudioService::SupportsAec() const {
 #endif
 }
 
-// 录音测试从云端编码器的 AFE/AEC PCM 输入点取帧。停止后依次播放
-// 原始 PCM、双提示音和同参数 Opus 编解码结果，便于定位音质损伤。
+// 录音测试从上行增益前的 AFE/AEC PCM 取帧。停止后依次播放
+// 原始 PCM、双提示音和同增益、同参数的 Opus 编解码结果。
 void AudioService::EnableAudioTesting(bool enable) {
     ESP_LOGI(TAG, "%s audio testing", enable ? "Enabling" : "Disabling");
     if (enable) {
@@ -1681,6 +1694,7 @@ void AudioService::PrepareAudioTestingPlayback() {
         size_t comparable_samples = 0;
         size_t opus_packet_count = 0;
         size_t opus_payload_bytes = 0;
+        size_t uplink_clipped_samples = 0;
         {
             std::lock_guard<std::mutex> lock(audio_testing_pcm_mutex_);
             auto log_input = [](const char* label, const TestingInputStats& stats) {
@@ -1776,7 +1790,7 @@ void AudioService::PrepareAudioTestingPlayback() {
                 return true;
             };
 
-            // 第一段：直接回放云端编码器实际收到的 AFE/AEC PCM。
+            // 第一段：保留编码前增益之前的 AFE/AEC PCM 作为参考。
             const bool pcm_ready = comparable_samples > 0 &&
                 append_playback_tasks(audio_testing_pcm_buffer_.data(),
                                       comparable_samples, " PCM");
@@ -1798,6 +1812,7 @@ void AudioService::PrepareAudioTestingPlayback() {
                         audio_testing_pcm_buffer_.begin() + offset,
                         audio_testing_pcm_buffer_.begin() + offset +
                             kOpusFrameSamples);
+                    uplink_clipped_samples += AmplifyUplinkPcm(frame);
                     std::vector<uint8_t> opus_payload;
                     if (!audio_testing_encoder_->Encode(
                             std::move(frame), opus_payload)) {
@@ -1866,21 +1881,25 @@ void AudioService::PrepareAudioTestingPlayback() {
         ESP_LOGI(TAG,
                  "音频测试 A/B: duration=%.0fms, samples=%u/%u, peak=%ld "
                  "(%.1fdBFS), rms=%.1fdBFS, clipped=%u (%.2f%%), "
-                 "opus_packets=%u, opus_bytes=%u, playback_chunks=%u",
+                 "opus_packets=%u, opus_bytes=%u, playback_chunks=%u, "
+                 "opus_pcm_gain=%ld, opus_gain_clipped=%u",
                  duration_ms, static_cast<unsigned>(recorded_samples),
                  static_cast<unsigned>(comparable_samples),
                  static_cast<long>(peak), peak_dbfs, rms_dbfs,
                  static_cast<unsigned>(clipped_samples), clipped_percent,
                  static_cast<unsigned>(opus_packet_count),
                  static_cast<unsigned>(opus_payload_bytes),
-                 static_cast<unsigned>(playback_tasks.size()));
+                 static_cast<unsigned>(playback_tasks.size()),
+                 static_cast<long>(kUplinkPcmGain),
+                 static_cast<unsigned>(uplink_clipped_samples));
         if (clipped_samples > 0) {
             ESP_LOGW(TAG,
                      "音频测试检测到硬削波；若回放仍有爆音，应降低 PCM 增益");
         }
         if (comparable_samples > 0 && opus_packet_count > 0) {
             ESP_LOGI(TAG,
-                     "音频测试回放顺序: AFE/AEC PCM -> 双提示音 -> 16kbps Opus");
+                     "音频测试回放顺序: AFE/AEC PCM -> 双提示音 -> PCM x%ld 后 16kbps Opus",
+                     static_cast<long>(kUplinkPcmGain));
         }
 
         {
