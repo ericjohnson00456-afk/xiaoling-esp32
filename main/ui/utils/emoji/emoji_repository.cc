@@ -1,12 +1,20 @@
 #include "emoji_repository.h"
 
 #include "resource/resource.h"
+#include "ui/utils/image/rgb565_pixels.h"
 
 #include <cJSON.h>
+#include <esp_heap_caps.h>
 #include <esp_log.h>
+#include <esp_timer.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <sdkconfig.h>
+#include <src/draw/lv_image_decoder_private.h>
 
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <utility>
 
 #define TAG "EmojiRepository"
@@ -14,6 +22,95 @@
 namespace {
 
 constexpr uint32_t kDefaultIntervalMs = 100;
+// Do not spend the audio/network allocation headroom on decoded UI resources.
+constexpr size_t kEmojiPsramReserveBytes = 3 * 1024 * 1024;
+
+struct FrameLoader {
+    std::map<const uint8_t*, std::shared_ptr<LvglImage>> frames;
+    size_t decoded_bytes = 0;
+    size_t decoded_frames = 0;
+    size_t raw_frames = 0;
+
+    std::shared_ptr<LvglImage> Load(const ResourceData& asset) {
+        const auto cached = frames.find(asset.address);
+        if (cached != frames.end()) {
+            return cached->second;
+        }
+
+        auto raw = std::make_shared<LvglRawImage>(
+            const_cast<uint8_t*>(asset.address), asset.size);
+        std::shared_ptr<LvglImage> image;
+#ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
+        // This style has a fixed black background. Flattening alpha here also
+        // removes per-pixel alpha blending from the animation render path.
+        lv_image_header_t header{};
+        if (heap_caps_get_free_size(MALLOC_CAP_SPIRAM) > kEmojiPsramReserveBytes &&
+            lv_image_decoder_get_info(raw->image_dsc(), &header) == LV_RESULT_OK &&
+            header.w != 0 && header.h != 0 &&
+            header.w <= std::numeric_limits<uint32_t>::max() / 2 / header.h) {
+            const size_t pixels = static_cast<size_t>(header.w) * header.h;
+            const size_t bytes = pixels * 2;
+            // Account for both the resident RGB565 image and temporary BGRA
+            // decode buffer before opening the PNG. Never fall back to SRAM.
+            const size_t free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+            if (bytes <= std::numeric_limits<size_t>::max() / 3 &&
+                free_psram > kEmojiPsramReserveBytes &&
+                bytes * 3 < free_psram - kEmojiPsramReserveBytes) {
+                image = Decode(*raw, header.w, header.h, bytes);
+                if (image != nullptr) {
+                    decoded_bytes += bytes;
+                    ++decoded_frames;
+                    // Loading all animations can take seconds at startup.
+                    // Let the idle task run between frames, including at OTA reload.
+                    vTaskDelay(1);
+                }
+            }
+        }
+#endif
+        if (image == nullptr) {
+            image = std::move(raw);
+            ++raw_frames;
+        }
+        frames.emplace(asset.address, image);
+        return image;
+    }
+
+private:
+    static std::shared_ptr<LvglImage> Decode(const LvglImage& source,
+                                            uint32_t width, uint32_t height,
+                                            size_t bytes) {
+        // LVGL 9 exposes the decoder session fields in this private header.
+        // no_cache keeps the transient BGRA image out of the shared image cache;
+        // the repository owns the smaller RGB565 allocation until its last user exits.
+        struct DecoderSession {
+            lv_image_decoder_dsc_t descriptor{};
+            ~DecoderSession() { lv_image_decoder_close(&descriptor); }
+        } session;
+        lv_image_decoder_args_t args{};
+        args.no_cache = true;
+        if (lv_image_decoder_open(&session.descriptor, source.image_dsc(), &args) != LV_RESULT_OK) {
+            ESP_LOGW(TAG, "表情预解码失败，保留原图");
+            return nullptr;
+        }
+        const auto* decoded = session.descriptor.decoded;
+        if (decoded == nullptr || decoded->data == nullptr ||
+            decoded->header.cf != LV_COLOR_FORMAT_ARGB8888 ||
+            decoded->header.w != width || decoded->header.h != height ||
+            decoded->header.stride < width * 4) {
+            ESP_LOGW(TAG, "表情解码格式不支持预转换，保留原图");
+            return nullptr;
+        }
+        auto* pixels = static_cast<uint8_t*>(
+            heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        if (pixels == nullptr) {
+            ESP_LOGW(TAG, "表情像素 PSRAM 分配失败: bytes=%u", static_cast<unsigned>(bytes));
+            return nullptr;
+        }
+        BgraOnBlackToRgb565(decoded->data, decoded->header.stride, width, height, pixels);
+        return std::make_shared<LvglAllocatedImage>(
+            pixels, bytes, width, height, width * 2, LV_COLOR_FORMAT_RGB565);
+    }
+};
 
 bool GetArrayInt(const cJSON* array, int index, int* value) {
     const cJSON* item = cJSON_GetArrayItem(array, index);
@@ -45,7 +142,7 @@ bool GetEmojiAsset(std::string_view path, ResourceData& asset) {
     return false;
 }
 
-bool ParsePhase(const cJSON* json, EmojiPhase& phase, bool loop) {
+bool ParsePhase(const cJSON* json, EmojiPhase& phase, bool loop, FrameLoader& loader) {
     if (json == nullptr) {
         return true;
     }
@@ -95,9 +192,7 @@ bool ParsePhase(const cJSON* json, EmojiPhase& phase, bool loop) {
             ESP_LOGE(TAG, "找不到动画帧: %s", path);
             return false;
         }
-        // ROMFS 数据映射在 Flash 中，LvglRawImage 只保存描述信息，不释放 data。
-        phase.frames.emplace_back(std::make_shared<LvglRawImage>(
-            const_cast<uint8_t*>(asset.address), asset.size));
+        phase.frames.emplace_back(loader.Load(asset));
     }
 
     const cJSON* overrides = cJSON_GetObjectItemCaseSensitive(json, "interval_overrides");
@@ -152,6 +247,8 @@ void EmojiRepository::ClearAnimations() {
 
 bool EmojiRepository::LoadFromResources(const std::string& config_path) {
     ClearAnimations();
+    const int64_t started_us = esp_timer_get_time();
+    FrameLoader loader;
 
     ResourceData asset;
     if (!Resource::Get(ResourcePackage::Emoji, config_path, asset)) {
@@ -198,9 +295,9 @@ bool EmojiRepository::LoadFromResources(const std::string& config_path) {
             animation.alias = alias_json->valuestring;
         }
 
-        if (!ParsePhase(cJSON_GetObjectItemCaseSensitive(item, "intro"), animation.intro, false) ||
-            !ParsePhase(cJSON_GetObjectItemCaseSensitive(item, "loop"), animation.loop, true) ||
-            !ParsePhase(cJSON_GetObjectItemCaseSensitive(item, "outro"), animation.outro, false)) {
+        if (!ParsePhase(cJSON_GetObjectItemCaseSensitive(item, "intro"), animation.intro, false, loader) ||
+            !ParsePhase(cJSON_GetObjectItemCaseSensitive(item, "loop"), animation.loop, true, loader) ||
+            !ParsePhase(cJSON_GetObjectItemCaseSensitive(item, "outro"), animation.outro, false, loader)) {
             ESP_LOGE(TAG, "表情加载失败: %s", animation.name.c_str());
             success = false;
             continue;
@@ -215,7 +312,33 @@ bool EmojiRepository::LoadFromResources(const std::string& config_path) {
     }
     ESP_LOGI(TAG, "表情动画加载完成: %u 个，默认=%s",
              static_cast<unsigned>(animations_.size()), default_emoji_.c_str());
+    ESP_LOGI(TAG, "表情预解码: RGB565=%u 帧, pixels=%u bytes, 原图=%u 帧, elapsed=%lums",
+             static_cast<unsigned>(loader.decoded_frames),
+             static_cast<unsigned>(loader.decoded_bytes),
+             static_cast<unsigned>(loader.raw_frames),
+             static_cast<unsigned long>((esp_timer_get_time() - started_us) / 1000));
     return success;
+}
+
+void EmojiRepository::PredecodeRemainingFrames() {
+    FrameLoader loader;
+    for (auto& entry : animations_) {
+        for (auto* phase : {&entry.second.intro, &entry.second.loop, &entry.second.outro}) {
+            for (auto& frame : phase->frames) {
+                const auto* source = frame->image_dsc();
+                if (source->header.cf == LV_COLOR_FORMAT_RAW ||
+                    source->header.cf == LV_COLOR_FORMAT_RAW_ALPHA) {
+                    frame = loader.Load(ResourceData{source->data, source->data_size});
+                }
+            }
+        }
+    }
+    if (loader.decoded_frames != 0 || loader.raw_frames != 0) {
+        ESP_LOGI(TAG, "表情补充预解码: RGB565=%u 帧, pixels=%u bytes, 剩余原图=%u 帧",
+                 static_cast<unsigned>(loader.decoded_frames),
+                 static_cast<unsigned>(loader.decoded_bytes),
+                 static_cast<unsigned>(loader.raw_frames));
+    }
 }
 
 const EmojiAnimation* EmojiRepository::GetAnimation(const std::string& name) const {

@@ -27,7 +27,8 @@ struct EmojiAnimation {
     EmojiPhase outro;
 };
 
-// 表情资源仓库。资源由 ROMFS 提供，只保存 PNG 描述和动画播放参数，
+// 表情资源仓库。资源由 ROMFS 提供；小聆黑底样式在加载时把帧预解码为
+// PSRAM 中的不透明 RGB565，并由共享指针维持播放快照的像素生命周期。
 // 不保存页面状态，也不操作 LVGL 控件。
 class EmojiRepository {
 public:
@@ -35,8 +36,12 @@ public:
     void AddEmoji(const std::string& name, LvglImage* image);
     const LvglImage* GetEmojiImage(const char* name) const;
 
-    // 在 UI 初始化阶段读取 emoji.json 并建立所有动画帧索引。
+    // LVGL 初始化后读取 emoji.json 并准备动画帧；运行时重载须持有显示锁。
     bool LoadFromResources(const std::string& config_path = "/emoji/emoji.json");
+
+    // 热重载安装新仓库、释放旧仓库后，利用归还的 PSRAM 补齐回退帧。
+    // 调用方须持有显示锁，且尚未从新仓库创建播放快照。
+    void PredecodeRemainingFrames();
 
     // 获取表情动画；alias 会自动解析，找不到时返回 nullptr。
     const EmojiAnimation* GetAnimation(const std::string& name) const;

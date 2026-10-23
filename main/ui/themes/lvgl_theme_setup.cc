@@ -129,6 +129,22 @@ bool LoadResourceFonts() {
 }
 
 bool LoadEmojiResources(bool lock_display) {
+    // Initial resource loading precedes lvgl_port_init(), but eager PNG decoding
+    // needs LVGL's allocators and decoders initialized already.
+    if (!lv_is_initialized()) {
+        lv_init();
+    }
+    std::unique_ptr<DisplayLockGuard> display_lock;
+    if (lock_display) {
+        auto* display = Board::GetInstance().GetDisplay();
+        if (display == nullptr) {
+            return false;
+        }
+        display_lock = std::make_unique<DisplayLockGuard>(display);
+        if (!display_lock->locked()) {
+            return false;
+        }
+    }
     auto repository = std::make_shared<EmojiRepository>();
     if (!repository->LoadFromResources()) {
         return false;
@@ -143,19 +159,11 @@ bool LoadEmojiResources(bool lock_display) {
             dark->set_emoji_repository(repository);
         }
     };
-    if (lock_display) {
-        auto* display = Board::GetInstance().GetDisplay();
-        if (display == nullptr) {
-            return false;
-        }
-        DisplayLockGuard lock(display);
-        if (!lock.locked()) {
-            return false;
-        }
-        install();
-    } else {
-        install();
-    }
+    install();
+    // All themes now refer to the new repository, so the old repository's
+    // unreferenced pixels have been freed. Retry only its memory-limited frames;
+    // active playback snapshots retain their own old frames safely.
+    repository->PredecodeRemainingFrames();
     return true;
 }
 

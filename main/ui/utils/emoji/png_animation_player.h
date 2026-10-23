@@ -6,7 +6,7 @@
 
 #include <lvgl.h>
 
-// 基于 LVGL 定时器播放 EmojiRepository 提供的 PNG 帧序列。
+// 基于 LVGL 定时器播放 EmojiRepository 提供的帧序列（小聆样式已预解码）。
 class PngAnimationPlayer final {
 public:
     explicit PngAnimationPlayer(lv_obj_t* image);
