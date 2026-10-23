@@ -13,6 +13,7 @@ public:
     void SetEnabled(bool enabled);
     void OnEnterSleepMode(std::function<void()> callback);
     void OnExitSleepMode(std::function<void()> callback);
+    // Once per idle cycle; WakeUp() or enabling a disabled timer rearms it.
     void OnShutdownRequest(std::function<void()> callback);
     void WakeUp();
 
@@ -23,6 +24,7 @@ private:
     bool enabled_ = false;
     bool in_sleep_mode_ = false;
     bool is_wake_word_running_ = false;
+    bool shutdown_requested_ = false;
     int ticks_ = 0;
     int cpu_max_freq_;
     int seconds_to_sleep_;

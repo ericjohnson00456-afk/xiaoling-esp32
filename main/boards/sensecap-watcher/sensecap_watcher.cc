@@ -59,7 +59,16 @@ private:
             bool is_charging = (IoExpanderGetLevel(BSP_PWR_VBUS_IN_DET) == 0);
             if (is_charging) {
                 ESP_LOGI(TAG, "charging");
-                GetBacklight()->SetBrightness(0);
+                // Battery polling runs on the main task. Recheck USB after
+                // scheduling so a brief connection still rearms shutdown.
+                Application::GetInstance().Schedule([this]() {
+                    power_save_timer_->SetEnabled(false);
+                    if (IoExpanderGetLevel(BSP_PWR_VBUS_IN_DET) == 0) {
+                        GetBacklight()->SetBrightness(0);
+                    } else {
+                        power_save_timer_->SetEnabled(true);
+                    }
+                });
             } else {
                 IoExpanderSetLevel(BSP_PWR_SYSTEM, 0);
             }
@@ -436,15 +445,11 @@ public:
     }
 
     virtual bool GetBatteryLevel(int &level, bool& charging, bool& discharging) override {
-        static bool last_discharging = false;
         charging = (IoExpanderGetLevel(BSP_PWR_VBUS_IN_DET) == 0);
         discharging = !charging;
         level = (int)BatterygetPercent(false);
 
-        if (discharging != last_discharging) {
-            power_save_timer_->SetEnabled(discharging);
-            last_discharging = discharging;
-        }
+        power_save_timer_->SetEnabled(discharging);
         if (level <= 1  &&  discharging) {
             ESP_LOGI(TAG, "Battery level is low, shutting down");
             IoExpanderSetLevel(BSP_PWR_SYSTEM, 0);

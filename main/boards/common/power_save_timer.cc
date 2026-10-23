@@ -36,6 +36,7 @@ void PowerSaveTimer::SetEnabled(bool enabled) {
         }
 
         ticks_ = 0;
+        shutdown_requested_ = false;
         enabled_ = enabled;
         ESP_ERROR_CHECK(esp_timer_start_periodic(power_save_timer_, 1000000));
         ESP_LOGI(TAG, "Power save timer enabled");
@@ -99,7 +100,10 @@ void PowerSaveTimer::PowerSaveCheck() {
             }
         }
     }
-    if (seconds_to_shutdown_ != -1 && ticks_ >= seconds_to_shutdown_ && on_shutdown_request_) {
+    if (seconds_to_shutdown_ != -1 && ticks_ >= seconds_to_shutdown_ &&
+        on_shutdown_request_ && !shutdown_requested_) {
+        // Latch first so a callback can start another idle cycle with WakeUp().
+        shutdown_requested_ = true;
         on_shutdown_request_();
     }
 }
@@ -107,6 +111,7 @@ void PowerSaveTimer::PowerSaveCheck() {
 void PowerSaveTimer::WakeUp() {
     auto& app = Application::GetInstance();
     ticks_ = 0;
+    shutdown_requested_ = false;
     if (in_sleep_mode_) {
         ESP_LOGI(TAG, "Exiting power save mode");
         in_sleep_mode_ = false;
