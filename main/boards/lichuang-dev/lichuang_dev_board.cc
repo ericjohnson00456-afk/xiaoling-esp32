@@ -1,7 +1,6 @@
 #include "wifi_board.h"
 #include "codecs/box_audio_codec.h"
 #include "display/lcd_display.h"
-#include "display/emote_display.h"
 #include "application.h"
 #include "button.h"
 #include "config.h"

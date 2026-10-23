@@ -12,6 +12,9 @@ from pathlib import Path
 from romfs import pack_image
 
 
+PACKAGED_LANGUAGES = ("zh-CN", "en-US")
+
+
 def relocate_activation_assets(locales: Path, destination: Path) -> None:
     """Move activation audio into the reserved 300-series ROMFS namespace."""
     if not locales.is_dir():
@@ -128,6 +131,18 @@ def main() -> int:
         if not respak_source.is_dir():
             raise RuntimeError(f"Missing respak resource directory: {respak_source}")
         copy_tree(respak_source, respak)
+        # All flash sizes ship the same Chinese/English resource bundle.
+        # Prune the temporary copy so other source locales remain available.
+        locales = respak / "locales"
+        for language in PACKAGED_LANGUAGES:
+            if not (locales / language).is_dir():
+                raise RuntimeError(f"Resource locale not found: {locales / language}")
+        for locale in locales.iterdir():
+            if locale.name not in PACKAGED_LANGUAGES:
+                if locale.is_dir():
+                    shutil.rmtree(locale)
+                else:
+                    locale.unlink()
 
         relocate_activation_assets(respak / "locales", respak / "activation")
 
@@ -179,8 +194,8 @@ def main() -> int:
             package(tone, output / "tone.bin", "tone")
         if any(emoji.iterdir()):
             package(emoji, output / "emoji.bin", "emoji")
-        if any(wake.iterdir()):
-            package(wake, output / "wake_word.bin", "wake_word")
+        # The partition is mounted even when this board has no wake model.
+        package(wake, output / "wake_word.bin", "wake_word")
     return 0
 
 

@@ -1,4 +1,4 @@
-#include "display/lv_display.h"
+#include "display/lvgl_display.h"
 #include "misc/lv_event.h"
 #include "wifi_board.h"
 #include "sensecap_audio_codec.h"
@@ -23,77 +23,11 @@
 #include <iot_button.h>
 #include <iot_knob.h>
 #include <esp_io_expander_tca95xx_16bit.h>
-#include <esp_sleep.h>
-#include <esp_console.h>
-#include <esp_mac.h>
 #include <nvs_flash.h>
-#include <esp_app_desc.h>
 
 #include "ui/i18n/lang_config.h"
 
 #define TAG "sensecap_watcher"
-
-class CustomLcdDisplay : public SpiLcdDisplay {
-    public:
-        CustomLcdDisplay(esp_lcd_panel_io_handle_t io_handle, 
-                        esp_lcd_panel_handle_t panel_handle,
-                        int width,
-                        int height,
-                        int offset_x,
-                        int offset_y,
-                        bool mirror_x,
-                        bool mirror_y,
-                        bool swap_xy) 
-            : SpiLcdDisplay(io_handle, panel_handle, width, height, offset_x, offset_y, mirror_x, mirror_y, swap_xy) {
-    
-            DisplayLockGuard lock(this);
-            auto lvgl_theme = static_cast<LvglTheme*>(current_theme_);
-            auto text_font = lvgl_theme->text_font()->font();
-            auto icon_font = lvgl_theme->icon_font()->font();
-
-            lv_obj_set_size(top_bar_, LV_HOR_RES, text_font->line_height);
-            lv_obj_set_style_layout(top_bar_, LV_LAYOUT_NONE, 0);
-            lv_obj_set_style_pad_top(top_bar_, 10, 0);
-            lv_obj_set_style_pad_bottom(top_bar_, 1, 0);
-
-            lv_obj_set_size(status_bar_, LV_HOR_RES, text_font->line_height);
-            lv_obj_set_style_layout(status_bar_, LV_LAYOUT_NONE, 0);
-            lv_obj_set_style_pad_top(status_bar_, 10, 0);
-            lv_obj_set_style_pad_bottom(status_bar_, 1, 0);
-            lv_obj_set_y(status_bar_, text_font->line_height);
-            lv_obj_add_flag(status_bar_, LV_OBJ_FLAG_IGNORE_LAYOUT);
-
-            // Reparent mute and battery labels to top_bar_ to allow absolute positioning
-            lv_obj_set_parent(mute_label_, top_bar_);
-            lv_obj_set_parent(battery_label_, top_bar_);
-            lv_obj_set_style_margin_left(battery_label_, 0, 0);
-
-            // 针对圆形屏幕调整位置
-            //      network  mute  battery     //
-            //               status            //
-            lv_obj_align(network_label_, LV_ALIGN_TOP_MID, -1.5 * icon_font->line_height, 0);
-            lv_obj_align(mute_label_, LV_ALIGN_TOP_MID, 1.0 * icon_font->line_height, 0);
-            lv_obj_align(battery_label_, LV_ALIGN_TOP_MID, 2.5 * icon_font->line_height, 0);
-            
-            lv_obj_align(status_label_, LV_ALIGN_BOTTOM_MID, 0, 0);
-            lv_obj_set_flex_grow(status_label_, 0);
-            lv_obj_set_width(status_label_, LV_HOR_RES * 0.75);
-            lv_label_set_long_mode(status_label_, LV_LABEL_LONG_SCROLL_CIRCULAR);
-
-            lv_obj_align(notification_label_, LV_ALIGN_BOTTOM_MID, 0, 0);
-            lv_obj_set_width(notification_label_, LV_HOR_RES * 0.75);
-            lv_label_set_long_mode(notification_label_, LV_LABEL_LONG_SCROLL_CIRCULAR);
-
-            lv_obj_align(low_battery_popup_, LV_ALIGN_BOTTOM_MID, 0, -20);
-            lv_obj_set_style_bg_color(low_battery_popup_, lv_color_hex(0xFF0000), 0);
-            lv_obj_set_width(low_battery_label_, LV_HOR_RES * 0.75);
-            lv_label_set_long_mode(low_battery_label_, LV_LABEL_LONG_SCROLL_CIRCULAR);
-
-            // 针对圆形屏幕调整底部对话框位置，避免被圆角遮挡
-            lv_obj_set_style_pad_bottom(bottom_bar_, 30, 0);
-            lv_obj_set_width(chat_message_label_, LV_HOR_RES * 0.75); // 限制宽度，避免文字贴边
-        }
-};
 
 class SensecapWatcher : public WifiBoard {
 private:
@@ -358,7 +292,7 @@ private:
         esp_lcd_panel_mirror(panel_, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
         esp_lcd_panel_disp_on_off(panel_, true);
 
-        display_ = new CustomLcdDisplay(panel_io_, panel_,
+        display_ = new SpiLcdDisplay(panel_io_, panel_,
             DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
         
         // 使每次刷新的起始列数索引是4的倍数且列数总数是4的倍数，以满足SPD2010的要求
@@ -426,136 +360,6 @@ private:
         return (uint8_t)percent;
     }
 
-    void InitializeCmd() {
-        esp_console_repl_t *repl = NULL;
-        esp_console_repl_config_t repl_config = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
-        repl_config.max_cmdline_length = 1024;
-        repl_config.prompt = "SenseCAP>";
-        
-        const esp_console_cmd_t cmd1 = {
-            .command = "reboot",
-            .help = "reboot the device",
-            .hint = nullptr,
-            .func = [](int argc, char** argv) -> int {
-                esp_restart();
-                return 0;
-            },
-            .argtable = nullptr
-        };
-        ESP_ERROR_CHECK(esp_console_cmd_register(&cmd1));
-
-        const esp_console_cmd_t cmd2 = {
-            .command = "shutdown",
-            .help = "shutdown the device",
-            .hint = nullptr,
-            .func = NULL,
-            .argtable = NULL,
-            .func_w_context = [](void *context,int argc, char** argv) -> int {
-                auto self = static_cast<SensecapWatcher*>(context);
-                self->GetBacklight()->SetBrightness(0);
-                self->IoExpanderSetLevel(BSP_PWR_SYSTEM, 0);
-                return 0;
-            },
-            .context =this
-        };
-        ESP_ERROR_CHECK(esp_console_cmd_register(&cmd2));
-
-        const esp_console_cmd_t cmd3 = {
-            .command = "battery",
-            .help = "get battery percent",
-            .hint = NULL,
-            .func = NULL,
-            .argtable = NULL,
-            .func_w_context = [](void *context,int argc, char** argv) -> int {
-                auto self = static_cast<SensecapWatcher*>(context);
-                self->BatterygetPercent(true);
-                return 0;
-            },
-            .context =this
-        };
-        ESP_ERROR_CHECK(esp_console_cmd_register(&cmd3));
-
-        const esp_console_cmd_t cmd4 = {
-            .command = "factory_reset",
-            .help = "factory reset and reboot the device",
-            .hint = NULL,
-            .func = NULL,
-            .argtable = NULL,
-            .func_w_context = [](void *context,int argc, char** argv) -> int {
-                nvs_flash_erase();
-                esp_restart();
-                return 0;
-            },
-            .context =this
-        };
-        ESP_ERROR_CHECK(esp_console_cmd_register(&cmd4));
-
-        const esp_console_cmd_t cmd5 = {
-            .command = "read_mac",
-            .help = "Read mac address",
-            .hint = NULL,
-            .func = NULL,
-            .argtable = NULL,
-            .func_w_context = [](void *context,int argc, char** argv) -> int {
-                uint8_t mac[6];
-                esp_read_mac(mac, ESP_MAC_WIFI_STA);
-                printf("wifi_sta_mac: " MACSTR "\n", MAC2STR(mac));
-                esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP);
-                printf("wifi_softap_mac: " MACSTR "\n", MAC2STR(mac));
-                esp_read_mac(mac, ESP_MAC_BT);
-                printf("bt_mac: " MACSTR "\n", MAC2STR(mac));
-                return 0;
-            },
-            .context =this
-        };
-        ESP_ERROR_CHECK(esp_console_cmd_register(&cmd5));
-
-        const esp_console_cmd_t cmd6 = {
-            .command = "version",
-            .help = "Read version info",
-            .hint = NULL,
-            .func = NULL,
-            .argtable = NULL,
-            .func_w_context = [](void *context,int argc, char** argv) -> int {
-                auto self = static_cast<SensecapWatcher*>(context);
-                auto app_desc = esp_app_get_description();
-                const char* region = "UNKNOWN";
-                #if defined(CONFIG_LANGUAGE_ZH_CN)
-                    region = "CN";
-                #elif defined(CONFIG_LANGUAGE_EN_US)
-                    region = "US";
-                #elif defined(CONFIG_LANGUAGE_JA_JP)
-                    region = "JP";
-                #elif defined(CONFIG_LANGUAGE_ES_ES)
-                    region = "ES";
-                #elif defined(CONFIG_LANGUAGE_DE_DE)
-                    region = "DE";
-                #elif defined(CONFIG_LANGUAGE_FR_FR)
-                    region = "FR";
-                #elif defined(CONFIG_LANGUAGE_IT_IT)
-                    region = "IT";
-                #elif defined(CONFIG_LANGUAGE_PT_PT)
-                    region = "PT";
-                #elif defined(CONFIG_LANGUAGE_RU_RU)
-                    region = "RU";
-                #elif defined(CONFIG_LANGUAGE_KO_KR)
-                    region = "KR";
-                #endif
-                printf("{\"type\":0,\"name\":\"VER?\",\"code\":0,\"data\":{\"software\":\"%s\",\"hardware\":\"watcher xiaozhi agent\",\"camera\":%d,\"region\":\"%s\"}}\n",
-                       app_desc->version,
-                       self->GetCamera() == nullptr ? 0 : 1,
-                       region);
-                return 0;
-            },
-            .context =this
-        };
-        ESP_ERROR_CHECK(esp_console_cmd_register(&cmd6));
-
-        esp_console_dev_uart_config_t hw_config = ESP_CONSOLE_DEV_UART_CONFIG_DEFAULT();
-        ESP_ERROR_CHECK(esp_console_new_repl_uart(&hw_config, &repl_config, &repl));
-        ESP_ERROR_CHECK(esp_console_start_repl(repl));
-    }
-
     void InitializeCamera() {
 
         ESP_LOGI(TAG, "Initialize Camera");
@@ -584,7 +388,6 @@ public:
         InitializeI2c();
         InitializeSpi();
         InitializeExpander();
-        InitializeCmd();  //工厂生产测试使用
         InitializeButton();
         InitializeKnob();
         Initializespd2010Display();

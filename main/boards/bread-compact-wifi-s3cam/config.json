@@ -1,0 +1,9 @@
+{
+    "target": "esp32s3",
+    "builds": [
+        {
+            "name": "bread-compact-wifi-s3cam",
+            "sdkconfig_append": []
+        }
+    ]
+}

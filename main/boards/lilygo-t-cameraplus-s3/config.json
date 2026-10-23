@@ -12,6 +12,7 @@
         },
         {
             "name": "lilygo-t-cameraplus-s3_v1_2",
+            "board_type_config": "CONFIG_BOARD_TYPE_LILYGO_T_CAMERAPLUS_S3_V1_2",
             "sdkconfig_append": [
                 "CONFIG_SPIRAM_MODE_QUAD=y",
                 "CONFIG_CAMERA_OV2640=y",

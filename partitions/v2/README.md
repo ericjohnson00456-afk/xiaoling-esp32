@@ -45,12 +45,16 @@ The `assets` partition stores:
 ## Available Configurations
 
 ### 8MB Flash Devices (`8m.csv`)
+- Single application slot with four ROMFS partitions; application OTA with rollback is unavailable.
+- All flash sizes package Simplified Chinese (`zh-CN`) and English (`en-US`) resources.
 - `nvs`: 16KB
 - `otadata`: 8KB
 - `phy_init`: 4KB
-- `ota_0`: 3MB
-- `ota_1`: 3MB
-- `assets`: 2MB
+- `ota_0`: 4864KB (`0x4c0000`)
+- `tone`: 512KB
+- `emoji`: 576KB
+- `wake_word`: 128KB
+- `respak`: 1536KB
 
 ### 16MB Flash Devices (`16m.csv`) - Standard
 - `nvs`: 16KB

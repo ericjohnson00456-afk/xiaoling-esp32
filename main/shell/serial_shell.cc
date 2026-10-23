@@ -5,6 +5,7 @@
 #include "cmd/reboot.h"
 #include "cmd/sd_card.h"
 #include "cmd/tasks.h"
+#include "cmd/test.h"
 #include "cmd/wifi.h"
 #include "cmd/wake_record.h"
 
@@ -107,6 +108,9 @@ bool SerialShell::Initialize() {
     }
     if (ret == ESP_OK) {
         ret = RegisterDeviceCommands();
+    }
+    if (ret == ESP_OK) {
+        ret = RegisterTestCommands();
     }
     if (ret == ESP_OK) {
         ret = RegisterTaskCommands();

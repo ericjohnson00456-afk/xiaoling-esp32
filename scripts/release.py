@@ -206,7 +206,9 @@ def release(board_type: str, config_filename: str = "config.json", *, filter_nam
             continue
 
         # Process sdkconfig_append
-        board_type_config = _find_board_config(board_type)
+        board_type_config = build.get("board_type_config") or _find_board_config(board_type)
+        if _parse_board_config_map().get(board_type_config) != board_type:
+            raise ValueError(f"Invalid board_type_config for {name}: {board_type_config}")
         sdkconfig_append = [f"{board_type_config}=y"]
         sdkconfig_append.extend(build.get("sdkconfig_append", []))
         sdkconfig_append = _apply_auto_selects(sdkconfig_append)

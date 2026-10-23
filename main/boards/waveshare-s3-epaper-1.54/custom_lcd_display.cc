@@ -2,6 +2,7 @@
 #include <esp_lcd_panel_io.h>
 #include <freertos/FreeRTOS.h>
 #include <vector>
+#include <cstring>
 #include <esp_log.h>
 #include "custom_lcd_display.h"
 #include "board.h"
@@ -185,7 +186,7 @@ void CustomLcdDisplay::read_busy() {
 void CustomLcdDisplay::SPI_SendByte(uint8_t data) {
     esp_err_t         ret;
     spi_transaction_t t;
-    memset(&t, 0, sizeof(t));
+    std::memset(&t, 0, sizeof(t));
     t.length    = 8;
     t.tx_buffer = &data;
     ret         = spi_device_polling_transmit(spi, &t); // Transmit!
@@ -211,7 +212,7 @@ void CustomLcdDisplay::writeBytes(uint8_t *buffer, int len) {
     set_cs_0();
     esp_err_t         ret;
     spi_transaction_t t;
-    memset(&t, 0, sizeof(t));
+    std::memset(&t, 0, sizeof(t));
     t.length    = 8 * len;
     t.tx_buffer = buffer;
     ret         = spi_device_polling_transmit(spi, &t); // Transmit!
@@ -224,7 +225,7 @@ void CustomLcdDisplay::writeBytes(const uint8_t *buffer, int len) {
     set_cs_0();
     esp_err_t         ret;
     spi_transaction_t t;
-    memset(&t, 0, sizeof(t));
+    std::memset(&t, 0, sizeof(t));
     t.length    = 8 * len;
     t.tx_buffer = buffer;
     ret         = spi_device_polling_transmit(spi, &t); // Transmit!
@@ -327,7 +328,7 @@ void CustomLcdDisplay::EPD_Init() {
 
 void CustomLcdDisplay::EPD_Clear() {
     int buffer_len = lcd_spi_data.buffer_len;
-    memset(buffer, 0xff, buffer_len);
+    std::memset(buffer, 0xff, buffer_len);
 }
 
 void CustomLcdDisplay::EPD_Display() {

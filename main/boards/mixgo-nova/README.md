@@ -70,3 +70,5 @@ idf.py build
 ```bash
 idf.py merge-bin -o xiaozhi-nova.bin -f raw
 ```
+
+> 注意：8 MB 小聆语音分区仅有一个应用槽，不支持双槽 OTA 回滚。

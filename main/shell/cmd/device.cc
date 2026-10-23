@@ -1,14 +1,11 @@
 #include "device.h"
 
-#include "application.h"
-#include "xiaoling/conn/cloud_tts_url.h"
-#include "xiaoling/session/voice_session_epoch.h"
-#include "event/app_event.h"
 #include "system/settings.h"
 #include "system/system_info.h"
 
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 #include <esp_console.h>
 
@@ -27,11 +24,7 @@ void PrintUsage() {
         "  device set_sid <secret_id>\n"
         "  device get_pid\n"
         "  device get_sid\n"
-        "  device get_device_id\n"
-        "  device audio_test <start|stop>\n"
-        "  device audio_stress <start|stop>\n"
-        "  device wake <wake_word>\n"
-        "  device tts_test <http_url>\n");
+        "  device get_device_id\n");
 }
 
 int HandleDeviceCommand(int argc, char** argv) {
@@ -39,69 +32,6 @@ int HandleDeviceCommand(int argc, char** argv) {
         PrintUsage();
         return 0;
     }
-    if (std::strcmp(argv[1], "audio_stress") == 0) {
-        if (argc != 3 || (std::strcmp(argv[2], "start") != 0 && std::strcmp(argv[2], "stop") != 0)) {
-            PrintUsage();
-            return 1;
-        }
-        Application::GetInstance().SetAudioStressMode(std::strcmp(argv[2], "start") == 0);
-        return 0;
-    }
-    if (std::strcmp(argv[1], "wake") == 0) {
-        if (argc != 3 || argv[2][0] == '\0') {
-            PrintUsage();
-            return 1;
-        }
-        Application::GetInstance().WakeWordInvoke(argv[2]);
-        return 0;
-    }
-    if (std::strcmp(argv[1], "tts_test") == 0) {
-        if (argc != 3 || (std::strncmp(argv[2], "http://", 7) != 0 &&
-                          std::strncmp(argv[2], "https://", 8) != 0)) {
-            PrintUsage();
-            return 1;
-        }
-        auto& app = Application::GetInstance();
-        const auto generation = Xiaoling::voice_session_epoch.Current();
-        app.Schedule([&app, url = std::string(argv[2]), generation]() {
-            if (!Xiaoling::voice_session_epoch.IsCurrent(generation)) return;
-            if (app.GetDeviceState() != kDeviceStateIdle &&
-                app.GetDeviceState() != kDeviceStateListening) {
-                std::printf("TTS test requires idle/listening state\n");
-                return;
-            }
-            const auto event_id = voice_player_url_is_mp3(url.c_str())
-                                      ? AppEvent::Id::XiaolingPushTtsUrl
-                                      : AppEvent::Id::XiaolingTtsUrl;
-            AppEvent::PublishTextScoped(event_id, url,
-                                        Xiaoling::voice_session_epoch, generation);
-        });
-        return 0;
-    }
-
-    if (std::strcmp(argv[1], "audio_test") == 0) {
-        if (argc != 3 || (std::strcmp(argv[2], "start") != 0 &&
-                          std::strcmp(argv[2], "stop") != 0)) {
-            PrintUsage();
-            return 1;
-        }
-        const bool start = std::strcmp(argv[2], "start") == 0;
-        auto& app = Application::GetInstance();
-        app.Schedule([start, &app]() {
-            const auto state = app.GetDeviceState();
-            if (start && state == kDeviceStateWifiConfiguring) {
-                app.StartListening();
-            } else if (!start && state == kDeviceStateAudioTesting) {
-                app.StopListening();
-            } else {
-                std::printf("Audio test %s ignored in state %s\n",
-                            start ? "start" : "stop",
-                            DeviceStatus::GetStateName(state));
-            }
-        });
-        return 0;
-    }
-
     const bool is_pid = std::strcmp(argv[1], "set_pid") == 0;
     const bool is_sid = std::strcmp(argv[1], "set_sid") == 0;
     if (is_pid || is_sid) {

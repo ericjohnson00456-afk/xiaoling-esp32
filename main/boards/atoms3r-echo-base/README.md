@@ -41,3 +41,5 @@ Component config -> ESP PSRAM -> SPI RAM config -> Mode (QUAD/OCT) -> Octal Mode
 ```bash
 idf.py build
 ```
+
+> 注意：8 MB 小聆语音分区仅有一个应用槽，不支持双槽 OTA 回滚。

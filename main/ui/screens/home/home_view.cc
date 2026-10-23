@@ -204,7 +204,8 @@ void HomeView::CreateUi() {
     lv_label_set_text(subtitle_label_, "");
 
     emoji_image_ = lv_image_create(root_);
-    lv_obj_add_flag(emoji_image_, LV_OBJ_FLAG_FLOATING | LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(emoji_image_, LV_OBJ_FLAG_FLOATING);
+    lv_obj_add_flag(emoji_image_, LV_OBJ_FLAG_HIDDEN);
     lv_obj_align(emoji_image_, LV_ALIGN_CENTER, 0, -12);
     emoji_label_ = lv_label_create(root_);
     lv_obj_add_flag(emoji_label_, LV_OBJ_FLAG_FLOATING);

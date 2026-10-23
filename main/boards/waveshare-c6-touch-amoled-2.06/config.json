@@ -1,5 +1,5 @@
 {
-    "target": "esp32s3",
+    "target": "esp32c6",
     "builds": [
         {
             "name": "waveshare-c6-touch-amoled-2.06",

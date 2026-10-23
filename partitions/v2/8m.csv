@@ -1,8 +1,11 @@
-# ESP-IDF Partition Table
-# Name,   Type, SubType, Offset,  Size, Flags
-nvs,      data, nvs,     0x9000,    0x4000,
-otadata,  data, ota,     0xd000,    0x2000,
-phy_init, data, phy,     0xf000,    0x1000,
-ota_0,    app,  ota_0,   0x20000,   0x2f0000,
-ota_1,    app,  ota_1,   ,          0x2f0000,
-assets,   data, spiffs,  0x600000,  2M
+# 8 MB voice profile: one app slot and the four current ROMFS packages.
+# Dual-slot application OTA is unavailable on this profile.
+# Name,     Type, SubType, Offset,   Size,     Flags
+nvs,        data, nvs,     0x9000,   0x4000,
+otadata,    data, ota,     0xd000,   0x2000,
+phy_init,   data, phy,     0xf000,   0x1000,
+ota_0,      app,  ota_0,   0x20000,  0x4c0000,
+tone,       data, spiffs,  0x4e0000, 0x80000,
+emoji,      data, spiffs,  0x560000, 0x90000,
+wake_word,  data, spiffs,  0x5f0000, 0x20000,
+respak,     data, spiffs,  0x610000, 0x180000,

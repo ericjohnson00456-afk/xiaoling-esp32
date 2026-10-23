@@ -1,6 +1,7 @@
 #include "afe_wake_word.h"
 
 #include <esp_log.h>
+#include <cstring>
 #include <sstream>
 
 #define DETECTION_RUNNING_EVENT 1
@@ -39,7 +40,7 @@ bool AfeWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list) {
     }
     for (int i = 0; i < models_->num; i++) {
         ESP_LOGI(TAG, "Model %d: %s", i, models_->model_name[i]);
-        if (strstr(models_->model_name[i], ESP_WN_PREFIX) != NULL) {
+        if (std::strstr(models_->model_name[i], ESP_WN_PREFIX) != NULL) {
             wakenet_model_ = models_->model_name[i];
             auto words = esp_srmodel_get_wake_words(models_, wakenet_model_);
             // split by ";" to get all wake words

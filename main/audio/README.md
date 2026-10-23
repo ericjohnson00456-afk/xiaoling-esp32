@@ -78,7 +78,7 @@ Opus 包就绪通知直接交给网络消费，不经过 `AppEvent`。录音测�
 `EnableAudioTesting()`；少数板级功能可以通过 `ReadAudioData()` 读取标准化 PCM。
 
 配网状态下单击开始录音，再次单击停止；串口也可以执行
-`device audio_test start` 和 `device audio_test stop`。录制最多 10 秒，
+`test audio start` 和 `test audio stop`。录制最多 10 秒，
 取样点为实际送入云端编码器的 AFE/AEC 输出。停止后在独立大栈任务中
 生成同一段录音的两份版本，按「AFE PCM → 双短提示音 → Opus 往返 PCM」
 顺序回放。测试 Opus 与云端使用相同的 16 kHz、20 ms、16 kbps CBR、
@@ -175,8 +175,8 @@ LCD 使用两块 20 行 DMA 缓冲，总内存与原来的单块 40 行相同；
 不能清掉新 tone，也不能把旧输出时钟加到新会话。
 停止还会撤销排队的旧播放命令；输出层记录最近启动 ID，迟到的旧 start
 即使在活动队列已清空后也不能抢走新 tone。暂停音乐的显式恢复不受此限制。
-串口 `device wake HiLina` 走同一会话替换控制链（不测试模型识别率）；
-`device tts_test <http_url>` 可在待命/录音态测试真实 HTTP/MP3/DAC TTS 打断。
+串口 `test wake HiLina` 走同一会话替换控制链（不测试模型识别率）；
+`test tts_url <http_url>` 可在待命/录音态测试真实 HTTP/MP3/DAC TTS 打断。
 
 每 5 秒的「唤醒吞吐」日志报告生产/推理帧率、丢帧、推理耗时与最大排队
 时间。16 kHz/20 ms 链路正常持续输入应约为 50 帧/秒；仅降低模型阈值不能
@@ -184,10 +184,10 @@ LCD 使用两块 20 行 DMA 缓冲，总内存与原来的单块 40 行相同；
 播放器在流水线启动前包装最终输出端口，空 PCM 且非 EOF 时阻塞一个 tick，
 有 PCM 时网络媒体每 50 ms、本地 tone 每 10 ms 主动让步；delegate 原 acquire/release、错误和
 EOF 语义，不添加永久运行的 GMF job。HTTP EAGAIN 重试也进行短暂退避。
-在待命/配网状态可执行 `device audio_stress start`，使用同一上行 Opus 编码
+在待命/配网状态可执行 `test audio_stress start`，使用同一上行 Opus 编码
 器模拟持续编码负载，但不发送网络音频、不触发业务唤醒。待命状态下再用
-`device tts_test <http_url>` 让测试音频走实际 TTS 通道，检查同时负载的帧率。
-`device audio_stress stop` 停止压力编码并停止该测试播放；正常开启上报会
+`test tts_url <http_url>` 让测试音频走实际 TTS 通道，检查同时负载的帧率。
+`test audio_stress stop` 停止压力编码并停止该测试播放；正常开启上报会
 自动退出压力模式。压力模式不等于实际云端 ASR 测试，网络发送开销需另测。
 
 ## 播放和下行
