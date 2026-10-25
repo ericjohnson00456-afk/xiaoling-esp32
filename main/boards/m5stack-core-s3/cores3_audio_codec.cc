@@ -14,7 +14,7 @@ CoreS3AudioCodec::CoreS3AudioCodec(void* i2c_master_handle, int input_sample_rat
     input_channels_ = input_reference_ ? 2 : 1; // 输入通道数
     input_sample_rate_ = input_sample_rate;
     output_sample_rate_ = output_sample_rate;
-    input_gain_ = 24;
+    input_gain_ = 30;
 
     CreateDuplexChannels(mclk, bclk, ws, dout, din);
 
