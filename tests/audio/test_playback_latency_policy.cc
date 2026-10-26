@@ -37,9 +37,9 @@ int main() {
     assert(!policy.ShouldYield(10000, 1152, false, PlaybackDecodeYieldIntervalUs(false)));
     assert(!policy.ShouldYield(10000, 0, true, PlaybackDecodeYieldIntervalUs(true)));
     assert(kAudioPlayerInitialPrebufferBytes == 16 * 1024);
-    assert(kAudioTtsInitialPrebufferBytes == 4 * 1024);
-    assert(kAudioTtsRecoveryPrebufferBytes == 8 * 1024);
-    assert(kAudioTtsPrebufferMaxWaitMs == 200);
+    assert(kAudioTtsInitialPrebufferBytes == 32 * 1024);
+    assert(kAudioTtsRecoveryPrebufferBytes == 16 * 1024);
+    assert(kAudioTtsPrebufferMaxWaitMs == 1000);
     assert(OwnsPlaybackSession(42, 42));
     assert(!OwnsPlaybackSession(43, 42)); // 旧 TTS 退出不能清除新 tone。
     assert(!OwnsPlaybackSession(0, 42));  // 已取消流不能再次清理活动状态。

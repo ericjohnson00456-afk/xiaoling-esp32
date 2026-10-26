@@ -27,9 +27,9 @@ struct AudioPlaybackConfig {
 
 // 16 kHz、单声道、16-bit PCM 每秒约 32 KiB。
 constexpr size_t kAudioPlayerInitialPrebufferBytes = 16 * 1024;
-// TTS 与字幕都先准备一小段，再由首个真实 PCM 输出启动字幕时钟。
-// 过大的门槛会把首声推迟数秒，网络抖动时也会让用户误以为没有声音。
-constexpr size_t kAudioTtsInitialPrebufferBytes = 16 * 1024;
+// TTS 首播先积累约 2 秒 PCM，再由首个真实 PCM 输出启动字幕时钟。
+// 云端分块生成的首段之后可能出现较长空窗；提高首播水位可吸收这次冷启动抖动。
+constexpr size_t kAudioTtsInitialPrebufferBytes = 32 * 1024;
 constexpr size_t kAudioTtsRecoveryPrebufferBytes = 16 * 1024;
 constexpr uint32_t kAudioTtsPrebufferMaxWaitMs = 1000;
 constexpr uint32_t kAudioTtsUnderrunGraceMs = 250;

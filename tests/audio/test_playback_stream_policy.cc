@@ -21,7 +21,7 @@ int main() {
     assert(kAudioTtsRecoveryPrebufferBytes < kAudioTtsProducerResumeBytes);
     assert(kAudioTtsProducerResumeBytes < kAudioTtsMaxBufferedPcmBytes);
     assert(kAudioTtsMaxBufferedPcmBytes == 96 * 1024);
-    assert(kAudioTtsInitialPrebufferBytes == 16 * 1024);
+    assert(kAudioTtsInitialPrebufferBytes == 32 * 1024);
     assert(kAudioTtsRecoveryPrebufferBytes == 16 * 1024);
     assert(kAudioTtsPrebufferMaxWaitMs == 1000);
     const auto grace = kAudioTtsUnderrunGraceMs;
