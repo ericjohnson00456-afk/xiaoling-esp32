@@ -36,7 +36,7 @@ std::string BuildResourceConfigParam() {
         return {};
     }
 
-    cJSON_AddStringToObject(firmware_info, "type", BOARD_NAME);
+    cJSON_AddStringToObject(firmware_info, "type", "esp32");
     cJSON_AddStringToObject(firmware_info, "version", esp_app_get_description()->version);
     cJSON_AddItemToObject(params, "firmware_info", firmware_info);
 

@@ -10,6 +10,7 @@
 #include <cJSON.h>
 #include <esp_log.h>
 #include <esp_random.h>
+#include <esp_app_desc.h>
 #include "base64_codec.h"
 
 #include <algorithm>
@@ -164,8 +165,8 @@ std::string XiaolingConn::BuildWebSocketUrl() const {
     cJSON* firmware_info = cJSON_CreateObject();
     if (firmware_info != nullptr) {
         // 云端 connect 标识固定，不随板型和本地固件构建版本变化。
-        cJSON_AddStringToObject(firmware_info, "type", "Arcs-mini");
-        cJSON_AddStringToObject(firmware_info, "version", "2.7.0");
+        cJSON_AddStringToObject(firmware_info, "type", "esp32");
+        cJSON_AddStringToObject(firmware_info, "version", esp_app_get_description()->version);
         cJSON_AddItemToObject(params, "firmware_info", firmware_info);
     }
 
