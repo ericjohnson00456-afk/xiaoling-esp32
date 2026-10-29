@@ -7,6 +7,7 @@
 #include "button.h"
 #include "config.h"
 #include "application.h"
+#include "power_save_timer.h"
 
 #include <esp_log.h>
 #include <esp_lcd_panel_vendor.h>
@@ -44,6 +45,22 @@ private:
     Button mute_button_;
     LcdDisplay* display_;
     AdcBatteryMonitor* battery_monitor_ = nullptr;
+    PowerSaveTimer* power_save_timer_ = nullptr;
+
+    void InitializePowerSaveTimer() {
+        // BOX-3 没有可控的 PMIC 关机通道，先提供与其他版型一致的 60 秒
+        // 空闲休眠：降低屏幕亮度并暂停显示刷新，唤醒时恢复原亮度。
+        power_save_timer_ = new PowerSaveTimer(-1, 60, -1);
+        power_save_timer_->OnEnterSleepMode([this]() {
+            GetDisplay()->SetPowerSaveMode(true);
+            GetBacklight()->SetBrightness(10);
+        });
+        power_save_timer_->OnExitSleepMode([this]() {
+            GetDisplay()->SetPowerSaveMode(false);
+            GetBacklight()->RestoreBrightness();
+        });
+        power_save_timer_->SetEnabled(true);
+    }
 
     void InitializeBatteryMonitor() {
         // SENSOR-01: VBAT+ is divided by 301K/100K and routed to IO10
@@ -172,6 +189,7 @@ public:
         InitializeIli9341Display();
         InitializeButtons();
         InitializeBatteryMonitor();
+        InitializePowerSaveTimer();
         GetBacklight()->RestoreBrightness();
     }
 
@@ -229,7 +247,19 @@ public:
         // supply.
         charging = usb_serial_jtag_is_connected();
         discharging = !charging;
+        static bool last_discharging = false;
+        if (discharging != last_discharging) {
+            power_save_timer_->SetEnabled(discharging);
+            last_discharging = discharging;
+        }
         return true;
+    }
+
+    virtual void SetPowerSaveLevel(PowerSaveLevel level) override {
+        if (level != PowerSaveLevel::LOW_POWER) {
+            power_save_timer_->WakeUp();
+        }
+        WifiBoard::SetPowerSaveLevel(level);
     }
 
     virtual Backlight* GetBacklight() override {
