@@ -11,12 +11,16 @@
 
 #include <esp_log.h>
 #include <esp_system.h>
+#include <nvs.h>
 
 #include <cstdio>
 
 namespace {
 
 constexpr char kTag[] = "ApplicationOta";
+constexpr char kAppUpdateSuccessKey[] = "app_ota_success";
+static_assert(sizeof(kAppUpdateSuccessKey) <= NVS_KEY_NAME_MAX_SIZE,
+              "APP OTA success key exceeds the NVS key length limit");
 constexpr EventBits_t kOtaConfirmStart = 1U << 13;
 constexpr EventBits_t kOtaConfirmSkip = 1U << 14;
 // OTA 下载会持续占用 CPU，但仍需低于音频实时任务（优先级 8）。
@@ -308,10 +312,18 @@ bool Application::CheckNewVersion() {
                  esp_err_to_name(check_result), ota_flow_.client->GetCurrentVersion().c_str());
     }
 
-    Settings ota_settings("ota", true);
-    const bool app_update_succeeded = ota_settings.GetBool("app_update_pending_success", false);
+    bool app_update_succeeded = false;
+    {
+        Settings ota_settings("ota", true);
+        app_update_succeeded = ota_settings.GetBool(kAppUpdateSuccessKey, false);
+        if (app_update_succeeded) {
+            ota_settings.EraseKey(kAppUpdateSuccessKey);
+        }
+        // Settings 在析构时提交：在后续资源 OTA 可能重启之前清除标志，避免重复播报。
+    }
+    ESP_LOGI(kTag, "APP OTA success pending: %s", app_update_succeeded ? "yes" : "no");
     if (app_update_succeeded) {
-        ota_settings.EraseKey("app_update_pending_success");
+        ESP_LOGI(kTag, "Playing APP OTA success tone 88 before resource checks");
         PlayOtaTone(88);
     }
     if (!KvOta::IsDisabled(KvOta::UpdateType::App) &&
@@ -402,8 +414,12 @@ bool Application::UpgradeFirmware(const std::string& url, const std::string& ver
     }
 
     ESP_LOGI(kTag, "Firmware upgrade successful, rebooting...");
-    Settings ota_settings("ota", true);
-    ota_settings.SetBool("app_update_pending_success", true);
+    {
+        Settings ota_settings("ota", true);
+        ota_settings.SetBool(kAppUpdateSuccessKey, true);
+        // 必须在 esp_restart() 前析构并提交，重启不会执行局部对象析构。
+    }
+    ESP_LOGI(kTag, "APP OTA success marker committed for next boot");
     Ui::ShowUpgradeResult(Lang::Strings::UPGRADE_SUCCESSFUL_REBOOTING);
     Ui::SetChatMessage("system", Lang::Strings::UPGRADE_SUCCESSFUL_REBOOTING);
     vTaskDelay(pdMS_TO_TICKS(1000));
