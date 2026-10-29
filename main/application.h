@@ -259,6 +259,13 @@ private:
     int clock_ticks_ = 0;
     // 由 NetworkEvent::Connected/Disconnected 驱动；唤醒时区分“网络未连”和“WS 未连”。
     std::atomic_bool network_connected_{false};
+    // 只在已连接网络随后断开时播报一次 060_network_fail.mp3，避免
+    // 首次扫描失败或断网后的每次重连尝试都重复播报。
+    std::atomic_bool network_disconnect_tone_pending_{false};
+    // 只在上述断网边沿恢复后播报一次 059_network_suc.mp3。
+    std::atomic_bool network_reconnect_tone_pending_{false};
+    // 云端返回 20104 时由主任务播报 105_auth_failed.mp3。
+    std::atomic_bool cloud_auth_failed_tone_pending_{false};
     int64_t listening_started_at_us_ = 0;
 
 
@@ -293,6 +300,8 @@ private:
     void PauseWakeWordDetection();
     bool ResetVoiceSessionForWakeup(bool& interrupted_tts);
     void BeginWakeup(ListeningMode mode, const std::string& wake_word = {});
+    void PlayConfirmedWakeup();
+    bool wakeup_awaiting_started_ = false;
     void CancelWakeup();
     void PublishWifiIcon();
 

@@ -26,9 +26,11 @@ XiaolingConn::XiaolingConn() {
             SetSessionActive(active);
         },
         [this](XiaolingSessionVoiceError error) {
-            SetError(error == XiaolingSessionVoiceError::kServerTimeout
-                         ? XiaolingError::ServerTimeout
-                         : XiaolingError::ServerError);
+            if (error == XiaolingSessionVoiceError::kServerTimeout) {
+                start_timeout_pending_ = true;
+            } else {
+                SetError(XiaolingError::ServerError);
+            }
         });
 }
 
@@ -41,6 +43,16 @@ XiaolingConn::~XiaolingConn() {
 
 bool XiaolingConn::Start() {
     return Connect();
+}
+
+void XiaolingConn::RequestReconnect() {
+    if (event_group_ == nullptr || !desired_connected_) {
+        return;
+    }
+    xEventGroupSetBits(event_group_, kReconnectRequestedBit);
+    if (task_handle_ != nullptr) {
+        xTaskNotifyGive(task_handle_);
+    }
 }
 
 bool XiaolingConn::Connect() {
@@ -280,6 +292,10 @@ void XiaolingConn::OnDisconnected(std::function<void()> callback) {
     on_disconnected_ = std::move(callback);
 }
 
+void XiaolingConn::OnTransportDisconnected(std::function<void()> callback) {
+    on_transport_disconnected_ = std::move(callback);
+}
+
 bool XiaolingConn::StartSupervisor() {
     desired_connected_ = true;
     if (!running_.exchange(true)) {
@@ -397,6 +413,20 @@ bool XiaolingConn::SendPendingControl() {
                           frame.payload.size())
                     : websocket_->SendText(frame.payload));
     }
+    if (sent && !frame.binary && voice_ != nullptr) {
+        cJSON* root = cJSON_Parse(frame.payload.c_str());
+        const auto* action = cJSON_GetObjectItemCaseSensitive(root, "action");
+        if (cJSON_IsString(action) && std::string(action->valuestring) == "start") {
+            const auto* params = cJSON_GetObjectItemCaseSensitive(root, "params");
+            const auto* nlu = cJSON_GetObjectItemCaseSensitive(params, "nlu_properties");
+            const auto* custom = cJSON_GetObjectItemCaseSensitive(nlu, "custom");
+            const auto* rid = cJSON_GetObjectItemCaseSensitive(custom, "rid");
+            if (cJSON_IsString(rid) && rid->valuestring != nullptr) {
+                voice_->MarkStartSent(rid->valuestring);
+            }
+        }
+        cJSON_Delete(root);
+    }
     if (!sent) {
         ESP_LOGW(TAG, "WebSocket %s控制消息发送失败，触发链路重连",
                  frame.binary ? "二进制" : "文本");
@@ -510,6 +540,19 @@ void XiaolingConn::TaskEntry(void* arg) {
 void XiaolingConn::Run() {
     last_heartbeat_us_ = esp_timer_get_time();
     while (running_) {
+        CheckVoiceStartTimeout();
+        if (start_timeout_pending_.exchange(false)) {
+            ESP_LOGW(TAG, "start 发出后 1 秒未收到 started，按 WS 断连处理");
+            HandleTransportDisconnected(generation_.load());
+            ForceReconnect();
+        }
+        if (event_group_ != nullptr &&
+            (xEventGroupGetBits(event_group_) & kReconnectRequestedBit) != 0) {
+            xEventGroupClearBits(event_group_, kReconnectRequestedBit);
+            reconnect_attempts_ = 0;
+            disconnected_event_published_ = false;
+            ESP_LOGI(TAG, "收到网络恢复通知，重置 WebSocket 重连次数");
+        }
         if (desired_connected_ && !transport_connected_ && !connecting_) {
             if (reconnect_attempts_ < 3) {
                 bool was_connecting = false;
@@ -566,7 +609,7 @@ void XiaolingConn::Run() {
             continue;
         }
 
-        const auto wait_ms = transport_connected_ ? 250 : kReconnectIntervalMs;
+        const auto wait_ms = transport_connected_ ? 50 : kReconnectIntervalMs;
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(wait_ms));
     }
     task_handle_ = nullptr;
@@ -673,8 +716,12 @@ void XiaolingConn::HandleTransportDisconnected(uint32_t generation) {
     if (event_group_ != nullptr) {
         xEventGroupSetBits(event_group_, kProtocolConnectedBit);
     }
-    if (was_transport_connected || protocol_connected_.exchange(false)) {
+    const bool was_protocol_connected = protocol_connected_.exchange(false);
+    if (was_transport_connected || was_protocol_connected) {
         ESP_LOGI(TAG, "小聆连接已断开，等待自动重连");
+        if (desired_connected_ && on_transport_disconnected_) {
+            on_transport_disconnected_();
+        }
     }
     if (task_handle_ != nullptr) {
         xTaskNotifyGive(task_handle_);

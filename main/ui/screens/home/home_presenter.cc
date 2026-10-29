@@ -233,11 +233,22 @@ void HomePresenter::UpdateBattery() {
 }
 
 void HomePresenter::SetStatus(std::string status, bool standby) {
+    if (standby && !service_connected_) {
+        status = Lang::GetLanguage() == Lang::Language::English
+                     ? "Service disconnected" : "服务未连接";
+    }
     status_text_ = std::move(status);
     standby_ = standby;
     if (view_ != nullptr) {
         view_->SetStatus(status_text_);
         RenderMusicTrack();
+    }
+}
+
+void HomePresenter::SetServiceConnected(bool connected) {
+    service_connected_ = connected;
+    if (!connected || standby_) {
+        SetStatus(Lang::Strings::STANDBY, true);
     }
 }
 

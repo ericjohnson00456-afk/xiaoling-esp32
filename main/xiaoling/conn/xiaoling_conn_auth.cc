@@ -307,18 +307,29 @@ bool XiaolingConn::Authenticate(const std::string& extra_code) {
         {"User-Agent", SystemInfo::GetUserAgent()},
         {"Accept-Language", Lang::CODE},
     };
+    ESP_LOGI(TAG, "小聆 Token 请求: POST %s, product_id_len=%u, device_id_len=%u, body_bytes=%u",
+             url.c_str(), static_cast<unsigned>(product_id.size()),
+             static_cast<unsigned>(device_id.size()),
+             static_cast<unsigned>(request_body.size()));
+    ESP_LOGI(TAG, "小聆 Token 请求内容: %s", request_body.c_str());
     int status_code = 0;
     std::string response_body;
-    if (!PostJsonForToken(url, request_body, headers, status_code, response_body) ||
-        status_code < 200 || status_code >= 300) {
-        ESP_LOGE(TAG, "小聆鉴权失败: status=%d", status_code);
+    const bool request_ok = PostJsonForToken(url, request_body, headers,
+                                             status_code, response_body);
+    ESP_LOGI(TAG, "小聆 Token 响应: transport_ok=%d, status=%d, body_bytes=%u",
+             request_ok ? 1 : 0, status_code,
+             static_cast<unsigned>(response_body.size()));
+    ESP_LOGI(TAG, "小聆 Token 响应内容: %s", response_body.c_str());
+    if (!request_ok) {
+        ESP_LOGE(TAG, "小聆鉴权请求失败: status=%d", status_code);
         SetError(XiaolingError::ServerNotConnected);
         return false;
     }
 
     cJSON* root = cJSON_ParseWithLength(response_body.data(), response_body.size());
     if (root == nullptr) {
-        ESP_LOGE(TAG, "小聆鉴权响应不是有效 JSON");
+        ESP_LOGE(TAG, "小聆鉴权响应不是有效 JSON: status=%d", status_code);
+        SetError(XiaolingError::ServerNotConnected);
         return false;
     }
     const auto* token = cJSON_GetObjectItemCaseSensitive(root, "token");
@@ -326,7 +337,36 @@ bool XiaolingConn::Authenticate(const std::string& extra_code) {
     if (cJSON_IsString(token) && token->valuestring != nullptr) {
         access_token = token->valuestring;
     }
+    const auto* code = cJSON_GetObjectItemCaseSensitive(root, "code");
+    const auto* message = cJSON_GetObjectItemCaseSensitive(root, "message");
+    char code_number[24] = {};
+    const char* code_text = "<none>";
+    if (cJSON_IsString(code) && code->valuestring != nullptr) {
+        code_text = code->valuestring;
+    } else if (cJSON_IsNumber(code)) {
+        std::snprintf(code_number, sizeof(code_number), "%d", code->valueint);
+        code_text = code_number;
+    }
+    const bool authentication_failed =
+        cJSON_IsNumber(code) && code->valueint == 20104;
+    ESP_LOGI(TAG, "小聆 Token 响应字段: code=%s, message=%s, token_len=%u",
+             code_text,
+             cJSON_IsString(message) && message->valuestring != nullptr
+                 ? message->valuestring
+                 : "<none>",
+             static_cast<unsigned>(access_token.size()));
     cJSON_Delete(root);
+    if (authentication_failed) {
+        ESP_LOGE(TAG, "小聆云端鉴权失败: code=20104，请检查 PID/SID");
+        SetError(XiaolingError::AuthenticationFailed);
+    }
+    if (status_code < 200 || status_code >= 300) {
+        ESP_LOGE(TAG, "小聆鉴权失败: status=%d", status_code);
+        if (!authentication_failed) {
+            SetError(XiaolingError::ServerNotConnected);
+        }
+        return false;
+    }
     if (access_token.empty()) {
         ESP_LOGE(TAG, "小聆鉴权响应中没有 Token");
         return false;

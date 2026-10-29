@@ -66,6 +66,8 @@ bool Initialize();
 // 线程安全的 UI 业务入口：所有界面更新都由 UI 专用任务串行执行。
 void SetStatus(Status status);
 void SetStatusText(std::string text);
+// WS 连接状态；服务断开时首页的待命状态显示为“服务未连接”。
+void SetServiceConnected(bool connected);
 void ShowNotification(Notification notification, int32_t duration_ms = 3000,
                       std::string detail = {});
 void ShowNotification(std::string text, int32_t duration_ms = 3000);

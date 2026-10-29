@@ -37,6 +37,10 @@
 
 #define TAG "Application"
 
+static constexpr uint16_t kNetworkFailureToneId = 60;
+static constexpr uint16_t kNetworkSuccessToneId = 59;
+static constexpr uint16_t kCloudAuthFailureToneId = 105;
+
 static constexpr EventBits_t kAllMainEvents =
     MAIN_EVENT_SCHEDULE |
     MAIN_EVENT_CLOCK_TICK |
@@ -385,7 +389,10 @@ void Application::Initialize() {
         switch (event) {
             case NetworkEvent::Scanning:
                 Ui::ShowNotification(Ui::Notification::ScanningWifi, 30000);
-                network_connected_ = false;
+                if (network_connected_.exchange(false)) {
+                    network_disconnect_tone_pending_.store(true);
+                    network_reconnect_tone_pending_.store(true);
+                }
                 xEventGroupSetBits(event_group_, MAIN_EVENT_NETWORK_DISCONNECTED);
                 break;
             case NetworkEvent::Connecting: {
@@ -401,11 +408,20 @@ void Application::Initialize() {
             case NetworkEvent::Connected: {
                 Ui::ShowNotification(Ui::Notification::ConnectedToNetwork, 30000, data);
                 network_connected_ = true;
+                const bool play_reconnect_tone =
+                    network_reconnect_tone_pending_.exchange(false);
+                if (play_reconnect_tone) {
+                    ESP_LOGI(TAG, "网络自动重连成功，准备播报网络连接成功提示音");
+                    Schedule([this]() { PlayPromptTone(kNetworkSuccessToneId); });
+                }
                 xEventGroupSetBits(event_group_, MAIN_EVENT_NETWORK_CONNECTED);
                 break;
             }
             case NetworkEvent::Disconnected:
-                network_connected_ = false;
+                if (network_connected_.exchange(false)) {
+                    network_disconnect_tone_pending_.store(true);
+                    network_reconnect_tone_pending_.store(true);
+                }
                 Ui::ClearRoleConfigQrCode();
                 xEventGroupSetBits(event_group_, MAIN_EVENT_NETWORK_DISCONNECTED);
                 break;
@@ -517,13 +533,16 @@ bool Application::WaitForOtaFlowCompletion() {
 
 void Application::ProcessMainEvents(EventBits_t bits) {
     if (bits & MAIN_EVENT_ERROR) {
+        const bool cloud_auth_failed = cloud_auth_failed_tone_pending_.exchange(false);
         SetDeviceState(kDeviceStateIdle);
         ESP_LOGW(TAG, "[circle_xmark] %s: %s",
                  Lang::Strings::ERROR, last_error_message_.c_str());
-        Ui::SetStatusText(Lang::Strings::ERROR);
+        Ui::SetStatusText(cloud_auth_failed ? last_error_message_.c_str()
+                                             : Lang::Strings::ERROR);
         Ui::SetEmotion("circle_xmark");
         Ui::SetChatMessage("system", last_error_message_);
-        PlayTone(94);
+        const uint16_t error_tone_id = cloud_auth_failed ? kCloudAuthFailureToneId : 94;
+        PlayTone(error_tone_id);
     }
 
     if (bits & MAIN_EVENT_NETWORK_CONNECTED) {
@@ -571,7 +590,6 @@ void Application::ProcessMainEvents(EventBits_t bits) {
     }
 
     if (bits & MAIN_EVENT_CLOCK_TICK) {
-        if (xiaoling_conn_) xiaoling_conn_->CheckVoiceStartTimeout();
         clock_ticks_++;
         if (alarm_flow_.on_clock_tick) {
             alarm_flow_.on_clock_tick();
@@ -611,6 +629,10 @@ void Application::ProcessMainEvents(EventBits_t bits) {
 
 void Application::HandleNetworkConnectedEvent() {
     ESP_LOGI(TAG, "Network connected");
+    if (xiaoling_conn_ && !xiaoling_conn_->IsConnected()) {
+        ESP_LOGI(TAG, "网络已恢复，请求重新建立小聆 WebSocket");
+        xiaoling_conn_->RequestReconnect();
+    }
     auto state = GetDeviceState();
 
     if (state == kDeviceStateStarting || state == kDeviceStateWifiConfiguring) {
@@ -622,7 +644,15 @@ void Application::HandleNetworkConnectedEvent() {
 }
 
 void Application::HandleNetworkDisconnectedEvent() {
+    const bool play_network_fail_tone =
+        network_disconnect_tone_pending_.exchange(false);
     audio_player_.Stop(PlaybackEndReason::kCancelled);
+
+    if (play_network_fail_tone) {
+        // tone/060_network_fail.mp3：网络从已连接状态变为断开。
+        ESP_LOGW(TAG, "网络连接已断开，播报网络失败提示音");
+        PlayTone(kNetworkFailureToneId);
+    }
 
     // 立即更新状态栏以显示当前网络状态。
     Ui::UpdateStatusBar(true);
@@ -731,6 +761,7 @@ void Application::InitializeXiaolingConn() {
     xiaoling_conn_ = std::make_unique<XiaolingConn>();
 
     xiaoling_conn_->OnConnected([this, codec, &board]() {
+        Ui::SetServiceConnected(true);
         // 连接成功时同步当前充电状态作为基线；只有此后的插入事件播放充电表情。
         Ui::SetChargingAnimationReady(true);
         SdMusicService::GetInstance().OnCloudReady();
@@ -771,6 +802,10 @@ void Application::InitializeXiaolingConn() {
             case XiaolingError::ServerError:
                 last_error_message_ = Lang::Strings::SERVER_ERROR;
                 break;
+            case XiaolingError::AuthenticationFailed:
+                last_error_message_ = "云端鉴权失败，请检查pid/sid";
+                cloud_auth_failed_tone_pending_.store(true);
+                break;
         }
         xEventGroupSetBits(event_group_, MAIN_EVENT_ERROR);
     });
@@ -790,7 +825,19 @@ void Application::InitializeXiaolingConn() {
     });
 #endif  // 小聆平台
 
+    xiaoling_conn_->OnTransportDisconnected([this]() {
+        Ui::SetServiceConnected(false);
+        ESP_LOGW(TAG, "小聆 WebSocket 已断开，播报 065_net_error.mp3");
+        ScheduleUrgent([this]() {
+            if (wakeup_awaiting_started_ || audio_player_.IsWakeupPending()) {
+                CancelWakeup();
+            }
+            PlayTone(65);
+        });
+    });
+
     xiaoling_conn_->OnDisconnected([this, &board]() {
+        Ui::SetServiceConnected(false);
         Ui::SetChargingAnimationReady(false);
         board.SetPowerSaveLevel(PowerSaveLevel::LOW_POWER);
         SdMusicService::GetInstance().OnCloudDisconnected();
@@ -800,7 +847,7 @@ void Application::InitializeXiaolingConn() {
                 return;
             }
             Ui::SetChatMessage("system", "");
-            if (audio_player_.IsWakeupPending()) {
+            if (wakeup_awaiting_started_ || audio_player_.IsWakeupPending()) {
                 CancelWakeup();
                 return;
             }
@@ -851,6 +898,11 @@ void Application::InitializeXiaolingConn() {
                     !xiaoling_conn_ || xiaoling_conn_->session_id() != request_id ||
                     !xiaoling_conn_->CanUploadAudio()) return;
                 const auto state = GetDeviceState();
+                if (state == kDeviceStateConnecting && wakeup_awaiting_started_) {
+                    wakeup_awaiting_started_ = false;
+                    PlayConfirmedWakeup();
+                    return;
+                }
                 if (state != kDeviceStateListening &&
                     !(state == kDeviceStateSpeaking && session_controller_.KeepListeningDuringTts())) return;
                 RefreshListeningAudioUpload();
@@ -950,7 +1002,7 @@ void Application::HandleToggleChatEvent() {
         ESP_LOGI(TAG, "TF 卡文件同步期间忽略语音交互按键");
         return;
     }
-    if (audio_player_.IsWakeupPending()) {
+    if (wakeup_awaiting_started_ || audio_player_.IsWakeupPending()) {
         CancelWakeup();
         return;
     }
@@ -1001,7 +1053,7 @@ void Application::HandleToggleChatEvent() {
 }
 
 void Application::HandleStartListeningEvent() {
-    if (audio_player_.IsWakeupPending()) {
+    if (wakeup_awaiting_started_ || audio_player_.IsWakeupPending()) {
         return;
     }
     auto state = GetDeviceState();
@@ -1036,7 +1088,7 @@ void Application::HandleStartListeningEvent() {
 }
 
 void Application::HandleStopListeningEvent() {
-    if (audio_player_.IsWakeupPending()) {
+    if (wakeup_awaiting_started_ || audio_player_.IsWakeupPending()) {
         CancelWakeup();
         return;
     }
@@ -1146,35 +1198,10 @@ void Application::BeginWakeup(ListeningMode mode, const std::string& wake_word) 
         audio_service_.PauseWakeWordDetection();
         ESP_LOGI(TAG, "无 AEC：按提示音实际播放终态丢弃录音，不限制 tone 长度");
     }
-    audio_player_.PlayWakeup([this, generation](bool proceed) {
-        Schedule([this, generation, proceed]() {
-            if (!Xiaoling::voice_session_epoch.IsCurrent(generation)) return;
-            const bool deferred_recording = wakeup_recording_gate_.Complete(generation);
-            if (deferred_recording) audio_service_.SetMicrophoneSuppressed(false);
-            intent_manager_.Pop(PlaybackIntentId::kPromptTone);
-            if (!proceed) {
-                if (GetDeviceState() == kDeviceStateListening && xiaoling_conn_) {
-                    xiaoling_conn_->SendStopListening();
-                }
-                if (xiaoling_conn_) xiaoling_conn_->SendWakeWordDetected("");
-                SetDeviceState(kDeviceStateIdle);
-                intent_manager_.Pop(PlaybackIntentId::kVoiceSession);
-                return;
-            }
-            if (deferred_recording && GetDeviceState() == kDeviceStateConnecting) {
-                audio_service_.EnableWakeWordDetection(true);
-                ESP_LOGI(TAG, "无 AEC：提示音及 DMA 已结束，开始新录音会话");
-                SetListeningMode(listening_mode_);
-                return;
-            }
-            ESP_LOGI(TAG, "Wakeup tone finished; recording session remains active");
-        });
-    });
     if (GetDeviceState() != kDeviceStateConnecting) {
         return;
     }
-    // tone 已交给播放器，在本地开始解码/出声；旧会话的网络控制在其后执行。
-    // 保持 event/cancel/start 的协议顺序，但不让网络发送挡住本地提示音。
+    // 先发送 start，收到当前会话 started 后才播放提示音和显示聆听 UI。
     if (interrupted_tts) {
         xiaoling_conn_->SendAbortSpeaking(kAbortReasonWakeWordDetected);
     } else if (!xiaoling_conn_->EndSession()) {
@@ -1183,12 +1210,9 @@ void Application::BeginWakeup(ListeningMode mode, const std::string& wake_word) 
         return;
     }
     if (!wake_word.empty()) xiaoling_conn_->SendWakeWordDetected(wake_word);
-    // AEC 开启时继续并行录音；否则等本轮 tone 自然结束并排空 DMA 再建会话，
-    // 让自定义长 tone 不占用录音和云端会话的超时预算。ADC/处理器仍常驻。
-    if (!wakeup_recording_gate_.Blocked()) {
-        ESP_LOGI(TAG, "Wakeup tone submitted; start new recording session in parallel");
-    }
-    SetListeningMode(mode);
+    listening_mode_ = mode;
+    wakeup_awaiting_started_ = true;
+    xiaoling_conn_->SendStartListening(mode);
     if (iat_subscription_id_ == 0) {
         auto on_iat_text = [this](const AppEvent::Event& event) {
             // 事件已经在 app_event 任务中串行执行；仍记录接收时的 TTS 世代，
@@ -1276,7 +1300,39 @@ void Application::BeginWakeup(ListeningMode mode, const std::string& wake_word) 
     }
 }
 
+void Application::PlayConfirmedWakeup() {
+    const auto generation = Xiaoling::voice_session_epoch.Current();
+    ESP_LOGI(TAG, "收到 started，开始播放唤醒提示音和更新唤醒 UI");
+    audio_player_.PlayWakeup([this, generation](bool proceed) {
+        Schedule([this, generation, proceed]() {
+            if (!Xiaoling::voice_session_epoch.IsCurrent(generation)) return;
+            const bool deferred_recording = wakeup_recording_gate_.Complete(generation);
+            if (deferred_recording) audio_service_.SetMicrophoneSuppressed(false);
+            intent_manager_.Pop(PlaybackIntentId::kPromptTone);
+            if (!proceed) {
+                CancelWakeup();
+                return;
+            }
+            if (deferred_recording && GetDeviceState() == kDeviceStateConnecting) {
+                audio_service_.EnableWakeWordDetection(true);
+                ESP_LOGI(TAG, "无 AEC：提示音及 DMA 已结束，开始新录音会话");
+                SetListeningMode(listening_mode_);
+                return;
+            }
+            ESP_LOGI(TAG, "Wakeup tone finished; recording session remains active");
+        });
+    });
+    if (GetDeviceState() == kDeviceStateConnecting) {
+        // AEC 可与 tone 并行录音；无 AEC 等 tone 结束后再开启上传。
+        Ui::SetStatus(Ui::Status::Listening);
+        Ui::SetEmotion("聆听");
+        Ui::SetChatMessage("system", "");
+        SetListeningMode(listening_mode_);
+    }
+}
+
 bool Application::ResetVoiceSessionForWakeup(bool& interrupted_tts) {
+    wakeup_awaiting_started_ = false;
     wakeup_recording_gate_.Cancel();
     audio_service_.SetMicrophoneSuppressed(false);
     const auto state = GetDeviceState();
@@ -1328,12 +1384,14 @@ void Application::PauseWakeWordDetection() {
 }
 
 void Application::CancelWakeup() {
+    wakeup_awaiting_started_ = false;
     wakeup_recording_gate_.Cancel();
     audio_service_.SetMicrophoneSuppressed(false);
     audio_player_.CancelWakeup();
     intent_manager_.Pop(PlaybackIntentId::kPromptTone);
     if (xiaoling_conn_) {
-        if (GetDeviceState() == kDeviceStateListening) {
+        if (GetDeviceState() == kDeviceStateListening ||
+            GetDeviceState() == kDeviceStateConnecting) {
             xiaoling_conn_->SendStopListening();
         }
         xiaoling_conn_->SendWakeWordDetected("");
@@ -1413,11 +1471,7 @@ void Application::HandleStateChangedEvent() {
 #endif  // 小聆平台
             break;
         case kDeviceStateConnecting:
-            // 唤醒提示音阶段的过渡态：连接已就绪，直接预告聆听，避免
-            // "连接中..." 一闪而过。
-            Ui::SetStatus(Ui::Status::Listening);
-            Ui::SetEmotion("聆听");
-            Ui::SetChatMessage("system", "");
+            // 等待 started 时保留原 UI，云端确认后才展示唤醒状态。
             break;
         case kDeviceStateListening:
             listening_started_at_us_ = esp_timer_get_time();
@@ -1554,7 +1608,8 @@ bool Application::CanEnterSleepMode() {
         return false;
     }
 
-    if (xiaoling_conn_ && xiaoling_conn_->IsConnected()) {
+    // 仅在云端服务连接成功后累计待命休眠时间。
+    if (!xiaoling_conn_ || !xiaoling_conn_->IsConnected()) {
         return false;
     }
 

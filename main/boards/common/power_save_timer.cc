@@ -61,8 +61,9 @@ void PowerSaveTimer::OnShutdownRequest(std::function<void()> callback) {
 
 void PowerSaveTimer::PowerSaveCheck() {
     auto& app = Application::GetInstance();
-    if (!in_sleep_mode_ && !app.CanEnterSleepMode()) {
-        ticks_ = 0;
+    if (!app.CanEnterSleepMode()) {
+        // 断开服务、离开待命或音频忙碌时重置计时；已显示睡觉表情也要退出。
+        WakeUp();
         return;
     }
 

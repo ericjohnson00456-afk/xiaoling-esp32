@@ -730,7 +730,7 @@ void XiaolingSessionVoice::SendStartListening(ListeningMode mode) {
             return;
         }
         xEventGroupClearBits(event_group_, kSessionStartedBit);
-        start_deadline_us_ = esp_timer_get_time() + kSessionStartTimeoutMs * 1000LL;
+        start_deadline_us_ = 0;
         SetSessionActive(text_sender_(BuildStartMessage(mode)));
         if (!session_active_) {
             awaiting_started_ = false;
@@ -740,9 +740,18 @@ void XiaolingSessionVoice::SendStartListening(ListeningMode mode) {
     // 接收任务异步确认，主任务立即返回，保持可打断/可重新唤醒。
 }
 
+void XiaolingSessionVoice::MarkStartSent(const std::string& request_id) {
+    std::lock_guard<std::recursive_mutex> lock(session_mutex_);
+    if (request_id == session_id_ && awaiting_started_ && start_deadline_us_ == 0) {
+        start_deadline_us_ = esp_timer_get_time() + kSessionStartTimeoutMs * 1000LL;
+        ESP_LOGI(TAG, "start 已发送，开始等待 started: rid=%s, timeout=%dms",
+                 session_id_.c_str(), kSessionStartTimeoutMs);
+    }
+}
+
 void XiaolingSessionVoice::CheckStartTimeout() {
     std::lock_guard<std::recursive_mutex> lock(session_mutex_);
-    if (!awaiting_started_ || !session_active_ || start_deadline_us_ == 0 ||
+    if (!awaiting_started_ || start_deadline_us_ == 0 ||
         !Xiaoling::voice_session_epoch.IsCurrent(event_generation_.load()) ||
         esp_timer_get_time() < start_deadline_us_) return;
     ESP_LOGE(TAG, "等待 lschat started 消息超时: epoch=%lu",
@@ -1041,6 +1050,10 @@ bool XiaolingSessionVoice::HandleMessage(const cJSON* root, uint32_t* accepted_g
 
     if (std::strcmp(action, "started") == 0) {
         if (!awaiting_started_) return false;
+        if (start_deadline_us_ != 0 && esp_timer_get_time() >= start_deadline_us_) {
+            CheckStartTimeout();
+            return false;
+        }
         awaiting_started_ = false;
         bool preserve_playing_tts = false;
         {

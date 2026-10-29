@@ -183,6 +183,12 @@ void SetStatusText(std::string text) {
     });
 }
 
+void SetServiceConnected(bool connected) {
+    UiManager::GetInstance().DispatchUrgent([connected]() {
+        HomePresenter::GetInstance().SetServiceConnected(connected);
+    });
+}
+
 void ShowNotification(Notification notification, int32_t duration_ms, std::string detail) {
     UiManager::GetInstance().Dispatch(
         [notification, duration_ms, detail = std::move(detail)]() mutable {

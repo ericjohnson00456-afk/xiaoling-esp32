@@ -50,8 +50,9 @@ public:
     // 为按键图片识别准备无音频上行的文本会话，并清理上一轮语音结果状态。
     void PrepareTextSession(std::string session_id);
     void SendStartListening(ListeningMode mode);
-    // 使用应用现有的一秒时钟检查，等待 started 不得阻塞唤醒主任务。
+    // 由 WS 监督任务检查，等待 started 不得阻塞唤醒主任务。
     void CheckStartTimeout();
+    void MarkStartSent(const std::string& request_id);
     void SendStopListening();
     // 半双工收到 TTS 后只结束上行，保留当前回复的音频和字幕状态。
     bool StopListeningForTts();
@@ -81,7 +82,7 @@ public:
 private:
     static constexpr int kServerSampleRate = 16000;
     static constexpr int kServerFrameDurationMs = 60;
-    static constexpr int kSessionStartTimeoutMs = 3000;
+    static constexpr int kSessionStartTimeoutMs = 1000;
     static constexpr int kOpusWbSampleRate = 16000;
     static constexpr int kOpusWbFrameDurationMs = 20;
     static constexpr size_t kOpusWbPayloadBytes = 40;

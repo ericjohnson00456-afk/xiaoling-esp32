@@ -24,6 +24,7 @@ enum class XiaolingError {
     ServerNotConnected,
     ServerTimeout,
     ServerError,
+    AuthenticationFailed,
 };
 
 struct XiaolingUplinkDiagnostics {
@@ -55,6 +56,8 @@ public:
     // 启动即完成鉴权和连接；连接成功后语音模块可以直接开始会话。
     bool Start();
     bool Connect();
+    // Wi-Fi 恢复后唤醒连接监督任务，重置已耗尽的 WebSocket 重试次数。
+    void RequestReconnect();
     void Disconnect();
     bool IsConnected() const;
     bool IsSessionActive() const;
@@ -99,12 +102,15 @@ public:
     void OnNetworkError(std::function<void(XiaolingError)> callback);
     void OnConnected(std::function<void()> callback);
     void OnDisconnected(std::function<void()> callback);
+    // 已建立的 WS 传输连接断开时通知一次，不含握手失败和主动停机。
+    void OnTransportDisconnected(std::function<void()> callback);
 
 private:
     static constexpr uint32_t kHeartbeatIntervalMs = 30000;
     static constexpr uint32_t kReconnectIntervalMs = 3000;
     static constexpr uint32_t kProtocolConnectTimeoutMs = 10000;
     static constexpr EventBits_t kProtocolConnectedBit = BIT0;
+    static constexpr EventBits_t kReconnectRequestedBit = BIT1;
     static constexpr size_t kMaxUplinkPackets = 25;
     static constexpr size_t kUplinkBatchPackets = 5;
     static constexpr uint32_t kUplinkBatchWaitMs = 40;
@@ -124,6 +130,7 @@ private:
     std::atomic_bool protocol_connected_{false};
     std::atomic_bool session_active_{false};
     std::atomic_bool connecting_{false};
+    std::atomic_bool start_timeout_pending_{false};
     std::atomic<uint32_t> generation_{0};
     uint32_t reconnect_attempts_ = 0;
     bool disconnected_event_published_ = false;
@@ -171,6 +178,7 @@ private:
     std::function<void(XiaolingError)> on_network_error_;
     std::function<void()> on_connected_;
     std::function<void()> on_disconnected_;
+    std::function<void()> on_transport_disconnected_;
 
     bool StartSupervisor();
     void StopSupervisor();

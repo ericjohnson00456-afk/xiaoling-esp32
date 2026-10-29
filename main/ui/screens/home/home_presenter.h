@@ -41,6 +41,7 @@ public:
     void SetChargingAnimationReady(bool ready);
     void UpdateBattery();
     void SetStatus(std::string status, bool standby = false);
+    void SetServiceConnected(bool connected);
     void SetMusicTrack(MusicTrack track);
     void SetMusicPaused(bool paused);
     void SetTime(std::string time);
@@ -91,6 +92,7 @@ private:
     MusicTrack music_track_;
     bool music_paused_ = false;
     bool standby_ = false;
+    bool service_connected_ = true;
     std::string time_text_;
     DuplexMode duplex_mode_ = DuplexMode::kHalfDuplex;
     bool duplex_visible_ = false;
