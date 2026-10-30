@@ -1,6 +1,6 @@
 # BluFi 配网（集成 esp-wifi-connect）
 
-本文档说明如何在小智固件中启用和使用 BluFi（BLE Wi‑Fi 配网），并结合项目内置的 `esp-wifi-connect` 组件完成 Wi‑Fi 连接与存储。官方
+本文档说明如何在小聆固件中启用和使用 BluFi（BLE Wi‑Fi 配网），并结合项目内置的 `esp-wifi-connect` 组件完成 Wi‑Fi 连接与存储。官方
 BluFi
 协议说明请参考 [Espressif 文档](https://docs.espressif.com/projects/esp-idf/zh_CN/stable/esp32/api-guides/ble/blufi.html)。
 
