@@ -171,6 +171,10 @@ SpiLcdDisplay::SpiLcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_h
         },
     };
 
+    // add_disp starts refreshes as soon as it releases the port lock. Keep
+    // callbacks, offsets and the initial UI atomic with respect to rendering.
+    DisplayLockGuard setup_lock(this);
+    ESP_ERROR_CHECK(setup_lock.locked() ? ESP_OK : ESP_FAIL);
     display_ = lvgl_port_add_disp(&display_cfg);
     if (display_ == nullptr) {
         ESP_LOGE(TAG, "Failed to add display");
