@@ -37,6 +37,10 @@ void SetTransparent(lv_obj_t* object) {
     lv_obj_set_style_pad_all(object, 0, 0);
 }
 
+bool IsCompactPortrait(const Display* display) {
+    return display != nullptr && display->width() <= 160 && display->height() >= 200;
+}
+
 size_t NextUtf8Offset(const std::string& text, size_t offset) {
     if (offset >= text.size()) {
         return text.size();
@@ -231,14 +235,28 @@ void HomeView::CreateUi() {
     lv_obj_center(emoji_image_);
     lv_obj_add_flag(emoji_image_, LV_OBJ_FLAG_HIDDEN);
 
-    auto* top_bar = lv_obj_create(root_);
-    lv_obj_set_size(top_bar, LV_HOR_RES, LV_SIZE_CONTENT);
+    const bool stacked_header = IsCompactPortrait(display_);
+    auto* header = root_;
+    if (stacked_header) {
+        header = lv_obj_create(root_);
+        SetTransparent(header);
+        lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_size(header, LV_HOR_RES, LV_SIZE_CONTENT);
+        lv_obj_set_style_pad_hor(header, theme->spacing(4), 0);
+        lv_obj_set_style_pad_row(header, theme->spacing(1), 0);
+        lv_obj_set_flex_flow(header, LV_FLEX_FLOW_COLUMN);
+        lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
+    }
+
+    auto* top_bar = lv_obj_create(header);
+    lv_obj_set_size(top_bar, stacked_header ? lv_pct(100) : LV_HOR_RES, LV_SIZE_CONTENT);
     SetTransparent(top_bar);
-    lv_obj_set_style_pad_hor(top_bar, theme->spacing(4), 0);
+    lv_obj_clear_flag(top_bar, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_pad_hor(top_bar, stacked_header ? 0 : theme->spacing(4), 0);
     lv_obj_set_style_pad_ver(top_bar, theme->spacing(2), 0);
     lv_obj_set_flex_flow(top_bar, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(top_bar, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_align(top_bar, LV_ALIGN_TOP_MID, 0, 0);
+    if (!stacked_header) lv_obj_align(top_bar, LV_ALIGN_TOP_MID, 0, 0);
 
     auto* left_icons = lv_obj_create(top_bar);
     lv_obj_set_size(left_icons, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
@@ -300,20 +318,36 @@ void HomeView::CreateUi() {
     lv_obj_add_flag(battery_image_, LV_OBJ_FLAG_HIDDEN);
 #endif
 
-    status_label_ = lv_label_create(root_);
-    lv_obj_set_width(status_label_, LV_HOR_RES * 75 / 100);
+    auto* status_parent = root_;
+    if (stacked_header) {
+        // The fixed status slot prevents status/notification swaps from moving
+        // the icon row or changing the space reserved at the top of the page.
+        status_parent = lv_obj_create(header);
+        SetTransparent(status_parent);
+        lv_obj_clear_flag(status_parent, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_size(status_parent, lv_pct(100),
+                        text_font != nullptr ? text_font->line_height : 20);
+    }
+
+    status_label_ = lv_label_create(status_parent);
+    lv_obj_set_width(status_label_, stacked_header ? lv_pct(100) : LV_HOR_RES * 75 / 100);
     lv_label_set_long_mode(status_label_, LV_LABEL_LONG_SCROLL_CIRCULAR);
     lv_obj_set_style_text_align(status_label_, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(status_label_, theme->text_color(), 0);
     lv_label_set_text(status_label_, "");
-    lv_obj_align(status_label_, LV_ALIGN_TOP_MID, 0, theme->spacing(6));
+    lv_obj_align(status_label_, stacked_header ? LV_ALIGN_CENTER : LV_ALIGN_TOP_MID,
+                 0, stacked_header ? 0 : theme->spacing(6));
 
-    notification_label_ = lv_label_create(root_);
-    lv_obj_set_width(notification_label_, LV_HOR_RES * 75 / 100);
+    notification_label_ = lv_label_create(status_parent);
+    lv_obj_set_width(notification_label_, stacked_header ? lv_pct(100) : LV_HOR_RES * 75 / 100);
+    if (stacked_header) {
+        lv_label_set_long_mode(notification_label_, LV_LABEL_LONG_SCROLL_CIRCULAR);
+    }
     lv_obj_set_style_text_align(notification_label_, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(notification_label_, theme->text_color(), 0);
     lv_label_set_text(notification_label_, "");
-    lv_obj_align(notification_label_, LV_ALIGN_TOP_MID, 0, theme->spacing(6));
+    lv_obj_align(notification_label_, stacked_header ? LV_ALIGN_CENTER : LV_ALIGN_TOP_MID,
+                 0, stacked_header ? 0 : theme->spacing(6));
     lv_obj_add_flag(notification_label_, LV_OBJ_FLAG_HIDDEN);
 
     chat_message_label_ = lv_label_create(root_);
@@ -494,7 +528,7 @@ void HomeView::RenderEmotion(const std::string& emotion, bool one_shot, uint32_t
     }
     // Small portrait panels need the same animation assets fitted between
     // the status bar and subtitles. Leave larger existing layouts unchanged.
-    if (display_->width() <= 160 && display_->height() >= 200) {
+    if (IsCompactPortrait(display_)) {
         const LvglImage* first_frame = image;
         if (animation != nullptr) {
             for (const auto* phase : {&animation->intro, &animation->loop, &animation->outro}) {
@@ -917,8 +951,7 @@ void HomeView::SetTfCardPresent(bool present) {
 
 void HomeView::SetTime(const std::string& time) {
     // Keep network and battery indicators readable on narrow status bars.
-    if (lvgl_ != nullptr && display_ != nullptr &&
-        display_->width() <= 160 && display_->height() >= 200) return;
+    if (lvgl_ != nullptr && IsCompactPortrait(display_)) return;
     if (lvgl_ != nullptr && clock_label_ != nullptr && !time.empty()) {
         DisplayLockGuard lock(display_);
         if (lock.locked()) {
