@@ -492,6 +492,28 @@ void HomeView::RenderEmotion(const std::string& emotion, bool one_shot, uint32_t
     if (animation_player_ != nullptr) {
         animation_player_->Stop();
     }
+    // Small portrait panels need the same animation assets fitted between
+    // the status bar and subtitles. Leave larger existing layouts unchanged.
+    if (display_->width() <= 160 && display_->height() >= 200) {
+        const LvglImage* first_frame = image;
+        if (animation != nullptr) {
+            for (const auto* phase : {&animation->intro, &animation->loop, &animation->outro}) {
+                if (!phase->frames.empty()) {
+                    first_frame = phase->frames.front().get();
+                    break;
+                }
+            }
+        }
+        lv_image_header_t header{};
+        if (first_frame != nullptr &&
+            lv_image_decoder_get_info(first_frame->image_dsc(), &header) == LV_RESULT_OK &&
+            header.w > 0 && header.h > 0) {
+            const int scale = std::min({256,
+                (display_->width() - 8) * 256 / static_cast<int>(header.w),
+                (display_->height() - 112) * 256 / static_cast<int>(header.h)});
+            lv_image_set_scale(emoji_image_, std::max(1, scale));
+        }
+    }
     if (animation != nullptr && (!animation->intro.empty() || !animation->loop.empty() || !animation->outro.empty())) {
         if (animation_player_ == nullptr) {
             animation_player_ = std::make_unique<PngAnimationPlayer>(emoji_image_);
@@ -894,6 +916,9 @@ void HomeView::SetTfCardPresent(bool present) {
 }
 
 void HomeView::SetTime(const std::string& time) {
+    // Keep network and battery indicators readable on narrow status bars.
+    if (lvgl_ != nullptr && display_ != nullptr &&
+        display_->width() <= 160 && display_->height() >= 200) return;
     if (lvgl_ != nullptr && clock_label_ != nullptr && !time.empty()) {
         DisplayLockGuard lock(display_);
         if (lock.locked()) {

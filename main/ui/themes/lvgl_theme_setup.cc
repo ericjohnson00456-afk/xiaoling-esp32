@@ -17,6 +17,10 @@
 
 namespace {
 
+#ifndef RESOURCE_TEXT_FONT_FILE
+#define RESOURCE_TEXT_FONT_FILE "font_puhui_common_20_4.bin"
+#endif
+
 constexpr char kTag[] = "LvglThemeSetup";
 
 void RegisterLcdThemes() {
@@ -78,7 +82,7 @@ bool LoadResourceFonts() {
     for (const auto& path : paths) {
         const size_t slash = path.find_last_of('/');
         const std::string filename = path.substr(slash == std::string::npos ? 0 : slash + 1);
-        if (text_path.empty() && filename == "font_puhui_common_20_4.bin") {
+        if (text_path.empty() && filename == RESOURCE_TEXT_FONT_FILE) {
             text_path = path;
         } else if (filename == "font_awesome_20_4.bin") {
             icon_path = path;

@@ -5,16 +5,13 @@
 #include "button.h"
 #include "config.h"
 #include "i2c_device.h"
-#include "assets/lang_config.h"
 #include "backlight.h"
-#include "settings.h"
 #include <driver/i2c_master.h>
 #include <esp_lcd_panel_vendor.h>
 #include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>
 #include <driver/spi_common.h>
 #include <esp_log.h>
-#include <wifi_manager.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include "M5PM1.h"
@@ -42,15 +39,29 @@ public:
         int scaled_volume = (int)(volume * 0.6f + 0.5f); // Round to nearest integer
         ESP_LOGI(TAG, "Requested output volume: %d%%, scaled to hardware: %d%%", volume, scaled_volume);
 
-        // Call parent's SetOutputVolume with scaled value for hardware
-        Es8311AudioCodec::SetOutputVolume(scaled_volume);
+        // Temporary volume changes must not persist the scaled hardware value.
+        if (input_enabled_ || output_enabled_) {
+            const bool persist = persist_output_volume_;
+            persist_output_volume_ = false;
+            Es8311AudioCodec::SetOutputVolume(scaled_volume);
+            persist_output_volume_ = persist;
+        }
+        // Store the logical volume through the shared settings interface.
+        AudioCodec::SetOutputVolume(volume);
+    }
 
-        // Update output_volume_ to original value for display
-        output_volume_ = volume;
+    virtual void EnableInput(bool enable) override {
+        Es8311AudioCodec::EnableInput(enable);
+        if (input_enabled_ || output_enabled_) {
+            SetOutputVolumeTemporary(output_volume_);
+        }
+    }
 
-        // Save original value to settings
-        Settings settings("audio", true);
-        settings.SetInt("output_volume", volume);
+    virtual void EnableOutput(bool enable) override {
+        Es8311AudioCodec::EnableOutput(enable);
+        if (input_enabled_ || output_enabled_) {
+            SetOutputVolumeTemporary(output_volume_);
+        }
     }
 };
 
@@ -152,23 +163,34 @@ private:
     }
 
     void InitializeButtons() {
-        boot_button_.OnClick([this]() {
-            auto& app = Application::GetInstance();
-            if (app.GetDeviceState() == kDeviceStateStarting && !WifiManager::GetInstance().IsConnected()) {
-                EnterWifiConfigMode();
-            }
-            app.ToggleChatState();
+        boot_button_.OnClick([]() {
+            Application::GetInstance().HandleButtonClick(1);
+        });
+        boot_button_.OnDoubleClick([]() {
+            Application::GetInstance().HandleButtonClick(2);
+        });
+        boot_button_.OnMultipleClick([]() {
+            Application::GetInstance().HandleButtonClick(3);
+        }, 3);
+        boot_button_.OnMultipleClick([]() {
+            Application::GetInstance().HandleButtonClick(4);
+        }, 4);
+        boot_button_.OnMultipleClick([]() {
+            Application::GetInstance().HandleButtonClick(5);
+        }, 5);
+        boot_button_.OnMultipleClickAtLeast([](uint8_t click_count) {
+            Application::GetInstance().HandleButtonClick(click_count);
+        }, 8);
+        boot_button_.OnLongPress([]() {
+            Application::GetInstance().HandleButtonLongPress();
         });
 
-        // User button on GPIO12: single click sets stored volume to 70%
+        // User button on GPIO12: single click sets stored volume to 60%
         user_button_.OnClick([this]() {
             AudioCodec* codec = GetAudioCodec();
             if (codec) {
-                // Use base AudioCodec::SetOutputVolume to update stored value
-                // without touching hardware that may not be initialized yet.
                 codec->SetOutputVolume(60);
-                codec->AudioCodec::SetOutputVolume(60);
-                ESP_LOGI(TAG, "User button pressed: stored volume set to 80%%");
+                ESP_LOGI(TAG, "User button pressed: stored volume set to 60%%");
             } else {
                 ESP_LOGW(TAG, "User button pressed but codec is not available yet");
             }

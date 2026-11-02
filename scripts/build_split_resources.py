@@ -107,6 +107,7 @@ def main() -> int:
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--font-file")
     parser.add_argument("--emoji-dir", help="Optional board-prepared emoji resource directory")
+    parser.add_argument("--text-font-file", help="Replace the packaged text font for this board")
     wake_word_source = parser.add_mutually_exclusive_group()
     wake_word_source.add_argument("--wake-word-dir")
     wake_word_source.add_argument("--wake-word-file")
@@ -132,6 +133,15 @@ def main() -> int:
         if not respak_source.is_dir():
             raise RuntimeError(f"Missing respak resource directory: {respak_source}")
         copy_tree(respak_source, respak)
+        if args.text_font_file:
+            font = Path(args.text_font_file)
+            if not font.is_file():
+                raise RuntimeError(f"Text font not found: {font}")
+            fonts = respak / "font"
+            fonts.mkdir(exist_ok=True)
+            for original in fonts.glob("font_puhui_common_*.bin"):
+                original.unlink()
+            shutil.copy2(font, fonts / font.name)
         # All flash sizes ship the same Chinese/English resource bundle.
         # Prune the temporary copy so other source locales remain available.
         locales = respak / "locales"
@@ -147,7 +157,9 @@ def main() -> int:
 
         relocate_activation_assets(respak / "locales", respak / "activation")
 
-        if args.font_file:
+        # An explicit board text font replaces the budget-selected font too.
+        # Packaging both wastes the small board's limited respak partition.
+        if args.font_file and not args.text_font_file:
             font = Path(args.font_file)
             if font.is_file():
                 (respak / "font").mkdir(exist_ok=True)
