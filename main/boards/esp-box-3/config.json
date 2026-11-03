@@ -4,6 +4,7 @@
         {
             "name": "esp-box-3",
             "sdkconfig_append": [
+                "CONFIG_PROV_MODE_BLE=y",
                 "CONFIG_USE_DEVICE_AEC=y",
                 "CONFIG_USE_XIAOLING_MESSAGE_STYLE=y",
                 "CONFIG_FLASH_DEFAULT_ASSETS=y"

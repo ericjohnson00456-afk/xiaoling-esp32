@@ -1,36 +1,30 @@
-# BluFi 配网（集成 esp-wifi-connect）
+# BluFi 蓝牙配网
 
-本文档说明如何在小聆固件中启用和使用 BluFi（BLE Wi‑Fi 配网），并结合项目内置的 `esp-wifi-connect` 组件完成 Wi‑Fi 连接与存储。官方
-BluFi
-协议说明请参考 [Espressif 文档](https://docs.espressif.com/projects/esp-idf/zh_CN/stable/esp32/api-guides/ble/blufi.html)。
+小聆固件支持通过小聆小程序使用 BluFi 配置 Wi-Fi。Wi-Fi 凭据由 `SsidManager` 保存在设备 NVS 中。
 
-## 前置条件
+## SDK 配置
 
-- 需要支持 BLE 的芯片与固件配置。
-- 在 `idf.py menuconfig` 中启用 `WiFi Configuration Method -> Esp Blufi`（`CONFIG_USE_ESP_BLUFI_WIFI_PROVISIONING=y`
-  ）。如果只想用 BluFi，可关闭同一菜单下的 Hotspot/Acoustic 选项。
+在 `idf.py menuconfig` 中进入 `Xiaoling Device → 配网模式`，选择 **BLE配网**（`CONFIG_PROV_MODE_BLE=y`），然后编译并烧录固件。
 
-- 保持默认的 NVS 与事件循环初始化（项目的 `app_main` 已处理）。
-- CONFIG_BT_BLUEDROID_ENABLED、CONFIG_BT_NIMBLE_ENABLED这两个宏应二选一，不能同时启用。
-## 工作流程
+使用板级默认配置时，在首次配置命令中加入 `-DBOARD_TYPE=<板型>`。发布构建使用对应板型 `config.json` 中的配网设置。已有 `sdkconfig` 的工程可在上述菜单中切换配网方式。
 
-1) 手机端通过 BluFi（如官方 EspBlufi App 或自研客户端）连接设备，发送 Wi‑Fi SSID/密码。
-2) 设备侧在 `ESP_BLUFI_EVENT_REQ_CONNECT_TO_AP` 中将凭据写入 `SsidManager`（存储到 NVS，属于 `esp-wifi-connect` 组件）。
-3) 随后启动 `WifiStation` 扫描并连接；状态通过 BluFi 返回。
-4) 配网成功后设备会自动连接新 Wi‑Fi；失败则返回失败状态。
+## 进入配网
 
-## 使用步骤
+- 设备已有 Wi-Fi 配置时，上电后连接保存的网络。
+- 设备 Wi-Fi 配置为空时，上电后自动进入蓝牙配网。
+- 重新配网时，连续按功能键五次，设备清除保存的 Wi-Fi 并重启进入蓝牙配网。
 
-1. 配置：在 menuconfig 开启 `Esp Blufi`。编译并烧录固件。
-2. 触发配网：设备首次启动且没有已保存的 Wi‑Fi 时会自动进入配网。
-3. 手机端操作：打开 EspBlufi App（或其他 BluFi 客户端），搜索并连接设备，可以选择是否加密，按提示输入 Wi‑Fi SSID/密码并发送。
-4. 观察结果：
-    - 成功：BluFi 报告连接成功，设备自动连接 Wi‑Fi。
-    - 失败：BluFi 返回失败状态，可重新发送或检查路由器。
+配网界面显示小聆小程序二维码，设备广播名称为 `Xiaoling-XXXX`，后四位来自设备 SoftAP MAC 地址。
 
-## 注意事项
+## 手机端操作
 
-- BluFi 与 Hotspot/声波配网可以同时编译，但会同时启动，增加内存占用。建议在 menuconfig 中只保留一种方式。
-- 若多次测试，建议清除或覆盖存储的 SSID（`wifi` 命名空间），避免旧配置干扰。
-- 如果使用自定义 BluFi 客户端，需遵循官方协议帧格式，参考上文官方文档链接。
-- 官方文档中已提供EspBlufi APP下载地址
+1. 扫描设备屏幕二维码，或在微信中搜索 **小聆AI** 小程序。
+2. 选择 **ESP32 → 蓝牙配网**，授权使用蓝牙并连接对应的 `Xiaoling-XXXX` 设备。
+3. 选择 Wi-Fi 并输入密码，等待小程序提示配置完成。
+4. 设备在 Wi-Fi 连接成功并收到小程序的完成确认后，保存凭据并自动重启，随后连接小聆平台。
+
+## 客户端协议
+
+自定义客户端使用 [Espressif BluFi 协议](https://docs.espressif.com/projects/esp-idf/zh_CN/stable/esp32/api-guides/ble/blufi.html) 发送 Wi-Fi 凭据。设备联网成功后通过自定义数据上报 `pid` 和 `did`；客户端发送 `done` 完成配网确认，设备回复 `done` 后保存凭据并重启。
+
+热点配网下的 `WiFi Configuration Method → Esp Blufi` 对应另一套通用 BluFi 实现。小聆小程序配网使用 `Xiaoling Device → 配网模式 → BLE配网`。
