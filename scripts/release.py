@@ -3,6 +3,7 @@ import os
 import json
 import zipfile
 import argparse
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -29,13 +30,20 @@ def get_board_type_from_compile_commands() -> Optional[str]:
     return None
 
 
-def get_project_version() -> Optional[str]:
-    """Read set(XIAOLING_VER "x.y.z") from root CMakeLists.txt"""
-    with Path("CMakeLists.txt").open() as f:
-        for line in f:
-            if line.strip().startswith("set(XIAOLING_VER"):
-                return line.split("\"")[1]
-    return None
+def get_project_version() -> str:
+    """Read PROJECT_VER, with support for the legacy literal XIAOLING_VER."""
+    cmake = Path("CMakeLists.txt").read_text(encoding="utf-8")
+    for variable in ("PROJECT_VER", "XIAOLING_VER"):
+        match = re.search(
+            rf'^\s*set\(\s*{variable}\s+(?:"([^"\n]+)"|([^\s)]+))\s*\)',
+            cmake,
+            re.MULTILINE,
+        )
+        if match:
+            version = match.group(1) or match.group(2)
+            if "$" not in version:
+                return version
+    raise ValueError("CMakeLists.txt 中未找到可直接读取的 PROJECT_VER 或 XIAOLING_VER")
 
 
 def merge_bin() -> None:

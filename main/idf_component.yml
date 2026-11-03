@@ -47,7 +47,8 @@ dependencies:
   espressif/esp_lcd_touch_gt1151: ^1
   waveshare/esp_lcd_touch_cst9217: ^1.0.3
   espressif/esp_lcd_touch_cst816s: ^1.0.6
-  lvgl/lvgl: ~9.3.0
+  # UI 使用 LVGL 9.3 的图像解码私有接口，避免重新解析时升级到不兼容版本。
+  lvgl/lvgl: ==9.3.0
   esp_lvgl_port: ~2.6.0
   espressif/esp_io_expander_tca95xx_16bit: ^2.0.0
   espressif2022/image_player: ^1.1.1
