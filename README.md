@@ -2,7 +2,7 @@
 
 小聆 AI 是面向桌面机器人、陪伴设备和语音终端的智能语音交互方案。本仓库提供运行在 ESP32 系列芯片上的设备端固件：设备完成配网和激活后，通过小聆平台建立长连接，支持语音唤醒、录音上传、流式语音播放和多种设备能力扩展。
 
-项目当前版本为 `2.0.0`，基于 [ESP-IDF](https://github.com/espressif/esp-idf) 构建，依赖在 `main/idf_component.yml` 和 `dependencies.lock` 中维护。
+项目当前版本为 `2.0.0`，基于 [ESP-IDF](https://github.com/espressif/esp-idf) 构建，依赖在 `main/idf_component.yml` 中声明，由 Component Manager 安装并生成本地 `dependencies.lock`。
 
 ## 了解小聆
 
@@ -25,19 +25,18 @@
 ### 环境要求
 
 - Windows、Linux 或 macOS
-- ESP-IDF `>= 5.4.0`，并已执行 `export.bat`（Windows）或 `export.sh`（Linux/macOS）
+- 推荐 ESP-IDF `v5.4.4`；组件清单要求 `>= 5.4.0`，其他版本需要单独验证。使用前执行 `export.bat`（Windows）或 `source export.sh`（Linux/macOS）
 - Python、CMake、Ninja 等 ESP-IDF 工具链
 - 一块已在 `main/boards/` 中适配的开发板
 
 ### 获取代码并安装依赖
 
 ```bash
-git clone <仓库地址>
+git clone <仓库地址> xiaoling-esp32
 cd xiaoling-esp32
-idf.py reconfigure
 ```
 
-首次构建时，ESP-IDF Component Manager 会根据 `main/idf_component.yml` 安装组件。建议使用项目根目录的 `sdkconfig.defaults`，不要直接复制其他工程的 `sdkconfig`。
+首次配置时，ESP-IDF Component Manager 会根据 `main/idf_component.yml` 安装组件。工程自动加载 `sdkconfig.defaults`、对应芯片的默认配置和 `sdkconfig.lsplatform`；已有 `sdkconfig` 的设置优先。
 
 ### 选择芯片、板型和功能
 
@@ -49,11 +48,13 @@ idf.py menuconfig
 在 `Xiaoling Device` 菜单中配置：
 
 - `Board Type`：选择实际开发板；
-- `Product ID`：使用内置小聆应用，或填写自建应用的 Product ID/Secret；
+- `LSPlatform 选项 → Product ID`：使用内置小聆应用，或填写自建应用的 Product ID/Secret；
 - `配网模式`：选择热点配网或 BLE 配网；
 - `Flash Assets`、默认语言、唤醒词、摄像头等功能。
 
-也可以在构建命令中传入板型名称。板型名称必须与 `main/boards/<board>/config.json` 和 `main/CMakeLists.txt` 中的配置一致。
+板型由 `menuconfig` 中的 `Board Type` 选择，或由下文的发布脚本写入配置。部分板型还需要匹配的板级默认值，例如 CoreS3 的 Quad PSRAM 配置；具体操作见 [SDK 配置说明](docs/xiaoling.md)。
+
+设备 NVS 中保存的 `user/pid` 和 `user/sid` 分别优先于固件内置的 Product ID 和 Product Secret。普通 `idf.py flash` 保留这些配置；切换应用时同时更新设备保存的应用身份。
 
 ### 编译、烧录和串口监视
 
@@ -78,16 +79,21 @@ idf.py set-target <esp32|esp32c3|esp32c5|esp32c6|esp32s3|esp32p4>
 python scripts/release.py --list-boards
 
 # 编译指定板型的全部变体
-python scripts/release.py m5stack-core-s3
+python scripts/release.py <板型>
 
 # 只编译指定变体
-python scripts/release.py m5stack-core-s3 --name <变体名称>
+python scripts/release.py <板型> --name <变体名称>
 
 # 编译所有已定义发布板型
 python scripts/release.py all
 ```
 
-普通 `idf.py build` 也会生成 `merge-bin` 所需的合并固件，并生成 OTA 版本/MD5 信息和发布产物。发布脚本会修改当前目录的 `sdkconfig`，建议在独立工作区或提交前备份配置。
+普通 `idf.py build` 也会在构建目录生成 `merged-binary.bin`、带板型前缀的应用 `.bin`、`.elf` 和 OTA 版本/MD5 信息，并打包以下文件：
+
+- `<板型>-xiaoling_v<版本>.zip`：应用固件、ELF 调试文件、合并固件和 OTA 信息。
+- `<板型>-xiaoling_v<版本>_test.zip`：应用固件、合并固件和 OTA 信息。
+
+发布脚本额外生成的 `releases/v<版本>_<板型>.zip` 仅包含 `merged-binary.bin`；同名文件已存在时会跳过编译，需要重新构建时先移走旧包。脚本会重建默认 `build/` 目录并修改根目录的 `sdkconfig`，建议在独立工作区运行或提前备份配置。
 
 ## 首次使用设备
 
@@ -113,6 +119,7 @@ python scripts/release.py all
 ## 开发文档
 
 - [系统架构](docs/architecture.md)
+- [SDK 配置说明](docs/xiaoling.md)
 - [WebSocket 协议](docs/websocket.md)
 - [唤醒与 VAD](docs/wake-vad.md)
 - [唤醒录音](docs/wake-recording.md)
