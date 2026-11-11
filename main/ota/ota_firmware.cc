@@ -8,6 +8,7 @@
 #include <esp_ota_ops.h>
 #include <esp_app_format.h>
 #include <esp_timer.h>
+#include <ota_url.h>
 
 #include <cstring>
 #include <vector>
@@ -76,7 +77,7 @@ esp_err_t Ota::CheckVersion() {
     has_new_version_ = false;
 
     const std::string url = GetCheckVersionUrl();
-    if (url.size() < 10) {
+    if (url.empty() || !wifi_config::IsValidOtaUrl(url)) {
         ESP_LOGE(TAG, "Invalid Xiaoling OTA check URL");
         return ESP_ERR_INVALID_ARG;
     }

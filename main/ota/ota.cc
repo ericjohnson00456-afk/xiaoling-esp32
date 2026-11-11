@@ -7,6 +7,7 @@
 
 #include <esp_app_desc.h>
 #include <esp_log.h>
+#include <ota_url.h>
 
 #define TAG "Ota"
 
@@ -20,6 +21,10 @@ Ota::~Ota() = default;
 std::string Ota::GetCheckVersionUrl() {
     Settings settings("wifi", false);
     std::string url = settings.GetString("ota_url");
+    if (!wifi_config::IsValidOtaUrl(url)) {
+        ESP_LOGW(TAG, "Ignoring invalid saved OTA URL; using the default");
+        url.clear();
+    }
     if (url.empty()) {
         url = std::string("https://") + XiaolingConfig::GetHost() + "/v1/ota/packages";
     }
