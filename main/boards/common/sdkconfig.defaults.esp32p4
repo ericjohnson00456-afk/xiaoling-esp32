@@ -1,0 +1,2 @@
+# Shared P4 layout with room for the performance build and two OTA slots.
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions/v2/16m_p4.csv"

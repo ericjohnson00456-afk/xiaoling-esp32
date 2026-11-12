@@ -91,7 +91,7 @@ GpioLed::GpioLed(gpio_num_t gpio, int output_invert, ledc_timer_t timer_num, led
 GpioLed::~GpioLed() {
     esp_timer_stop(blink_timer_);
     if (ledc_initialized_) {
-        ledc_fade_stop(ledc_channel_.speed_mode, ledc_channel_.channel);
+        StopFade();
         ledc_fade_func_uninstall();
     }
 }
@@ -112,7 +112,7 @@ void GpioLed::TurnOn() {
 
     std::lock_guard<std::mutex> lock(mutex_);
     esp_timer_stop(blink_timer_);
-    ledc_fade_stop(ledc_channel_.speed_mode, ledc_channel_.channel);
+    StopFade();
     ledc_set_duty(ledc_channel_.speed_mode, ledc_channel_.channel, duty_);
     ledc_update_duty(ledc_channel_.speed_mode, ledc_channel_.channel);
 }
@@ -124,7 +124,7 @@ void GpioLed::TurnOff() {
 
     std::lock_guard<std::mutex> lock(mutex_);
     esp_timer_stop(blink_timer_);
-    ledc_fade_stop(ledc_channel_.speed_mode, ledc_channel_.channel);
+    StopFade();
     ledc_set_duty(ledc_channel_.speed_mode, ledc_channel_.channel, 0);
     ledc_update_duty(ledc_channel_.speed_mode, ledc_channel_.channel);
 }
@@ -148,7 +148,7 @@ void GpioLed::StartBlinkTask(int times, int interval_ms) {
 
     std::lock_guard<std::mutex> lock(mutex_);
     esp_timer_stop(blink_timer_);
-    ledc_fade_stop(ledc_channel_.speed_mode, ledc_channel_.channel);
+    StopFade();
 
     blink_counter_ = times * 2;
     blink_interval_ms_ = interval_ms;
@@ -177,7 +177,8 @@ void GpioLed::StartFadeTask() {
 
     std::lock_guard<std::mutex> lock(mutex_);
     esp_timer_stop(blink_timer_);
-    ledc_fade_stop(ledc_channel_.speed_mode, ledc_channel_.channel);
+    StopFade();
+    fade_active_ = true;
     fade_up_ = true;
     ledc_set_fade_with_time(ledc_channel_.speed_mode,
                             ledc_channel_.channel, LEDC_DUTY, LEDC_FADE_TIME);
@@ -187,11 +188,23 @@ void GpioLed::StartFadeTask() {
 
 void GpioLed::OnFadeEnd() {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (!fade_active_) return;
     fade_up_ = !fade_up_;
     ledc_set_fade_with_time(ledc_channel_.speed_mode,
                             ledc_channel_.channel, fade_up_ ? LEDC_DUTY : 0, LEDC_FADE_TIME);
     ledc_fade_start(ledc_channel_.speed_mode,
                     ledc_channel_.channel, LEDC_FADE_NO_WAIT);
+}
+
+void GpioLed::StopFade() {
+    fade_active_ = false;
+#if SOC_LEDC_SUPPORT_FADE_STOP
+    ledc_fade_stop(ledc_channel_.speed_mode, ledc_channel_.channel);
+#else
+    // Classic ESP32 has no fade-stop API. Disable its output and let the
+    // finite hardware fade finish; its completion must not restart breathing.
+    ledc_stop(ledc_channel_.speed_mode, ledc_channel_.channel, 0);
+#endif
 }
 
 bool IRAM_ATTR GpioLed::FadeCallback(const ledc_cb_param_t *param, void *user_arg) {

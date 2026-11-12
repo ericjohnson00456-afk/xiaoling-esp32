@@ -1,0 +1,8 @@
+{
+    "sdkconfig_append": [
+        "CONFIG_ESP_WIFI_EXTRA_IRAM_OPT=n",
+        "CONFIG_ESP_WIFI_SLP_IRAM_OPT=n",
+        "CONFIG_PM_ENABLE=n"
+    ],
+    "reason": "The wired C5 fixture has no PSRAM and does not exercise Wi-Fi IRAM optimizations or power saving."
+}

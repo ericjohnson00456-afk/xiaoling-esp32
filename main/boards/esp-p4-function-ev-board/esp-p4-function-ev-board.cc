@@ -172,7 +172,8 @@ private:
         if (current_theme != nullptr) {
             auto text_font = current_theme->text_font();
             if (text_font != nullptr && text_font->font() != nullptr) {
-                ESP_LOGI(TAG, "Custom font loaded successfully: line_height=%d", text_font->font()->line_height);
+                ESP_LOGI(TAG, "Custom font loaded successfully: line_height=%ld",
+                         static_cast<long>(text_font->font()->line_height));
             } else {
                 ESP_LOGW(TAG, "Custom font not loaded, using built-in font");
             }

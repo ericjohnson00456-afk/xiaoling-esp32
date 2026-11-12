@@ -295,8 +295,6 @@ elseif(CONFIG_BOARD_TYPE_ESP_SPOT_C5)
     set(BOARD_TYPE "esp-spot")
 elseif(CONFIG_BOARD_TYPE_ESP_HI)
     set(BOARD_TYPE "esp-hi")
-    # Set ESP_HI emoji directory for DEFAULT_ASSETS_EXTRA_FILES
-    set(DEFAULT_ASSETS_EXTRA_FILES "${CMAKE_BINARY_DIR}/emoji")
 elseif(CONFIG_BOARD_TYPE_ECHOEAR)
     set(BOARD_TYPE "echoear")
     set(BUILTIN_TEXT_FONT font_puhui_20_4)
@@ -767,10 +765,10 @@ elseif(CONFIG_LANGUAGE_SR_RS)
     set(LANG_DIR "sr-RS")
 endif()
 
-# 语言配置只供 UI 文案使用，生成到 UI 目录，不在 main 下创建通用 assets 目录。
+# Keep generated translations isolated across boards and language variants.
 set(LANG_JSON "${CMAKE_CURRENT_SOURCE_DIR}/resource/assets/respak/locales/${LANG_DIR}/language.json")
 set(ENGLISH_LANG_JSON "${CMAKE_CURRENT_SOURCE_DIR}/resource/assets/respak/locales/en-US/language.json")
-set(LANG_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/ui/i18n/lang_config.h")
+set(LANG_HEADER "${CMAKE_CURRENT_BINARY_DIR}/generated/lang_config.generated.h")
 
 # If target chip is ESP32, exclude specific files to avoid build errors
 if(CONFIG_IDF_TARGET_ESP32)
@@ -795,9 +793,15 @@ idf_component_register(SRCS ${SOURCES}
                     EMBED_FILES ${MWW_EMBED_FILES}
                     )
 
-if(CONFIG_USE_MICRO_WAKE_WORD)
-    target_include_directories(${COMPONENT_LIB} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
+# Optional dependencies and source options owned by an individual board.
+include("${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_TYPE}/board.cmake" OPTIONAL)
+# Resource packaging is selected centrally from the effective hardware config.
+include("${CMAKE_CURRENT_SOURCE_DIR}/boards/common/resource_options.cmake")
+if(XIAOLING_QEMU)
+    include("${CMAKE_CURRENT_SOURCE_DIR}/boards/common/qemu/board.cmake")
 endif()
+
+target_include_directories(${COMPONENT_LIB} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 
 # Enforce the short send deadline selected by RealtimeTransportScope without
 # patching the esp-ml307 managed component. Calls outside that scope pass
@@ -845,44 +849,6 @@ find_component_by_pattern("xiaozhi-fonts" XIAOZHI_FONTS_COMPONENT XIAOZHI_FONTS_
 if(XIAOZHI_FONTS_COMPONENT_PATH)
     set(XIAOZHI_FONTS_PATH "${XIAOZHI_FONTS_COMPONENT_PATH}")
 endif()
-
-if(CONFIG_BOARD_TYPE_ESP_HI)
-set(URL "https://github.com/espressif2022/image_player/raw/main/test_apps/test_8bit")
-set(EMOJI_DIR "${CMAKE_BINARY_DIR}/emoji")
-file(MAKE_DIRECTORY ${EMOJI_DIR})
-
-# List all files to download
-set(FILES_TO_DOWNLOAD "")
-list(APPEND FILES_TO_DOWNLOAD "Anger_enter.aaf" "Anger_loop.aaf" "Anger_return.aaf")
-list(APPEND FILES_TO_DOWNLOAD "happy_enter.aaf" "happy_loop.aaf" "happ_return.aaf")
-list(APPEND FILES_TO_DOWNLOAD "sad_enter.aaf" "sad_loop.aaf" "sad_return.aaf")
-list(APPEND FILES_TO_DOWNLOAD "scorn_enter.aaf" "scorn_loop.aaf" "scorn_return.aaf")
-list(APPEND FILES_TO_DOWNLOAD "left_enter.aaf" "left_loop.aaf" "left_return.aaf")
-list(APPEND FILES_TO_DOWNLOAD "right_enter.aaf" "right_loop.aaf" "right_return.aaf")
-list(APPEND FILES_TO_DOWNLOAD "asking.aaf" "blink_once.aaf" "blink_quick.aaf")
-list(APPEND FILES_TO_DOWNLOAD "connecting.aaf" "panic_enter.aaf" "panic_loop.aaf")
-list(APPEND FILES_TO_DOWNLOAD "panic_return.aaf" "wake.aaf")
-
-foreach(FILENAME IN LISTS FILES_TO_DOWNLOAD)
-    set(REMOTE_FILE "${URL}/${FILENAME}")
-    set(LOCAL_FILE "${EMOJI_DIR}/${FILENAME}")
-
-    # Check if local file exists
-    if(EXISTS ${LOCAL_FILE})
-        message(STATUS "File ${FILENAME} already exists, skipping download")
-    else()
-        message(STATUS "Downloading ${FILENAME}")
-        file(DOWNLOAD ${REMOTE_FILE} ${LOCAL_FILE}
-             STATUS DOWNLOAD_STATUS)
-        list(GET DOWNLOAD_STATUS 0 STATUS_CODE)
-        if(NOT STATUS_CODE EQUAL 0)
-            message(FATAL_ERROR "Failed to download ${FILENAME} from ${URL}")
-        endif()
-    endif()
-endforeach()
-
-endif()
-
 
 # Function to build default assets based on configuration
 function(build_default_assets_bin)
@@ -1008,6 +974,9 @@ function(build_split_resources)
 
     set(SPLIT_WAKE_WORD_DEPENDS)
     set(SPLIT_WAKE_WORD_ARGS)
+    set(SPLIT_BOARD_ARGS)
+    set(SPLIT_BOARD_DEPENDS)
+    xiaoling_resource_options("${SPLIT_OUTPUT_DIR}" SPLIT_BOARD_ARGS SPLIT_BOARD_DEPENDS)
     if(CONFIG_USE_MICRO_WAKE_WORD)
         list(APPEND SPLIT_WAKE_WORD_DEPENDS
              "${MWW_MODEL_FILE}" "${MWW_MODEL_DESCRIPTOR}")
@@ -1025,10 +994,12 @@ function(build_split_resources)
         COMMAND python ${PROJECT_DIR}/scripts/build_split_resources.py
                 --resource-root "${CMAKE_CURRENT_SOURCE_DIR}/resource/assets"
                 --output-dir "${SPLIT_OUTPUT_DIR}"
+                ${SPLIT_BOARD_ARGS}
                 ${SPLIT_WAKE_WORD_ARGS}
         DEPENDS ${PROJECT_DIR}/scripts/build_split_resources.py
                 ${PROJECT_DIR}/scripts/romfs.py ${SPLIT_RESOURCE_FILES}
                 ${SPLIT_WAKE_WORD_DEPENDS}
+                ${SPLIT_BOARD_DEPENDS}
         COMMENT "Building split respak/tone/emoji resource images"
         VERBATIM)
     add_custom_target(generated_split_resources ALL

@@ -1,19 +1,30 @@
 #include "opus_wb_encoder.h"
 
 #include <esp_log.h>
+#include <sdkconfig.h>
 
 #define TAG "OpusWbEncoder"
 
 OpusWbEncoder::OpusWbEncoder(int sample_rate, int channels, int duration_ms)
     : sample_rate_(sample_rate),
+      channels_(channels),
       duration_ms_(duration_ms),
       frame_size_(sample_rate / 1000 * channels * duration_ms) {
+#if CONFIG_SPIRAM
+    EnsureEncoder();
+#endif
+    // Without PSRAM, keep both the uplink and diagnostic encoder workspaces
+    // unallocated until used. Eager allocation can starve startup OTA/TLS.
+}
+
+bool OpusWbEncoder::EnsureEncoder() {
+    if (encoder_ != nullptr) return true;
     int error = OPUS_OK;
-    encoder_ = opus_encoder_create(sample_rate, channels, OPUS_APPLICATION_VOIP, &error);
+    encoder_ = opus_encoder_create(sample_rate_, channels_, OPUS_APPLICATION_VOIP, &error);
     if (encoder_ == nullptr || error != OPUS_OK) {
         ESP_LOGE(TAG, "创建 Opus-WB 编码器失败: %d", error);
         encoder_ = nullptr;
-        return;
+        return false;
     }
 
     // 16 kbps CBR 在 20 ms 下固定产生 40 字节 payload，符合 lschat opus-wb。
@@ -23,6 +34,7 @@ OpusWbEncoder::OpusWbEncoder(int sample_rate, int channels, int duration_ms)
     opus_encoder_ctl(encoder_, OPUS_SET_DTX(0));
     opus_encoder_ctl(encoder_, OPUS_SET_COMPLEXITY(0));
     opus_encoder_ctl(encoder_, OPUS_SET_SIGNAL(OPUS_SIGNAL_VOICE));
+    return true;
 }
 
 OpusWbEncoder::~OpusWbEncoder() {
@@ -34,11 +46,12 @@ OpusWbEncoder::~OpusWbEncoder() {
 
 bool OpusWbEncoder::Encode(std::vector<int16_t>&& pcm, std::vector<uint8_t>& opus) {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (encoder_ == nullptr || pcm.size() != static_cast<size_t>(frame_size_)) {
+    if (pcm.size() != static_cast<size_t>(frame_size_)) {
         ESP_LOGE(TAG, "PCM 帧长度错误: samples=%u, expected=%d",
                  static_cast<unsigned>(pcm.size()), frame_size_);
         return false;
     }
+    if (!EnsureEncoder()) return false;
 
     uint8_t packet[kMaxPacketBytes];
     const int packet_size = opus_encode(encoder_, pcm.data(), frame_size_, packet,
@@ -55,7 +68,7 @@ void OpusWbEncoder::Encode(
     std::vector<int16_t>&& pcm,
     std::function<void(std::vector<uint8_t>&& opus)> handler) {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (encoder_ == nullptr) {
+    if (!EnsureEncoder()) {
         ESP_LOGE(TAG, "Opus-WB 编码器未初始化");
         return;
     }

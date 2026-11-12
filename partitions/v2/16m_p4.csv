@@ -1,0 +1,11 @@
+# P4 performance build: two 5.25 MiB app slots and current ROMFS resources.
+# Name,     Type, SubType, Offset,   Size,     Flags
+nvs,        data, nvs,     0x9000,   0x4000,
+otadata,    data, ota,     0xd000,   0x2000,
+phy_init,   data, phy,     0xf000,   0x1000,
+ota_0,      app,  ota_0,   0x20000,  0x540000,
+ota_1,      app,  ota_1,   0x560000, 0x540000,
+tone,       data, spiffs,  0xaa0000, 0x80000,
+emoji,      data, spiffs,  0xb20000, 0xc0000,
+wake_word,  data, spiffs,  0xbe0000, 0x20000,
+respak,     data, spiffs,  0xc00000, 0x400000,

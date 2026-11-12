@@ -1,20 +1,54 @@
+# Local worktrees, SDK dependencies, firmware packages and test outputs
 tmp/
 managed_components/
 build*/
+releases/
+
+# Local editor and cache files
 .vscode/
 .devcontainer/
-sdkconfig.old
-sdkconfig
-dependencies.lock
-.env
-releases/
-main/mmap_generate_emoji.h
 .DS_Store
 .cache
+.clangd
+__pycache__/
 *.pyc
+
+# Generated device configuration may contain application credentials.
+# Keep the maintained defaults used to reproduce normal builds.
+sdkconfig.old
+sdkconfig
+/sdkconfig.*
+!/sdkconfig.defaults
+!/sdkconfig.defaults.*
+!/sdkconfig.lsplatform
+dependencies.lock
+
+# Local environment files; sanitized examples may be committed.
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+
+# Local customer delivery record; the reusable QEMU guide stays versioned.
+/docs/df-k10-qemu-validation.md
+
+# Compiler, simulator and packaging outputs
+/CMakeFiles/
+/CMakeCache.txt
+/cmake_install.cmake
+/compile_commands.json
+/build.ninja
+/rules.ninja
+/.ninja_deps
+/.ninja_log
+*.elf
+*.map
+*.log
+*-xiaoling_v*.zip
+main/mmap_generate_emoji.h
 *.bin
 !main/resource/assets/respak/font/
 !main/resource/assets/respak/font/*.bin
 mmap_generate_*.h
-.clangd
 scripts/wake_word/

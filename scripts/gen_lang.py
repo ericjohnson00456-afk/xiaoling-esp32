@@ -97,15 +97,15 @@ def cpp_string(value):
 
 
 def generate_header(lang_code, output_path):
-    main_dir = os.path.dirname(output_path)
-    while os.path.basename(main_dir) != "main" and os.path.dirname(main_dir) != main_dir:
-        main_dir = os.path.dirname(main_dir)
+    # The output can live in an out-of-tree build. Locate source resources
+    # relative to this script, rather than guessing from the output pathname.
+    main_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "main")
     assets_dir = os.path.join(main_dir, "resource", "assets", "respak")
 
     english_source = load_language(assets_dir, "en-US")
     primary_source = load_language(assets_dir, lang_code)
     keys = sorted(set(english_source) | set(primary_source))
-    primary = {key: primary_source.get(key, english_source[key]) for key in keys}
+    primary = {key: primary_source.get(key, english_source.get(key, "")) for key in keys}
     english = {key: english_source.get(key, primary[key]) for key in keys}
 
     primary_lines = [

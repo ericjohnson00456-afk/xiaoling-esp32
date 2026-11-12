@@ -18,6 +18,9 @@ def align4(value: int) -> int:
 
 
 def parse_ints(source: str) -> list[int]:
+    # Generated text fonts label glyphs with comments such as U+0020. Those
+    # numbers are annotations, not bytes in the C initializer.
+    source = re.sub(r"/\*.*?\*/|//[^\n]*", "", source, flags=re.DOTALL)
     return [int(token, 0) for token in re.findall(r"(?<![A-Za-z0-9_])-?(?:0[xX][0-9A-Fa-f]+|\d+)", source)]
 
 

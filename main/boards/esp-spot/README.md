@@ -15,6 +15,9 @@ ESP-Spot 开源项目采用 ESP32-S3-WROOM-1-N16R8 模组或 ESP32-C5-WROOM-1-N8
 
 ## 配置、编译命令
 
+C5 使用 ESP-IDF 5.5（本轮验证为 5.5.5）。N8R8 配置启用 8MB Quad
+PSRAM、80MHz；不要只设置 Flash 容量而遗漏 PSRAM 开关。
+
 **配置编译目标**
 
 ```bash

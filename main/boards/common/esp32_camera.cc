@@ -421,8 +421,8 @@ Esp32Camera::Esp32Camera(
                 }
                 capture_count++;
             }
-            ESP_LOGI(TAG, "Camera init success, captured %d frames in %dms", capture_count,
-                     (xTaskGetTickCount() - start) * portTICK_PERIOD_MS);
+            ESP_LOGI(TAG, "Camera init success, captured %d frames in %lums", capture_count,
+                     static_cast<unsigned long>((xTaskGetTickCount() - start) * portTICK_PERIOD_MS));
             self->streaming_on_ = true;
             vTaskDelete(NULL);
         },

@@ -173,7 +173,12 @@ private:
             },
         };
         esp_lcd_panel_io_handle_t tp_io_handle = NULL;
-        esp_lcd_panel_io_i2c_config_t tp_io_config = ESP_LCD_TOUCH_IO_I2C_CST816S_CONFIG();
+        // Assign fields explicitly: vendor macro order differs between IDF releases.
+        esp_lcd_panel_io_i2c_config_t tp_io_config = {};
+        tp_io_config.dev_addr = ESP_LCD_TOUCH_IO_I2C_CST816S_ADDRESS;
+        tp_io_config.control_phase_bytes = 1;
+        tp_io_config.lcd_cmd_bits = 8;
+        tp_io_config.flags.disable_control_phase = 1;
         tp_io_config.scl_speed_hz = 400*  1000;
         ESP_ERROR_CHECK(esp_lcd_new_panel_io_i2c(i2c_bus_, &tp_io_config, &tp_io_handle));
         ESP_LOGI(TAG, "Initialize touch controller");

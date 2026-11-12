@@ -1,0 +1,2 @@
+# Shared board-family defaults are loaded after the project's generic defaults.
+# ESP-IDF automatically loads the matching .<target> file from this directory.

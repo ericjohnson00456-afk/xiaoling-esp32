@@ -1,3 +1,8 @@
+#if defined(XIAOLING_DF_K10_QEMU)
+// Explicit test build only. The customer firmware uses the hardware below.
+#include "qemu/board.inc"
+#else
+
 #include "wifi_board.h"
 #include "k10_audio_codec.h"
 #include "display/lcd_display.h"
@@ -292,3 +297,5 @@ public:
 DECLARE_BOARD(Df_K10Board);
 
 Df_K10Board* Df_K10Board::instance_ = nullptr;
+
+#endif  // XIAOLING_DF_K10_QEMU

@@ -1,0 +1,13 @@
+--- a/target/riscv/esp_cpu.c
++++ b/target/riscv/esp_cpu.c
+@@ -500,6 +500,10 @@
+     case 0x4f: /* NMADD */
+     case 0x53: /* OP-FP */
+         return true;
++    case 0x73: { /* Access to floating-point CSRs also needs lazy FPU enable */
++        const uint32_t csr = insn >> 20;
++        return ((insn >> 12) & 7) != 0 && csr >= 1 && csr <= 3;
++    }
+     default:
+         return false;
+     }

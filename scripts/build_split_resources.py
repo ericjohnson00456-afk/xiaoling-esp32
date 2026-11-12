@@ -106,6 +106,7 @@ def main() -> int:
     parser.add_argument("--resource-root", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--font-file")
+    parser.add_argument("--emoji-dir", help="Optional board-prepared emoji resource directory")
     wake_word_source = parser.add_mutually_exclusive_group()
     wake_word_source.add_argument("--wake-word-dir")
     wake_word_source.add_argument("--wake-word-file")
@@ -153,7 +154,7 @@ def main() -> int:
                 shutil.copy2(font, respak / "font" / font.name)
 
         copy_tree(source / "tone", tone)
-        copy_tree(source / "emoji", emoji)
+        copy_tree(Path(args.emoji_dir) if args.emoji_dir else source / "emoji", emoji)
         if args.wake_word_dir:
             copy_wake_word_bundle(Path(args.wake_word_dir), wake,
                                   args.wake_word_name)

@@ -149,6 +149,12 @@ bool Initialize() {
         ui.Initialize(display);
     }
 
+    // OLED and headless boards use the Display compatibility methods rather
+    // than LVGL pages. They still need the command worker to drain updates.
+    if (ui.lvgl_display() == nullptr) {
+        return ui.StartTask();
+    }
+
     // 第三步：把所有页面加入导航表，并把 Home 设置为默认页面。
     // 注册阶段只建立页面描述和导航关系，还没有启动 UI 命令任务。
     if (ui.RegisterScreen(&HomePresenter::Screen()) != 0 ||

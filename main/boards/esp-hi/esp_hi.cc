@@ -16,12 +16,10 @@
 #include <esp_lcd_panel_ops.h>
 #include "esp_lcd_ili9341.h"
 
-#include "anim_player.h"
-#include "emoji_display.h"
 #include "servo_dog_ctrl.h"
 #include "led_strip.h"
 #include "driver/rmt_tx.h"
-#include "device_state.h"
+#include "system/device_status.h"
 
 #include "sdkconfig.h"
 
@@ -74,7 +72,7 @@ private:
     Button boot_button_;
     Button audio_wake_button_;
     Button move_wake_button_;
-    anim::EmojiWidget* display_ = nullptr;
+    SpiLcdDisplay* display_ = nullptr;
     bool web_server_initialized_ = false;
     led_strip_handle_t led_strip_;
     bool led_on_ = false;
@@ -236,7 +234,7 @@ private:
         buscfg.sclk_io_num = DISPLAY_CLK_PIN;
         buscfg.quadwp_io_num = GPIO_NUM_NC;
         buscfg.quadhd_io_num = GPIO_NUM_NC;
-        buscfg.max_transfer_sz = DISPLAY_WIDTH * 10 * sizeof(uint16_t);
+        buscfg.max_transfer_sz = DISPLAY_WIDTH * DISPLAY_HEIGHT * sizeof(uint16_t);
         ESP_ERROR_CHECK(spi_bus_initialize(SPI2_HOST, &buscfg, SPI_DMA_CH_AUTO));
     }
 
@@ -275,7 +273,6 @@ private:
         esp_lcd_panel_init(panel);
         esp_lcd_panel_invert_color(panel, DISPLAY_INVERT_COLOR);
         esp_lcd_panel_invert_color(panel, false);
-        esp_lcd_panel_set_gap(panel, 0, 24);
         esp_lcd_panel_mirror(panel, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
         esp_lcd_panel_swap_xy(panel, DISPLAY_SWAP_XY);
         ESP_LOGI(TAG, "LCD panel create success, %p", panel);
@@ -283,7 +280,9 @@ private:
         esp_lcd_panel_disp_on_off(panel, true);
 
         ESP_LOGI(TAG, "Create emoji widget, panel: %p, panel_io: %p", panel, panel_io);
-        display_ = new anim::EmojiWidget(panel, panel_io);
+        display_ = new SpiLcdDisplay(panel_io, panel, DISPLAY_WIDTH, DISPLAY_HEIGHT,
+                                    DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y,
+                                    DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
 
 #if CONFIG_ESP_CONSOLE_NONE
         servo_dog_ctrl_config_t config = {

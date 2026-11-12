@@ -1,0 +1,10 @@
+# ESP-HI compact LCD profile: retain CJK and all emotion states with fewer frames.
+# Name,     Type, SubType, Offset,   Size,     Flags
+nvs,        data, nvs,     0x9000,   0x4000,
+otadata,    data, ota,     0xd000,   0x2000,
+phy_init,   data, phy,     0xf000,   0x1000,
+ota_0,      app,  ota_0,   0x10000,  0x2e0000,
+tone,       data, spiffs,  0x2f0000, 0x53000,
+emoji,      data, spiffs,  0x343000, 0x40000,
+wake_word,  data, spiffs,  0x383000, 0x1000,
+respak,     data, spiffs,  0x384000, 0x7c000,

@@ -24,10 +24,13 @@ public:
 
 private:
     static constexpr int kMaxPacketBytes = 1000;
+    // Called under mutex_ (or during construction).
+    bool EnsureEncoder();
 
     std::mutex mutex_;
     OpusEncoder* encoder_ = nullptr;
     int sample_rate_;
+    int channels_;
     int duration_ms_;
     int frame_size_;
     std::vector<int16_t> input_buffer_;

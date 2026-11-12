@@ -1,0 +1,11 @@
+# 4 MiB compact voice profile: one application slot and four ROMFS packages.
+# MP3/Opus/WAV, standard 14px CJK font, button wake-up; no dual-slot app OTA.
+# Name,     Type, SubType, Offset,   Size,     Flags
+nvs,        data, nvs,     0x9000,   0x4000,
+otadata,    data, ota,     0xd000,   0x2000,
+phy_init,   data, phy,     0xf000,   0x1000,
+ota_0,      app,  ota_0,   0x10000,  0x2a0000,
+tone,       data, spiffs,  0x2b0000, 0x53000,
+emoji,      data, spiffs,  0x303000, 0x84000,
+wake_word,  data, spiffs,  0x387000, 0x1000,
+respak,     data, spiffs,  0x388000, 0x78000,

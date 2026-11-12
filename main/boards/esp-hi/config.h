@@ -40,7 +40,7 @@
 #define DISPLAY_INVERT_COLOR    true
 #define DISPLAY_RGB_ORDER       LCD_RGB_ELEMENT_ORDER_RGB
 #define DISPLAY_OFFSET_X        0
-#define DISPLAY_OFFSET_Y        0
+#define DISPLAY_OFFSET_Y        24
 #define DISPLAY_BACKLIGHT_OUTPUT_INVERT false
 #define DISPLAY_SPI_MODE        0
 

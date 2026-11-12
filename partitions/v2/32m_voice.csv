@@ -1,0 +1,12 @@
+# Preserve SenseCAP factory/user NVS, with larger apps and four current ROMFS packages.
+# Name,     Type, SubType, Offset,   Size,     Flags
+nvsfactory, data, nvs,     0x9000,   200K,
+nvs,        data, nvs,     ,        840K,
+otadata,    data, ota,     ,        0x2000,
+phy_init,   data, phy,     ,        0x1000,
+ota_0,      app,  ota_0,   0x200000, 0x600000,
+ota_1,      app,  ota_1,   0x800000, 0x600000,
+tone,       data, spiffs,  0xe00000, 0x80000,
+emoji,      data, spiffs,  0xe80000, 0xc0000,
+wake_word,  data, spiffs,  0xf40000, 0x20000,
+respak,     data, spiffs,  0x1000000,0x1000000,

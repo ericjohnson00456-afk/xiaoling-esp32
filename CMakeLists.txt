@@ -21,7 +21,7 @@ add_compile_definitions(XIAOLING_COMMIT_ID=\"${XIAOLING_COMMIT_ID}\")
 add_compile_options(-Wno-missing-field-initializers)
 
 message(STATUS "Using sdkconfig defaults for LSPlatform")
-set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.lsplatform")
+set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.lsplatform;main/boards/common/sdkconfig.defaults")
 
 # Some ESP32-S3 boards use Quad PSRAM while the target-wide defaults use
 # Octal PSRAM. Load board-specific defaults before project() so a clean
@@ -39,6 +39,10 @@ set(XIAOLING_PROJECT_NAME "xiaoling_v${XIAOLING_VER}")
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(${XIAOLING_PROJECT_NAME})
+
+if(XIAOLING_MATRIX_STRIP_DEBUG)
+    include("${CMAKE_CURRENT_LIST_DIR}/main/boards/common/qemu/matrix.cmake")
+endif()
 
 # 普通 idf.py build 同时生成供量产工具使用的全量烧录包，以及后台 OTA
 # 上传所需的版本/MD5 信息。merge-bin 会读取 flash_args，因此包含 bootloader、

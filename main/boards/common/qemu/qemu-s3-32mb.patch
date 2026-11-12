@@ -1,0 +1,14 @@
+--- a/hw/xtensa/esp32s3.c
++++ b/hw/xtensa/esp32s3.c
+@@ -372,8 +372,11 @@
+         case 16 * MB:
+             flash_model = "is25lp128";
+             break;
++        case 32 * MB:
++            flash_model = "w25q256";
++            break;
+         default:
+-            error_report("Drive size error: only 2, 4, 8, and 16MB images are supported");
++            error_report("Drive size error: only 2, 4, 8, 16, and 32MB images are supported");
+             return;
+     }
