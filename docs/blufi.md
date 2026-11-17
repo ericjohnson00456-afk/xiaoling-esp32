@@ -4,9 +4,13 @@
 
 ## SDK 配置
 
-在 `idf.py menuconfig` 中进入 `Xiaoling Device → 配网模式`，选择 **BLE配网**（`CONFIG_PROV_MODE_BLE=y`），然后编译并烧录固件。
+支持 BLE 的芯片默认使用小聆 BluFi 配网（`CONFIG_PROV_MODE_BLE=y`），无 BLE 硬件能力的芯片默认使用热点配网。使用标准板型构建命令即可加载默认配置：
 
-使用板级默认配置时，在首次配置命令中加入 `-DBOARD_TYPE=<板型>`。发布构建使用对应板型 `config.json` 中的配网设置。已有 `sdkconfig` 的工程可在上述菜单中切换配网方式。
+```sh
+python scripts/release.py <板型>
+```
+
+已有 `sdkconfig` 的工程会保留已选择的配网方式。
 
 ## 进入配网
 

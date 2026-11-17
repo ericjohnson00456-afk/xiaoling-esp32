@@ -30,6 +30,7 @@
 
 #include <esp_mac.h>
 
+#ifdef CONFIG_BT_BLUEDROID_ENABLED
 static uint8_t blufi_service_uuid128[32] = {
     /* LSB <--------------------------------------------------------------------------------> MSB */
     //first uuid, 16bit, [12],[13] is the value
@@ -50,11 +51,16 @@ static esp_ble_adv_data_t blufi_adv_data = {
     .p_service_uuid = blufi_service_uuid128,
     .flag = 0x6,
 };
+#endif
 
 void esp_blufi_adv_start_macname(void)
 {
+#ifdef CONFIG_BT_NIMBLE_ENABLED
+    esp_blufi_adv_start_with_name(ble_name);
+#else
     esp_ble_gap_set_device_name(ble_name);
     esp_ble_gap_config_adv_data(&blufi_adv_data);
+#endif
 }
 
 #ifdef CONFIG_BT_BLUEDROID_ENABLED

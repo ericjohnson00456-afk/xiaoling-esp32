@@ -48,33 +48,47 @@ if LSPLATFORM
 
     choice
         prompt "配网模式"
+        default PROV_MODE_BLE if SOC_BLE_SUPPORTED
         default PROV_MODE_XIAOZHI
         config PROV_MODE_BLE
             bool "BLE配网"
-            depends on !IDF_TARGET_ESP32S2
+            depends on SOC_BLE_SUPPORTED && !APP_NO_BLOBS
             select BT_ENABLED
-            select BT_BLE_BLUFI_ENABLE
-            select BT_BLE_42_FEATURES_SUPPORTED
+            select BT_BLE_BLUFI_ENABLE if BT_BLUEDROID_ENABLED
+            select BT_NIMBLE_BLUFI_ENABLE if BT_NIMBLE_ENABLED
+            select BT_BLE_42_FEATURES_SUPPORTED if BT_BLUEDROID_ENABLED
             select MBEDTLS_DHM_C
         config PROV_MODE_XIAOZHI
             bool "WIFI热点配网"
     endchoice
 
     if PROV_MODE_BLE
-        config BT_BLE_50_FEATURES_SUPPORTED
-            default n
-        config BT_GATTC_ENABLE
-            default n
-        config BT_BLE_SMP_ENABLE
-            default n
-        config MBEDTLS_HARDWARE_MPI
-            default n
-        # This board has PSRAM. Keep the Bluedroid environment and connection
-        # buffers out of scarce internal SRAM so BluFi can finish pairing.
-        config BT_ALLOCATION_FROM_SPIRAM_FIRST
-            default y
-        config BT_BLE_DYNAMIC_ENV_MEMORY
-            default y
+        choice BT_HOST
+            default BT_NIMBLE_ENABLED if !SPIRAM
+        endchoice
+        if BT_NIMBLE_ENABLED
+            config BT_NIMBLE_ROLE_CENTRAL
+                default n
+            config BT_NIMBLE_ROLE_OBSERVER
+                default n
+            config BT_NIMBLE_50_FEATURE_SUPPORT
+                default n
+        endif
+        if BT_BLUEDROID_ENABLED
+            config BT_BLE_50_FEATURES_SUPPORTED
+                default n
+            config BT_GATTC_ENABLE
+                default n
+            config BT_BLE_SMP_ENABLE
+                default n
+            config MBEDTLS_HARDWARE_MPI
+                default n
+            # Prefer external memory for Bluedroid buffers when it is available.
+            config BT_ALLOCATION_FROM_SPIRAM_FIRST
+                default y if SPIRAM
+            config BT_BLE_DYNAMIC_ENV_MEMORY
+                default y
+        endif
     endif # PROV_MODE_BLE
 endif # LSPLATFORM
 
