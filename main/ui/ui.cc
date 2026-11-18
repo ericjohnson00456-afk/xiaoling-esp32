@@ -1,4 +1,5 @@
 #include "ui.h"
+#include "miniapp/miniapp.h"
 
 #include "alarm/alarm_service.h"
 #include "board.h"
@@ -341,7 +342,7 @@ void ShowAlarmSuccess(const AlarmSnapshot& alarm, bool newly_created) {
             ShowNotificationOnDisplay("闹钟设置成功", 3000);
             return;
         }
-        if (manager.TopScreenId() == UI_PAGE_ALARM_RING) {
+        if (miniapp_is_active() || manager.TopScreenId() == UI_PAGE_ALARM_RING) {
             if (newly_created) {
                 Toast::GetInstance().Show("新闹钟创建成功", 3000);
             } else {

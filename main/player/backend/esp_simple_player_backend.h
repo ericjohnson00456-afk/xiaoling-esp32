@@ -22,6 +22,7 @@ public:
     ~EspSimplePlayerBackend() override;
 
     bool Initialize(AudioOutput* audio_output, EventCallback callback) override;
+    bool RegisterInputIo(esp_gmf_io_handle_t io);
     bool Play(const PlaybackRequest& request) override;
     bool Pause() override;
     bool Resume() override;

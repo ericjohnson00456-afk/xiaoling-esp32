@@ -23,6 +23,7 @@ set(SOURCES "audio/codecs/audio_codec.cc"
             "audio/codecs/dummy_audio_codec.cc"
             "audio/processors/audio_debugger.cc"
             "led/single_led.cc"
+            "led/miniapp_led.cc"
             "led/circular_strip.cc"
             "led/gpio_led.cc"
             "display/display.cc"
@@ -75,6 +76,12 @@ set(SOURCES "audio/codecs/audio_codec.cc"
             )
 
 
+if(CONFIG_MINIAPP)
+    file(GLOB MINIAPP_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/miniapp/*.c"
+                              "${CMAKE_CURRENT_SOURCE_DIR}/miniapp/*.cc")
+    list(APPEND SOURCES ${MINIAPP_SOURCES})
+endif()
+
 # MCP tools self-register through mcp_server.cc. Keep the source list automatic
 # so adding a new tool_xx.cc does not require a CMake edit.
 file(GLOB MCP_TOOL_SOURCES
@@ -101,7 +108,7 @@ file(GLOB_RECURSE SHELL_CMD_SOURCES
      "${CMAKE_CURRENT_SOURCE_DIR}/shell/cmd/*.cc")
 list(APPEND SOURCES ${SHELL_CMD_SOURCES})
 
-set(INCLUDE_DIRS "."
+set(INCLUDE_DIRS "." "miniapp"
                  "ui/themes" "ui/utils/font" "ui/utils/image" "ui/utils/emoji" "audio"
                  "player" "player/types" "player/backend" "player/channels" "xiaoling" "xiaoling/session" "xiaoling/conn" "mcp"
                  "player/intents" "ui" "ui/compat" "ui/widgets" "ui/screens" "ui/screens/home" "ui/screens/alarm" "ui/screens/camera_preview" "ui/screens/qrcode" "ui/screens/upgrade"
@@ -788,7 +795,7 @@ endif()
 
 idf_component_register(SRCS ${SOURCES}
                     INCLUDE_DIRS ${INCLUDE_DIRS}
-                    REQUIRES espressif__adc_battery_estimation esp_adc efuse console spi_flash app_update esp_app_format esp_psram 78__esp-opus bt fatfs
+                    REQUIRES lua esp_http_client mbedtls json nvs_flash espressif__adc_battery_estimation esp_adc efuse console spi_flash app_update esp_app_format esp_psram 78__esp-opus bt fatfs
                     WHOLE_ARCHIVE
                     EMBED_FILES ${MWW_EMBED_FILES}
                     )

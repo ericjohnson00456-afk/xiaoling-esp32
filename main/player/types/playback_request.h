@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
 #include <string>
 
 enum class PlaybackSourceType {
@@ -24,4 +25,6 @@ struct PlaybackRequest {
     int priority = 0;
     bool resumable = false;
     bool loop = false;
+    // Optional per-stream PCM cap; zero keeps the backend channel policy.
+    size_t pcm_buffer_limit = 0;
 };

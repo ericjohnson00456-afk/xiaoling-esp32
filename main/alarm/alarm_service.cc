@@ -512,7 +512,7 @@ void AlarmService::StartRinging(const AlarmSnapshot& alarm, int64_t now) {
     if (tone_session_id_ == 0) BeginAlarmTts();
     if (current_pre_advanced_) AdvanceOrRemove(alarm.spec.id, now);
     Ui::ShowAlarmRing(current_alarm_);
-    ESP_LOGI(kTag, "闹钟响铃: id=%s, text=%s", alarm.spec.id.c_str(), alarm.spec.text.c_str());
+    ESP_LOGI(kTag, "闹钟响铃: id=%s, text=%s", current_alarm_.spec.id.c_str(), current_alarm_.spec.text.c_str());
 }
 
 void AlarmService::BeginAlarmTts() {

@@ -36,6 +36,8 @@ public:
     AudioPlayer(const AudioPlayer&) = delete;
     AudioPlayer& operator=(const AudioPlayer&) = delete;
 
+    uint32_t AllocateSession() { return next_session_id_.fetch_add(1); }
+
     bool Initialize(AudioService* audio_service, ControlScheduler scheduler);
     uint32_t PlayTtsUrl(const std::string& url);
     void ClearDeferredTtsUrl();

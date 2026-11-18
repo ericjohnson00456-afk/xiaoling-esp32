@@ -2,7 +2,7 @@
 
 小聆 AI 是面向桌面机器人、陪伴设备和语音终端的智能语音交互方案。本仓库提供运行在 ESP32 系列芯片上的设备端固件：设备完成配网和激活后，通过小聆平台建立长连接，支持语音唤醒、录音上传、流式语音播放和多种设备能力扩展。
 
-项目当前版本为 `2.0.0`，基于 [ESP-IDF](https://github.com/espressif/esp-idf) 构建，依赖在 `main/idf_component.yml` 中声明，由 Component Manager 安装并生成本地 `dependencies.lock`。
+项目当前版本为 `2.1.0`，基于 [ESP-IDF](https://github.com/espressif/esp-idf) 构建，依赖在 `main/idf_component.yml` 中声明，由 Component Manager 安装并生成本地 `dependencies.lock`。
 
 ## 了解小聆
 
@@ -17,6 +17,7 @@
 - **配网**：BLE BluFi 蓝牙配网和小聆热点配网，由板级配置选择默认方式。
 - **多媒体与交互**：TTS、提示音、音乐播放、闹钟、LVGL 图形界面、字幕、表情和状态灯。
 - **设备能力**：摄像头拍照/识图、TF 卡音乐同步与播放、MCP 工具、设备设置和系统信息。
+- **小聆AI小应用**：支持临时 Lua 应用、绘图、按键、HTTP、存档、语音播报与音频；由云端通过 MCP 安装和操作，详见 [小应用开发](docs/miniapp.md)。
 - **在线维护**：固件 OTA、唤醒词/表情等资源 OTA，以及量产烧录包和 OTA 元信息生成。
 - **硬件适配**：通过 `main/boards/` 支持大量 ESP32、ESP32-C3/C5/C6、ESP32-S3 和 ESP32-P4 开发板，并允许按文档增加自定义板型。
 
@@ -123,6 +124,7 @@ python scripts/release.py all
 - [WebSocket 协议](docs/websocket.md)
 - [唤醒与 VAD](docs/wake-vad.md)
 - [唤醒录音](docs/wake-recording.md)
+- [小聆AI小应用](docs/miniapp.md)
 - [MCP 使用说明](docs/mcp-usage.md) / [MCP 协议](docs/mcp-protocol.md)
 - [MQTT/UDP 调试](docs/mqtt-udp.md)
 - [BLE BluFi 配网](docs/blufi.md)

@@ -1,3 +1,4 @@
+#include "miniapp/miniapp_platform.h"
 #include "audio_player.h"
 #include "xiaoling/session/voice_session_epoch.h"
 
@@ -143,6 +144,9 @@ bool AudioPlayer::Initialize(AudioService* audio_service, ControlScheduler sched
 }
 
 uint32_t AudioPlayer::PlayTtsUrl(const std::string& url) {
+#if CONFIG_MINIAPP
+    miniapp_platform_interrupt();
+#endif
     if (backend_ == nullptr || tts_channel_ == nullptr) {
         ESP_LOGE(TAG, "播放器尚未初始化");
         return 0;
@@ -270,6 +274,9 @@ uint32_t AudioPlayer::PlayMusicFileInternal(const std::string& path) {
 }
 
 uint32_t AudioPlayer::PlayTone(uint16_t tone_id) {
+#if CONFIG_MINIAPP
+    miniapp_platform_interrupt();
+#endif
     if (backend_ == nullptr || tone_channel_ == nullptr || wakeup_in_progress_) {
         ESP_LOGW(TAG, "播放器不可用或唤醒提示音正在播放");
         return 0;
@@ -283,6 +290,9 @@ uint32_t AudioPlayer::PlayTone(uint16_t tone_id) {
 }
 
 uint32_t AudioPlayer::PlayAlarmTone(uint16_t tone_id) {
+#if CONFIG_MINIAPP
+    miniapp_platform_interrupt();
+#endif
     if (backend_ == nullptr || alarm_channel_ == nullptr || wakeup_in_progress_) {
         ESP_LOGW(TAG, "播放器不可用或唤醒提示音正在播放");
         return 0;
@@ -296,6 +306,9 @@ uint32_t AudioPlayer::PlayAlarmTone(uint16_t tone_id) {
 }
 
 uint32_t AudioPlayer::PlayAlarmTtsUrl(const std::string& url) {
+#if CONFIG_MINIAPP
+    miniapp_platform_interrupt();
+#endif
     if (backend_ == nullptr || alarm_channel_ == nullptr || wakeup_in_progress_) {
         ESP_LOGW(TAG, "播放器不可用或唤醒提示音正在播放");
         return 0;
@@ -309,6 +322,9 @@ uint32_t AudioPlayer::PlayAlarmTtsUrl(const std::string& url) {
 }
 
 void AudioPlayer::PlayWakeup(std::function<void(bool)> completion) {
+#if CONFIG_MINIAPP
+    miniapp_platform_interrupt();
+#endif
     std::lock_guard<std::recursive_mutex> lock(wakeup_mutex_);
     wakeup_in_progress_ = true;
     if (!PauseMusic() || !StopNonMusic(PlaybackEndReason::kPreempted)) {

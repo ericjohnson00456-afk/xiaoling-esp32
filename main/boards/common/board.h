@@ -81,6 +81,7 @@ public:
     virtual bool IsSdCardSpiSharedWithDisplay() const { return false; }
     virtual bool GetTemperature(float& esp32temp);
     virtual Display* GetDisplay();
+    virtual const char* GetDisplayShape() const { return "rectangle"; }
     virtual Camera* GetCamera();
 #if CONFIG_LSPLATFORM
     virtual ImageFetcher* GetImageFetcher();

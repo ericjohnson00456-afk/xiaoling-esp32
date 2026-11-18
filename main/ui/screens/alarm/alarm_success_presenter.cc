@@ -108,5 +108,8 @@ void AlarmSuccessPresenter::TimeoutCallback(void* timer_ptr) {
     auto* timer = static_cast<lv_timer_t*>(timer_ptr);
     auto* presenter = timer != nullptr ? static_cast<AlarmSuccessPresenter*>(lv_timer_get_user_data(timer)) : nullptr;
     if (presenter != nullptr) presenter->timeout_timer_ = nullptr;
-    UiManager::GetInstance().Dispatch([]() { UiManager::GetInstance().NavigateHome(); });
+    UiManager::GetInstance().Dispatch([]() {
+        auto& manager = UiManager::GetInstance();
+        if (manager.TopScreenId() == UI_PAGE_ALARM_SUCCESS) manager.NavigateHome();
+    });
 }

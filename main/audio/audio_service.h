@@ -173,6 +173,7 @@ public:
     size_t BufferedPlaybackBytes(uint32_t expected_session) override;
     // 暂存音乐暂停瞬间已经解码、但尚未送到 DAC 的 PCM，避免恢复时跳过。
     void SuspendPlayback() override;
+    void ClearSuspendedPlaybackQueue(uint32_t expected_session);
     void ResumePlayback(const AudioOutputEvent& output) override;
     void MarkPlaybackFinished(const AudioOutputEvent& output) override;
     // 清理当前活动播放队列，但保留被音乐暂停保存的 PCM。
@@ -278,6 +279,7 @@ private:
     // 音乐被 TTS/提示音抢占时保存的待输出 PCM；恢复后重新放回活动队列。
     std::deque<std::unique_ptr<AudioTask>> suspended_player_playback_queue_;
     size_t suspended_player_pcm_bytes_ = 0;
+    uint32_t suspended_player_session_id_ = 0;
 
     // ===== 6. 播放状态 =====
     // 播放器流的预缓冲、尾帧和等待状态，由 audio_queue_mutex_ 保护。

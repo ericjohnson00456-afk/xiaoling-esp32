@@ -1,4 +1,5 @@
 #include "alarm_ring_presenter.h"
+#include "miniapp/miniapp.h"
 
 #include "alarm_ring_view.h"
 #include "ui/ui_manager.h"
@@ -36,7 +37,8 @@ void AlarmRingPresenter::ShowAlarm(const AlarmSnapshot& alarm) {
 
 void AlarmRingPresenter::Dismiss() {
     if (UiManager::GetInstance().TopScreenId() == UI_PAGE_ALARM_RING) {
-        UiManager::GetInstance().NavigateHome();
+        if (miniapp_is_active()) UiManager::GetInstance().NavigateTo(UI_PAGE_MINIAPP);
+        else UiManager::GetInstance().NavigateHome();
     }
 }
 

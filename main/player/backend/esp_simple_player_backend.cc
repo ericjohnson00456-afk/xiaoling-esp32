@@ -446,10 +446,10 @@ bool EspSimplePlayerBackend::DoPlay(const PlaybackRequest& request) {
                                                  : kAudioPlayerInitialPrebufferBytes),
         .prebuffer_max_wait_ms = tts ? kAudioTtsPrebufferMaxWaitMs : 0,
         .underrun_grace_ms = tts ? kAudioTtsUnderrunGraceMs : 0,
-        .max_buffered_pcm_bytes = local_file
+        .max_buffered_pcm_bytes = request.pcm_buffer_limit ? request.pcm_buffer_limit : local_file
                                       ? kAudioLocalFileMaxBufferedBytes
                                       : (tts ? kAudioTtsMaxBufferedPcmBytes : 0),
-        .producer_resume_pcm_bytes = local_file
+        .producer_resume_pcm_bytes = request.pcm_buffer_limit ? request.pcm_buffer_limit / 2 : local_file
                                          ? kAudioLocalFileProducerResumeBytes
                                          : (tts ? kAudioTtsProducerResumeBytes : 0),
     })) {
@@ -1339,4 +1339,8 @@ void EspSimplePlayerBackend::Emit(const PlaybackEvent& event) {
     if (event_callback_) {
         event_callback_(event);
     }
+}
+
+bool EspSimplePlayerBackend::RegisterInputIo(esp_gmf_io_handle_t io) {
+    return handle_ && esp_audio_simple_player_register_io(handle_,io) == ESP_GMF_ERR_OK;
 }

@@ -102,7 +102,8 @@ struct ImageUrlContent {
 };
 
 // 添加类型别名
-using ReturnValue = std::variant<bool, int, std::string, cJSON*, ImageContent*, ImageUrlContent>;
+struct McpTextResult { std::string text; bool is_error = false; };
+using ReturnValue = std::variant<bool, int, std::string, cJSON*, ImageContent*, ImageUrlContent, McpTextResult>;
 using McpToolSuccessCallback = std::function<void(ReturnValue)>;
 using McpToolErrorCallback = std::function<void(std::string)>;
 using McpAsyncToolCallback = std::function<void(
@@ -396,7 +397,9 @@ public:
         } else {
             cJSON* text = cJSON_CreateObject();
             cJSON_AddStringToObject(text, "type", "text");
-            if (std::holds_alternative<std::string>(return_value)) {
+            if (std::holds_alternative<McpTextResult>(return_value)) {
+                cJSON_AddStringToObject(text, "text", std::get<McpTextResult>(return_value).text.c_str());
+            } else if (std::holds_alternative<std::string>(return_value)) {
                 cJSON_AddStringToObject(text, "text", std::get<std::string>(return_value).c_str());
             } else if (std::holds_alternative<bool>(return_value)) {
                 cJSON_AddStringToObject(text, "text", std::get<bool>(return_value) ? "true" : "false");
@@ -412,7 +415,7 @@ public:
             cJSON_AddItemToArray(content, text);
         }
         cJSON_AddItemToObject(result, "content", content);
-        cJSON_AddBoolToObject(result, "isError", false);
+        cJSON_AddBoolToObject(result, "isError", std::holds_alternative<McpTextResult>(return_value) && std::get<McpTextResult>(return_value).is_error);
 
         auto json_str = cJSON_PrintUnformatted(result);
         std::string result_str(json_str);

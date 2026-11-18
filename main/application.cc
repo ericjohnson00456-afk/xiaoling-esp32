@@ -1,3 +1,4 @@
+#include "miniapp/miniapp.h"
 #include "application.h"
 #include "board.h"
 #include "display/display.h"
@@ -365,14 +366,13 @@ void Application::Initialize() {
         ESP_LOGW(TAG, "串口 Shell 初始化失败");
     }
 
-    // 构造一次本地 MCP 工具表；WebSocket 首连和重连时直接复用。
-    McpServer::GetInstance().Initialize();
-
     // 音频模块内部按固定顺序完成订阅、回调绑定和任务启动。
     InitializeAudio();
 
     // 闹钟的恢复、播放、时钟及云端同步钩子统一在 application_alarm.cc 安装。
     InitializeAlarm();
+    // 工具表在连接及重连时复用；Lua 工作任务在首次使用时创建。
+    McpServer::GetInstance().Initialize();
 
     CameraService::GetInstance().Initialize(*this);
 
@@ -1604,6 +1604,7 @@ void Application::SetAudioStressMode(bool enable) {
 }
 
 bool Application::CanEnterSleepMode() {
+    if (miniapp_is_active()) return false;
     if (GetDeviceState() != kDeviceStateIdle) {
         return false;
     }

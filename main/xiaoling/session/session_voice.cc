@@ -1,3 +1,4 @@
+#include "miniapp/miniapp.h"
 #include "xiaoling/session/session_voice.h"
 
 #include "system/system_info.h"
@@ -682,6 +683,15 @@ std::string XiaolingSessionVoice::BuildStartMessage(ListeningMode mode) {
 
     cJSON* custom = cJSON_CreateObject();
     cJSON_AddStringToObject(custom, "rid", session_id_.c_str());
+#if CONFIG_MINIAPP
+    char app_id[MINIAPP_ID_MAX + 1], app_version[MINIAPP_VERSION_MAX + 1];
+    if (miniapp_identity(app_id, sizeof(app_id), app_version, sizeof(app_version))) {
+        cJSON_AddStringToObject(custom, "mode", "miniapp");
+        cJSON* app = cJSON_AddObjectToObject(custom, "miniapp");
+        cJSON_AddStringToObject(app, "id", app_id);
+        cJSON_AddStringToObject(app, "version", app_version);
+    }
+#endif
     cJSON_AddStringToObject(nlu_properties, "sn", SystemInfo::GetCloudDeviceId().c_str());
     cJSON_AddItemToObject(nlu_properties, "custom", custom);
     cJSON_AddItemToObject(params, "nlu_properties", nlu_properties);

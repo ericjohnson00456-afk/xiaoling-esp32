@@ -1263,6 +1263,7 @@ bool AudioService::BeginPlayback(const AudioPlaybackConfig& config) {
 
 void AudioService::SuspendPlayback() {
     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    suspended_player_session_id_ = player_session_id_;
     suspended_player_playback_queue_.clear();
     suspended_player_pcm_bytes_ = 0;
     suspended_player_recovery_prebuffer_bytes_ = player_recovery_prebuffer_bytes_;
@@ -1289,8 +1290,18 @@ void AudioService::SuspendPlayback() {
              static_cast<unsigned>(suspended_player_pcm_bytes_));
 }
 
+void AudioService::ClearSuspendedPlaybackQueue(uint32_t expected_session) {
+    std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    if (!expected_session || suspended_player_session_id_ != expected_session) return;
+    suspended_player_playback_queue_.clear();
+    suspended_player_pcm_bytes_ = 0;
+    suspended_player_session_id_ = 0;
+    audio_queue_cv_.notify_all();
+}
+
 void AudioService::ResumePlayback(const AudioOutputEvent& output) {
     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+    suspended_player_session_id_ = 0;
     player_session_id_ = output.session_id;
     player_recovery_prebuffer_bytes_ = suspended_player_recovery_prebuffer_bytes_;
     player_prebuffer_max_wait_ms_ = suspended_player_prebuffer_max_wait_ms_;
@@ -1390,6 +1401,7 @@ void AudioService::ClearPlaybackQueue() {
     audio_playback_queue_.clear();
     suspended_player_playback_queue_.clear();
     suspended_player_pcm_bytes_ = 0;
+    suspended_player_session_id_ = 0;
     queued_player_pcm_bytes_ = 0;
     suspended_player_recovery_prebuffer_bytes_ =
         kAudioPlayerInitialPrebufferBytes;
