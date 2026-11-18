@@ -303,21 +303,15 @@ void AudioService::Start() {
     }
 
 #if CONFIG_USE_MICRO_WAKE_WORD
-    BaseType_t wake_task_result = xTaskCreatePinnedToCoreWithCaps([](void* arg) {
-        AudioService* audio_service = (AudioService*)arg;
+    // 推理与配网、绘图并发时保留内部任务栈；模型和张量仍驻留 PSRAM。
+    const BaseType_t wake_task_result = xTaskCreatePinnedToCore([](void* arg) {
+        auto* audio_service = static_cast<AudioService*>(arg);
         audio_service->ProcessedWakeTask();
-        vTaskDeleteWithCaps(nullptr);
+        vTaskDelete(nullptr);
     }, "processed_wake", 2048 * 3, this, kAudioWakePriority,
-       &processed_wake_task_handle_, kProcessedWakeTaskCore,
-       MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+       &processed_wake_task_handle_, kProcessedWakeTaskCore);
     if (wake_task_result != pdPASS) {
-        ESP_LOGW(TAG, "PSRAM 唤醒任务栈分配失败，回退内部 SRAM");
-        xTaskCreatePinnedToCore([](void* arg) {
-            AudioService* audio_service = (AudioService*)arg;
-            audio_service->ProcessedWakeTask();
-            vTaskDelete(nullptr);
-        }, "processed_wake", 2048 * 3, this, kAudioWakePriority,
-           &processed_wake_task_handle_, kProcessedWakeTaskCore);
+        ESP_LOGE(TAG, "创建唤醒处理任务失败");
     }
 #endif
 
