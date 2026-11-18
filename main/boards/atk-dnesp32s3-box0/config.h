@@ -59,6 +59,9 @@ enum PowerSleep {
 #define M_BUTTON_GPIO GPIO_NUM_4
 #define L_BUTTON_GPIO GPIO_NUM_3
 
+// The middle button wakes voice interaction and is the miniapp function key.
+#define BOOT_BUTTON_GPIO M_BUTTON_GPIO
+
 #define BUILTIN_LED_GPIO GPIO_NUM_13
 
 #define LCD_SCLK_PIN GPIO_NUM_39

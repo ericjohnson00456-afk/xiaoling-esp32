@@ -4,7 +4,7 @@
 
 ## 能力与安装
 
-先调用 `ls.built_in.get_device_capabilities`。返回 `schema_version: 2`、固件版本和实际硬件；仅当运行时就绪时返回 `runtime.lua_sdk`，其中 `version` 表示固件支持的接口版本。屏幕尺寸以 `hardware.display.width_px/height_px` 为准，`shape` 为 `rectangle` 或 `round`。无屏、无灯或无扬声器时不应生成依赖这些硬件的应用。按键 ID、中文标签和退出长按时长见 `hardware.input.buttons`。
+先调用 `ls.built_in.get_device_capabilities`。返回 `schema_version: 2`、固件版本和实际硬件；固件启用小应用运行时时返回 `runtime.lua_sdk`，其中 `version` 表示固件支持的接口版本。屏幕尺寸以 `hardware.display.width_px/height_px` 为准，`shape` 为 `rectangle` 或 `round`。无屏、无灯或无扬声器时不应生成依赖这些硬件的应用。按键 ID、中文标签和退出长按时长见 `hardware.input.buttons`。
 
 使用 `ls.built_in.miniapp_install`，参数必须包含：
 
@@ -51,7 +51,7 @@ function on_action(name, args)
 end
 ```
 
-`on_tick(dt_ms)` 必须定义，其他回调可省略；通常每 20 ms 调用。回调串行执行，不应阻塞或长循环。顶层、启动、首次 tick 和后续回调均受执行时间、指令及 256 KB Lua 堆限制。未捕获的运行时错误终止应用并回到系统界面。安全标准库包括 base、table、string、math、utf8；不开放文件、OS、动态模块、debug、协程及捕获预算异常的接口。
+`on_tick(dt_ms)` 必须定义，其他回调可省略；通常每 20 ms 调用。回调串行执行，不应阻塞或长循环。顶层、启动、首次 tick 和后续回调均受执行时间、指令及 256 KB Lua 堆限制。未捕获的运行时错误终止应用并回到系统界面；若该实例读取过存档，则清除该应用存档，避免再次加载故障状态。候选应用启动失败不会清除旧存档。安全标准库包括 base、table、string、math、utf8；不开放文件、OS、动态模块、debug、协程及捕获预算异常的接口。
 
 BOOT 通常为 `function`，没有 BOOT 的设备使用已明确适配的主要按键。点击在释放时投递，持续按住功能键 3 秒退出。应用期间不触发系统双击、三击快捷操作。闹钟优先覆盖界面并冻结回调，响铃期间拒绝操作，结束后继续；不会补投冻结期间的点击。
 
@@ -63,7 +63,7 @@ BOOT 通常为 `function`，没有 BOOT 的设备使用已明确适配的主要�
 | --- | --- |
 | `app` | `api_version`、`width`、`height`；按实际画布布局，圆屏需留出边缘安全区 |
 | `screen` | `begin`、`rect`、`circle`、`line`、`arc`、`text`、`present`；最多 256 图形、16 文本，每段文本最多 63 字节；可设置顺序、透明度和线宽 |
-| `led` | `on`、`off`、`blink(on_ms, off_ms)`；仅在灯驱动支持时存在 |
+| `led` | `on("status")`、`off("status")`、`blink("status", on_ms, off_ms)`；仅在灯驱动支持时存在 |
 | `buzzer` | `play(hz, ms)`，通过现有扬声器输出 |
 | `synth` | `play(notes, options)`、`pause`、`resume`；16 kHz，最多 4 声部、256 音符、60 秒，square/triangle/noise；支持循环 |
 | `audio` | `play(url)`、`pause`、`resume`、`stop`、`get_state`；独立单播放器，MP3 和 MPEG-TS AAC HLS；支持直播与自动让位系统语音 |
@@ -73,7 +73,7 @@ BOOT 通常为 `function`，没有 BOOT 的设备使用已明确适配的主要�
 | `clock` | `now()`、`localtime()`；未校时时返回不可用，按系统时区换算 |
 | `storage` | `load`、`save`、`clear`；按应用 ID 隔离的扁平 JSON，每应用 1 KB、共 4 槽，默认有效期 7 天、最长 30 天，写入间隔 10 秒 |
 
-详细参数预算以能力查询返回值为准。`tts.speak` 必须在应用已提交运行后调用。HLS 不支持加密、字节范围分段或 fMP4；播放错误可从状态查询获取。在线音频用户手动暂停后不会因系统语音结束而自行恢复。
+详细参数预算以能力查询返回值为准。启动期间的 `tts.speak` 在候选应用成功提交后才发起播报；参数无效或设备忙时通过结果回调报告失败。HLS 不支持加密、字节范围分段或 fMP4；播放错误可从状态查询获取。在线音频用户手动暂停后不会因系统语音结束而自行恢复。
 
 ## 板型与验证
 

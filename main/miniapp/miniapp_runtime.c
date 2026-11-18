@@ -45,7 +45,7 @@ typedef struct {
     uint32_t generation;
     char text[MINIAPP_TTS_TEXT_MAX + 1];
     char url[512];
-    bool url_ready, synth_failed, cancelled, complete;
+    bool url_ready, synth_failed, cancelled, complete, started;
     const char *result;
     const char *error;
 } miniapp_tts_job_t;
@@ -175,13 +175,13 @@ static void miniapp_tts_worker(void *argument) {
     vTaskDelete(NULL);
 }
 
-static miniapp_tts_job_t *miniapp_tts_take_result(bool frozen) {
+static miniapp_tts_job_t *miniapp_tts_take_result(miniapp_vm_t *vm, bool frozen) {
     miniapp_tts_job_t *result = NULL;
     taskENTER_CRITICAL(&s_lock);
     for (unsigned i = 0; i < MINIAPP_TTS_RESULT_SLOTS; ++i) {
         miniapp_tts_job_t *job = s_tts_requests[i];
         if (job && job->complete &&
-            (!frozen || job->cancelled || job->generation != s_buzzer_generation)) {
+            (!frozen || job->cancelled || !vm || job->generation != vm->http_generation)) {
             result = job;
             s_tts_requests[i] = NULL;
             break;
@@ -468,25 +468,67 @@ static int miniapp_lua_buzzer_play(lua_State *L) {
     return 0;
 }
 
+/* Validation only reserves requests; playback starts after the VM commits. */
+static void miniapp_tts_start(miniapp_tts_job_t *job) {
+    if (job->complete || job->cancelled || job->started)
+        return;
+    job->started = true;
+    taskENTER_CRITICAL(&s_lock);
+    bool worker_busy = s_tts_worker_id != 0;
+    taskEXIT_CRITICAL(&s_lock);
+    if (worker_busy || miniapp_platform_busy() || miniapp_platform_alarm() ||
+        !miniapp_platform_tts_claim(job->speech_id)) {
+        job->result = "failed";
+        job->error = "busy";
+        job->complete = true;
+        return;
+    }
+    taskENTER_CRITICAL(&s_lock);
+    s_tts_worker_id = job->speech_id;
+    taskEXIT_CRITICAL(&s_lock);
+    if (xTaskCreate(miniapp_tts_worker, "miniapp.tts", 4096, job, 4, NULL) != pdPASS) {
+        miniapp_platform_tts_cancel(job->speech_id);
+        miniapp_platform_tts_release(job->speech_id);
+        taskENTER_CRITICAL(&s_lock);
+        s_tts_worker_id = 0;
+        taskEXIT_CRITICAL(&s_lock);
+        job->result = "failed";
+        job->error = "unavailable";
+        job->complete = true;
+    }
+}
+
+static void miniapp_tts_activate(miniapp_vm_t *vm) {
+    for (unsigned i = 0; i < MINIAPP_TTS_RESULT_SLOTS; ++i) {
+        miniapp_tts_job_t *job = s_tts_requests[i];
+        if (job && job->generation == vm->http_generation)
+            miniapp_tts_start(job);
+    }
+}
+
 static int miniapp_lua_tts_speak(lua_State *L) {
     miniapp_vm_t *vm = miniapp_vm_get(L);
     size_t len = 0;
-    const char *text = luaL_checklstring(L, 1, &len);
-    uint32_t speech_id;
-    miniapp_tts_job_t *job;
+    const char *text = lua_type(L, 1) == LUA_TSTRING ? lua_tolstring(L, 1, &len) : NULL;
+    const char *error = NULL;
+    if (!text || !len || memchr(text, '\0', len))
+        error = "invalid_argument";
+    else if (len > MINIAPP_TTS_TEXT_MAX)
+        error = "too_large";
+    else if (vm->faulted || vm->retiring || vm->exiting)
+        error = "unavailable";
 
-    if (!len || len > MINIAPP_TTS_TEXT_MAX || memchr(text, '\0', len)) {
-        return luaL_error(L, "text must be 1..%u bytes", MINIAPP_TTS_TEXT_MAX);
-    }
-    if (vm->validating || vm->faulted || vm->retiring || vm->exiting) {
-        return luaL_error(L, "tts unavailable during startup or exit");
-    }
-
-    job = miniapp_calloc(1, sizeof(*job));
+    miniapp_tts_job_t *job = miniapp_calloc(1, sizeof(*job));
     if (!job)
-        return luaL_error(L, "not enough memory for TTS request");
-    memcpy(job->text, text, len);
-    job->generation = s_buzzer_generation;
+        return luaL_error(L, "not enough memory for TTS result");
+    if (!error)
+        memcpy(job->text, text, len);
+    job->generation = vm->http_generation;
+    if (error) {
+        job->result = "failed";
+        job->error = error;
+        job->complete = true;
+    }
     taskENTER_CRITICAL(&s_lock);
     unsigned slot = MINIAPP_TTS_RESULT_SLOTS;
     for (unsigned i = 0; i < MINIAPP_TTS_RESULT_SLOTS; ++i)
@@ -499,31 +541,14 @@ static int miniapp_lua_tts_speak(lua_State *L) {
         free(job);
         return luaL_error(L, "too many pending TTS results");
     }
-    speech_id = s_tts_next_id++;
+    uint32_t speech_id = s_tts_next_id++;
     if (!speech_id)
         speech_id = s_tts_next_id++;
     job->speech_id = speech_id;
     s_tts_requests[slot] = job;
-    bool worker_busy = s_tts_worker_id != 0;
     taskEXIT_CRITICAL(&s_lock);
-    if (worker_busy || miniapp_platform_busy() || miniapp_platform_alarm() ||
-        !miniapp_platform_tts_claim(speech_id)) {
-        job->result = "failed";
-        job->error = "busy";
-        job->complete = true;
-    } else {
-        taskENTER_CRITICAL(&s_lock);
-        s_tts_worker_id = speech_id;
-        taskEXIT_CRITICAL(&s_lock);
-        if (xTaskCreate(miniapp_tts_worker, "miniapp.tts", 4096, job, 4, NULL) != pdPASS) {
-            miniapp_platform_tts_cancel(speech_id);
-            miniapp_platform_tts_release(speech_id);
-            s_tts_worker_id = 0;
-            job->result = "failed";
-            job->error = "unavailable";
-            job->complete = true;
-        }
-    }
+    if (!vm->validating)
+        miniapp_tts_start(job);
     lua_pushinteger(L, speech_id);
     return 1;
 }
@@ -536,9 +561,11 @@ static int miniapp_lua_tts_cancel(lua_State *L) {
     taskENTER_CRITICAL(&s_lock);
     for (unsigned i = 0; i < MINIAPP_TTS_RESULT_SLOTS; ++i) {
         miniapp_tts_job_t *job = s_tts_requests[i];
-        if (job && job->speech_id == requested && job->generation == s_buzzer_generation &&
-            !job->cancelled) {
+        if (job && job->speech_id == requested && job->generation == miniapp_vm_get(L)->http_generation &&
+            !job->cancelled && !job->complete) {
             job->cancelled = true;
+            if (!job->started)
+                job->complete = true;
             accepted = true;
             break;
         }
@@ -570,7 +597,8 @@ static void miniapp_storage_fault(miniapp_vm_t *vm) {
     vm->storage_pending = 0;
     cJSON_Delete(vm->storage_json);
     vm->storage_json = NULL;
-    if (vm->storage_read) {
+    // A failed candidate must not erase the running application's save.
+    if (vm->storage_read && !vm->validating) {
         const char *error = miniapp_storage_clear(vm->id);
         if (error)
             ESP_LOGW(TAG, "failed to clear app data: %s", error);
@@ -843,7 +871,7 @@ static void miniapp_http_execute(miniapp_http_response_t *response) {
     }
     response->status = esp_http_client_get_status_code(client);
 
-    if (length > request->max_response_bytes) {
+    if ((uint64_t)length > request->max_response_bytes) {
         miniapp_http_error(response, "response_too_large");
         goto done;
     }
@@ -2040,15 +2068,19 @@ failed:
     return 0;
 }
 
-static void miniapp_tts_stop(void) {
+static void miniapp_tts_stop(miniapp_vm_t *vm) {
     uint32_t owner = 0;
     taskENTER_CRITICAL(&s_lock);
     for (unsigned i = 0; i < MINIAPP_TTS_RESULT_SLOTS; ++i) {
         miniapp_tts_job_t *job = s_tts_requests[i];
-        if (job && job->generation == s_buzzer_generation) {
-            job->cancelled = true;
-            if (job->speech_id == s_tts_worker_id)
+        if (job && job->generation == vm->http_generation) {
+            if (!job->cancelled && job->speech_id == s_tts_worker_id)
                 owner = job->speech_id;
+            job->cancelled = true;
+            if (!job->started || job->complete) {
+                s_tts_requests[i] = NULL;
+                free(job);
+            }
         }
     }
     taskEXIT_CRITICAL(&s_lock);
@@ -2061,9 +2093,10 @@ static void miniapp_runtime_stop(lua_State **state, miniapp_vm_t *vm, bool navig
     vm->exiting = true;
     miniapp_audio_release();
     miniapp_http_discard(vm);
-    miniapp_tts_stop();
+    miniapp_tts_stop(vm);
     if (*state) {
         (void)miniapp_call(*state, vm, "on_exit", 0, 0);
+        miniapp_tts_stop(vm);
         lua_close(*state);
         *state = NULL;
     }
@@ -2131,10 +2164,11 @@ static int miniapp_replace(lua_State **current, miniapp_vm_t **current_vm,
      * effects: they must not clear the new scene or enqueue old sounds. */
     miniapp_audio_release();
     if (*current) {
-        miniapp_tts_stop();
+        miniapp_tts_stop(*current_vm);
         (*current_vm)->validating = true;
         (*current_vm)->retiring = true;
         (void)miniapp_call(*current, *current_vm, "on_exit", 0, 0);
+        miniapp_tts_stop(*current_vm);
         miniapp_http_discard(*current_vm);
         miniapp_audio_clear_pending(*current_vm);
         lua_close(*current);
@@ -2168,6 +2202,7 @@ static int miniapp_replace(lua_State **current, miniapp_vm_t **current_vm,
     s_status.installed = true;
     s_status.source_size = request->package->size;
     miniapp_set_active(true);
+    miniapp_tts_activate(candidate);
     if (candidate->pending_led == 1)
         miniapp_led_on();
     if (candidate->pending_led == 2)
@@ -2185,6 +2220,7 @@ static int miniapp_replace(lua_State **current, miniapp_vm_t **current_vm,
     }
     return 0;
 failed:
+    miniapp_tts_stop(candidate);
     miniapp_http_discard(candidate);
     miniapp_audio_clear_pending(candidate);
     cJSON_Delete(candidate->actions);
@@ -2274,9 +2310,9 @@ static void miniapp_task(void *argument) {
          * drain so that callbacks cannot starve ticks or the exit event. */
         for (unsigned i = 0;
              i < MINIAPP_TTS_RESULT_SLOTS &&
-             (tts_result = miniapp_tts_take_result(miniapp_platform_alarm())) != NULL;
+             (tts_result = miniapp_tts_take_result(vm, miniapp_platform_alarm())) != NULL;
              ++i) {
-            if (L && !tts_result->cancelled && tts_result->generation == s_buzzer_generation &&
+            if (L && vm && !tts_result->cancelled && tts_result->generation == vm->http_generation &&
                 miniapp_call_tts_result(L, vm, tts_result->speech_id, tts_result->result,
                                         tts_result->error) != 0) {
                 miniapp_stop_current(&L, &vm);
