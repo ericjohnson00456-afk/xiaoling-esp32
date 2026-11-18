@@ -160,7 +160,10 @@ void Application::ProcessButtonClick(uint8_t click_count) {
             break;
         }
         case 4:
-            // 四击保留，暂不定义功能。
+#ifdef CONFIG_MINIAPP
+            // 仅在桌面恢复最近一次成功安装的小应用。
+            miniapp_reopen();
+#endif
             break;
         case 5:
             // 五击：清除已保存的 Wi-Fi，断开小聆并重新进入配网。

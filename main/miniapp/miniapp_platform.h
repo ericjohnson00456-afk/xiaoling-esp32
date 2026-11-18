@@ -12,6 +12,7 @@ extern "C" {
 #endif
 bool miniapp_platform_busy(void);
 bool miniapp_platform_alarm(void);
+bool miniapp_platform_can_reopen(void);
 void miniapp_platform_mode_changed(bool active);
 void miniapp_platform_interrupt(void);
 bool miniapp_platform_tts_claim(uint32_t id);

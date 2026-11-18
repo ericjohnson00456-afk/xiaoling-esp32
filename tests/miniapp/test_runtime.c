@@ -7,6 +7,18 @@ static bool busy;
 static unsigned claims, cancellations, clears;
 static uint32_t claimed_id;
 static char saved[128] = "{\"progress\":42}";
+static bool source_save_fails, desktop = true;
+static unsigned source_saves;
+bool miniapp_store_supported(void) { return true; }
+bool miniapp_store_has_app(void) { return source_saves != 0; }
+const char *miniapp_store_load(miniapp_package_t *p, char **source) { return "empty"; }
+const char *miniapp_store_save(const miniapp_package_t *p, const char *source) {
+    if (source_save_fails) return "flash write failed";
+    ++source_saves;
+    return NULL;
+}
+bool miniapp_store_clear(void) { return true; }
+bool miniapp_platform_can_reopen(void) { return desktop; }
 bool miniapp_platform_busy(void) { return busy; }
 bool miniapp_platform_alarm(void) { return false; }
 void miniapp_platform_mode_changed(bool active) {}
@@ -134,6 +146,25 @@ int main(void) {
     assert(claims == before_claims && cancellations == before_cancel);
     run(current, "assert(get_state()=='old')");
     complete_worker(); drain(current, current_vm);
+
+    /* Flash failure must not retire the old VM, speech or app data. */
+    source_save_fails = true;
+    request.source = old; package.size = strlen(old);
+    unsigned before_saves = source_saves;
+    assert(miniapp_replace(&current, &current_vm, &request) != 0);
+    assert(current == previous && saved[0] && source_saves == before_saves);
+    run(current, "assert(get_state()=='old')");
+    source_save_fails = false;
+
+    /* Reopening does not write flash again, and a stale desktop request is rejected. */
+    request.reopening = true;
+    desktop = false;
+    assert(miniapp_replace(&current, &current_vm, &request) != 0);
+    assert(current == previous && source_saves == before_saves);
+    desktop = true;
+    assert(miniapp_replace(&current, &current_vm, &request) == 0);
+    assert(source_saves == before_saves);
+    request.reopening = false;
 
     /* Startup requests activate only after commit; startup cancellation is silent. */
     const char *next = "results={} id=tts.speak('new speech'); gone=tts.speak('cancel me'); assert(tts.cancel(gone)); function on_tick() end; function on_tts_result(id,r) results[id]=r end";

@@ -1,4 +1,5 @@
 #include "system_reset.h"
+#include "miniapp/miniapp_store.h"
 
 #include <esp_log.h>
 #include <esp_partition.h>
@@ -40,6 +41,10 @@ void Restart(int delay_ms) {
 }
 
 void ResetToFactory() {
+    if (!miniapp_store_clear()) {
+        ESP_LOGE(kTag, "Failed to erase saved miniapp");
+        return;
+    }
     ResetNvsFlash();
 
     ESP_LOGI(kTag, "Resetting to factory");

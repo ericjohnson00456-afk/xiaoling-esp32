@@ -10,4 +10,5 @@ ota_1,    app,  ota_1,   ,          0x470000,
 tone,     data, spiffs,  0x900000,  1M
 emoji,    data, spiffs,  0xA00000,  1M
 wake_word,data, spiffs,  0xB00000,  1M
-respak,   data, spiffs,  0xC00000,  4M
+respak,   data, spiffs,  0xC00000,  0x37e000
+miniapp_src,data, 0x40,   0xf7e000, 0x82000,

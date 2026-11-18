@@ -7,6 +7,7 @@
 #include "boards/common/board.h"
 #include "display/lvgl_display.h"
 #include "system/time_sync.h"
+#include "ui/ui.h"
 #include "player/backend/esp_simple_player_backend.h"
 #include <atomic>
 #include <memory>
@@ -144,6 +145,10 @@ extern "C" void miniapp_led_blink(uint32_t on, uint32_t off) {
 }
 extern "C" bool miniapp_platform_alarm() {
     return AlarmService::GetInstance().IsRinging();
+}
+extern "C" bool miniapp_platform_can_reopen() {
+    return !miniapp_platform_alarm() &&
+           Application::GetInstance().GetDeviceState() == kDeviceStateIdle && Ui::IsHome();
 }
 extern "C" bool miniapp_platform_busy() {
     return SystemBusy() || speech_owner.load();

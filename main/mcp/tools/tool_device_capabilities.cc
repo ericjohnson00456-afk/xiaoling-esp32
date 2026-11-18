@@ -1,6 +1,7 @@
 #include "miniapp.h"
 #include "miniapp_input.h"
 #include "miniapp_storage.h"
+#include "miniapp_store.h"
 #include "miniapp_synth.h"
 #include "miniapp_audio.h"
 #include "board.h"
@@ -61,6 +62,7 @@ extern "C" cJSON *miniapp_capabilities() {
     }
     cJSON_AddNumberToObject(sdk, "version", MINIAPP_API_VERSION);
     cJSON_AddNumberToObject(sdk, "source_max_bytes", MINIAPP_SOURCE_MAX);
+    cJSON_AddBoolToObject(sdk, "retained_source", miniapp_store_supported());
     cJSON_AddNumberToObject(sdk, "heap_max_bytes", MINIAPP_LUA_HEAP_LIMIT);
     if (HasScreen())
         cJSON_AddItemToObject(

@@ -147,6 +147,8 @@ int miniapp_init(void);
 bool miniapp_is_active(void);
 int miniapp_button_click(const char *button_id);
 int miniapp_exit(void);
+/* Queue a restore only from the desktop, without replacing a running app. */
+int miniapp_reopen(void);
 /* One install at a time, including its download. Never queue a second install. */
 bool miniapp_install_begin(void);
 void miniapp_install_end(void);

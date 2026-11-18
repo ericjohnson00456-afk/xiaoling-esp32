@@ -9,6 +9,7 @@
 #include <time.h>
 #include "cJSON.h"
 #include "miniapp_storage.h"
+#include "miniapp_store.h"
 #include "miniapp_actions.h"
 #include "miniapp_platform.h"
 #include <string.h>
@@ -27,6 +28,7 @@
 
 typedef enum {
     MINIAPP_EVENT_INSTALL,
+    MINIAPP_EVENT_REOPEN,
     MINIAPP_EVENT_CLICK,
     MINIAPP_EVENT_EXIT,
     MINIAPP_EVENT_DESCRIBE,
@@ -129,6 +131,7 @@ typedef struct {
     const char *source;
     SemaphoreHandle_t done;
     int result;
+    bool reopening;
     char error[128];
 } miniapp_request_t;
 
@@ -143,6 +146,7 @@ typedef struct {
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
 static QueueHandle_t s_event_queue;
 static TaskHandle_t s_task;
+static bool s_initializing, s_initialized;
 static QueueHandle_t s_buzzer_queue;
 static TaskHandle_t s_buzzer_task;
 static QueueHandle_t s_http_queue;
@@ -2127,6 +2131,7 @@ static int miniapp_replace(lua_State **current, miniapp_vm_t **current_vm,
     lua_State *next = candidate ? miniapp_vm_create(candidate, true) : NULL;
 #if MINIAPP_HAS_SCREEN
     bool had_current = *current != NULL;
+    bool ui_changed = false;
 #endif
     if (!next) {
         snprintf(request->error, sizeof(request->error), "not enough memory for Lua VM");
@@ -2144,22 +2149,29 @@ static int miniapp_replace(lua_State **current, miniapp_vm_t **current_vm,
         snprintf(request->error, sizeof(request->error), "%s", s_status.last_error);
         goto failed;
     }
+    if (request->reopening && !miniapp_platform_can_reopen()) {
+        snprintf(request->error, sizeof(request->error), "device left the desktop");
+        goto failed;
+    }
 #if MINIAPP_HAS_SCREEN
     if (miniapp_has_screen() && !candidate->present_count) {
         snprintf(request->error, sizeof(request->error), "startup must present a frame");
         goto failed;
     }
+    ui_changed = miniapp_has_screen();
     if (miniapp_has_screen() && (miniapp_ui_present(&candidate->presented_scene) != 0 ||
                                  miniapp_ui_open() != 0 || miniapp_ui_wait_frame(2000) != 0)) {
         snprintf(request->error, sizeof(request->error), "failed to show miniapp frame");
-        if (had_current) {
-            (void)miniapp_ui_present(&(*current_vm)->presented_scene);
-        } else {
-            (void)miniapp_ui_close();
-        }
         goto failed;
     }
 #endif
+    if (!request->reopening) {
+        const char *error = miniapp_store_save(request->package, request->source);
+        if (error) {
+            snprintf(request->error, sizeof(request->error), "%s", error);
+            goto failed;
+        }
+    }
     /* The candidate is now usable. Do not run old callbacks with device side
      * effects: they must not clear the new scene or enqueue old sounds. */
     miniapp_audio_release();
@@ -2220,6 +2232,16 @@ static int miniapp_replace(lua_State **current, miniapp_vm_t **current_vm,
     }
     return 0;
 failed:
+#if MINIAPP_HAS_SCREEN
+    if (ui_changed) {
+        if (had_current) {
+            (void)miniapp_ui_present(&(*current_vm)->presented_scene);
+            (void)miniapp_ui_wait_frame(2000);
+        } else {
+            (void)miniapp_ui_close();
+        }
+    }
+#endif
     miniapp_tts_stop(candidate);
     miniapp_http_discard(candidate);
     miniapp_audio_clear_pending(candidate);
@@ -2246,7 +2268,24 @@ static void miniapp_task(void *argument) {
                                    : pdMS_TO_TICKS(MINIAPP_TICK_MS);
         miniapp_event_t event;
         if (xQueueReceive(s_event_queue, &event, wait) == pdTRUE) {
-            if (event.type == MINIAPP_EVENT_INSTALL) {
+            if (event.type == MINIAPP_EVENT_REOPEN) {
+                if (!L && event.generation == s_buzzer_generation && miniapp_platform_can_reopen()) {
+                    miniapp_package_t package;
+                    char *source = NULL;
+                    const char *error = miniapp_store_load(&package, &source);
+                    if (!error) {
+                        miniapp_request_t request = {
+                            .package = &package, .source = source, .reopening = true};
+                        if (miniapp_replace(&L, &vm, &request) != 0)
+                            ESP_LOGW(TAG, "failed to reopen miniapp: %s", request.error);
+                    } else {
+                        ESP_LOGW(TAG, "failed to load miniapp: %s", error);
+                    }
+                    free(source);
+                }
+                miniapp_install_end();
+                next_tick = xTaskGetTickCount() + pdMS_TO_TICKS(MINIAPP_TICK_MS);
+            } else if (event.type == MINIAPP_EVENT_INSTALL) {
                 miniapp_request_t *request = event.request;
                 if (event.generation != s_buzzer_generation || miniapp_platform_alarm()) {
                     snprintf(request->error, sizeof(request->error),
@@ -2337,11 +2376,16 @@ static void miniapp_task(void *argument) {
 }
 
 int miniapp_init(void) {
-    if (s_task) {
-        return 0;
-    }
     if (!heap_caps_get_total_size(MALLOC_CAP_SPIRAM))
         return -1;
+    taskENTER_CRITICAL(&s_lock);
+    if (s_initializing || s_initialized) {
+        int result = s_initialized ? 0 : -1;
+        taskEXIT_CRITICAL(&s_lock);
+        return result;
+    }
+    s_initializing = true;
+    taskEXIT_CRITICAL(&s_lock);
     s_event_queue = xQueueCreate(8, sizeof(miniapp_event_t));
     s_http_queue = xQueueCreate(MINIAPP_HTTP_MAX_REQUESTS, sizeof(miniapp_http_request_t *));
     s_http_lock = xSemaphoreCreateMutex();
@@ -2376,6 +2420,10 @@ int miniapp_init(void) {
     if (miniapp_ui_init() != 0) {
         goto failed;
     }
+    taskENTER_CRITICAL(&s_lock);
+    s_initialized = true;
+    s_initializing = false;
+    taskEXIT_CRITICAL(&s_lock);
     return 0;
 failed:
     if (s_task) {
@@ -2406,6 +2454,9 @@ failed:
         vQueueDelete(s_event_queue);
         s_event_queue = NULL;
     }
+    taskENTER_CRITICAL(&s_lock);
+    s_initializing = false;
+    taskEXIT_CRITICAL(&s_lock);
     return -1;
 }
 
@@ -2413,7 +2464,10 @@ bool miniapp_is_active(void) {
     return s_active;
 }
 bool miniapp_ready(void) {
-    return s_task != NULL;
+    taskENTER_CRITICAL(&s_lock);
+    bool ready = s_initialized;
+    taskEXIT_CRITICAL(&s_lock);
+    return ready;
 }
 
 const char *miniapp_mode(void) {
@@ -2440,7 +2494,7 @@ bool miniapp_identity(char *id, size_t id_size, char *version, size_t version_si
 bool miniapp_install_begin(void) {
     bool accepted;
     taskENTER_CRITICAL(&s_lock);
-    accepted = s_task && !s_install_busy;
+    accepted = s_initialized && !s_install_busy;
     if (accepted) {
         s_install_busy = true;
         s_install_generation = s_buzzer_generation;
@@ -2453,6 +2507,15 @@ void miniapp_install_end(void) {
     taskENTER_CRITICAL(&s_lock);
     s_install_busy = false;
     taskEXIT_CRITICAL(&s_lock);
+}
+
+int miniapp_reopen(void) {
+    if (miniapp_is_active() || !miniapp_platform_can_reopen() || !miniapp_store_has_app() ||
+        miniapp_init() != 0 || !miniapp_install_begin()) return -1;
+    miniapp_event_t event = {.type = MINIAPP_EVENT_REOPEN, .generation = s_install_generation};
+    if (xQueueSend(s_event_queue, &event, 0) == pdTRUE) return 0;
+    miniapp_install_end();
+    return -1;
 }
 
 bool miniapp_matches(const miniapp_package_t *package) {

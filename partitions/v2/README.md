@@ -40,7 +40,8 @@ The `assets` partition stores:
 - `tone`: 1MB (prompt tones)
 - `emoji`: 1MB (emoji resources)
 - `wake_word`: 1MB (wake-word models)
-- `respak`: 4MB (ROMFS resources)
+- `respak`: 3576KB (ROMFS resources)
+- `miniapp_src`: 520KB (two alternating Lua source slots)
 
 ## Available Configurations
 
@@ -54,7 +55,8 @@ The `assets` partition stores:
 - `tone`: 512KB
 - `emoji`: 576KB
 - `wake_word`: 128KB
-- `respak`: 1536KB
+- `respak`: 1464KB
+- `miniapp_src`: 520KB
 
 ### 16MB Flash Devices (`16m.csv`) - Standard
 - `nvs`: 16KB
@@ -65,7 +67,8 @@ The `assets` partition stores:
 - `tone`: 1MB
 - `emoji`: 1MB
 - `wake_word`: 1MB
-- `respak`: 4MB
+- `respak`: 3576KB
+- `miniapp_src`: 520KB
 
 ### 16MB Flash Devices (`16m_c3.csv`) - ESP32-C3 Optimized
 - `nvs`: 16KB
@@ -83,6 +86,7 @@ The `assets` partition stores:
 - `ota_0`: 4MB
 - `ota_1`: 4MB
 - `assets`: 16MB
+- `miniapp_src`: 520KB
 
 ## Benefits
 
