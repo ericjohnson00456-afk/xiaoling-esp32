@@ -51,3 +51,4 @@ c++ -std=c++17 -Wall -Wextra -Werror -DMBEDTLS_CONFIG_FILE='"store_mbedtls_confi
     -I"$work_dir/store_include" -I"$repo_dir/tests/miniapp" -I"$mbedtls_dir/include" \
     "$repo_dir/tests/miniapp/test_store.cc" "$work_dir/md5.o" "$work_dir/platform_util.o" -o "$work_dir/store"
 "$work_dir/store"
+python3 -m unittest discover -s "$repo_dir/tests/miniapp" -p 'test_serial.py'

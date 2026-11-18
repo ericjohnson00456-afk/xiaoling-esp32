@@ -8,6 +8,7 @@
 #include "cmd/test.h"
 #include "cmd/wifi.h"
 #include "cmd/wake_record.h"
+#include "cmd/miniapp.h"
 
 #include <cstdio>
 #include <fcntl.h>
@@ -123,6 +124,9 @@ bool SerialShell::Initialize() {
     }
     if (ret == ESP_OK) {
         ret = RegisterWakeRecordCommand();
+    }
+    if (ret == ESP_OK) {
+        ret = RegisterMiniappCommand();
     }
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to register shell commands: %s", esp_err_to_name(ret));
