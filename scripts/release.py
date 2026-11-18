@@ -229,8 +229,9 @@ def release(board_type: str, config_filename: str = "config.json", *, filter_nam
 
         os.environ.pop("IDF_TARGET", None)
 
-        # Call set-target
-        if os.system(f"idf.py set-target {target}") != 0:
+        # Board defaults must participate in the first configuration: later
+        # defaults cannot replace values already written to sdkconfig.
+        if os.system(f"idf.py -DBOARD_TYPE={board_type} set-target {target}") != 0:
             print("set-target failed", file=sys.stderr)
             sys.exit(1)
 
