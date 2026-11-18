@@ -58,4 +58,4 @@ esptool.py -p /dev/ttyACM0 -b 1500000 --before default_reset --after hard_reset 
 ## 使用
 
 ### 按键配置
-* A：短按-打断/唤醒
+* A：正常运行时按住说话，松开结束录音；启动阶段单击进入配网。
