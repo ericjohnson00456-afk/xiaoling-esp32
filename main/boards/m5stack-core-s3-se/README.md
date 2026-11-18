@@ -1,10 +1,6 @@
 # M5Stack CoreS3 SE
 
-板型标识：`m5stack-core-s3-se`；menuconfig 选项：`M5Stack CoreS3 SE`。
-
-项目默认板型仍为 `esp-box-3`（ESP-BOX-3），全局 SDK 默认配置保持原样。
-本目录的 `sdkconfig.defaults` 仅在显式指定 SE 板型时加载；以下编译命令
-将 SE 的配置写入独立构建目录。
+板型标识：`m5stack-core-s3-se`。
 
 ## 官方资料与硬件差异
 
@@ -51,22 +47,14 @@ LCD 与 SD 共用 SPI3，GPIO35 在 LCD 事务中为 DC、在 SD 事务中为 MI
 
 ## 编译
 
-在已加载 ESP-IDF 5.4.4 环境的终端中，为 SE 使用独立构建目录和 sdkconfig，
-避免沿用 CoreS3 的摄像头配置或其他 S3 板型的 Octal PSRAM 配置：
-
-```bash
-idf.py -B build-core-s3-se -DSDKCONFIG=build-core-s3-se/sdkconfig -DIDF_TARGET=esp32s3 -DBOARD_TYPE=m5stack-core-s3-se -DBOARD_NAME=m5stack-core-s3-se build
-```
-
-该命令自动加载本目录的 `sdkconfig.defaults`。若使用 menuconfig，选中
-`M5Stack CoreS3 SE` 后也需确认 PSRAM 为 Quad、Flash 为 16 MB；仅切换菜单
-板型不会重新应用板级 defaults。
-
-发布脚本也可识别此板型（使用项目默认构建目录及 sdkconfig）：
+在已加载 ESP-IDF 5.4.4 环境、Python 3.10 以上的终端中执行：
 
 ```bash
 python scripts/release.py m5stack-core-s3-se
+idf.py -p <串口号> flash monitor
 ```
+
+更多构建选项见[发布构建](../../../README.md#发布构建)。
 
 ## 实机验证
 

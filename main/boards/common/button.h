@@ -7,6 +7,8 @@
 #include <button_adc.h>
 #include <button_gpio.h>
 #include <functional>
+#include <string>
+#include <esp_timer.h>
 #include <unordered_map>
 
 class Button {
@@ -15,6 +17,8 @@ public:
     Button(gpio_num_t gpio_num, bool active_high = false, uint16_t long_press_time = 0,
            uint16_t short_press_time = 0, bool enable_power_save = false);
     ~Button();
+
+    void SetMiniapp(const char* id, const char* label, bool exit_key = false);
 
     void OnPressDown(std::function<void()> callback);
     void OnPressUp(std::function<void()> callback);
@@ -26,7 +30,15 @@ public:
     void OnMultipleClickAtLeast(std::function<void(uint8_t)> callback, uint8_t min_click_count);
 
 protected:
-    gpio_num_t gpio_num_;
+    void InitializeMiniappInput();
+    bool SuppressForMiniapp() const;
+    std::string miniapp_id_;
+    bool miniapp_exit_key_ = false;
+    bool miniapp_pressed_ = false;
+    bool miniapp_held_ = false;
+    int64_t miniapp_suppress_until_ = 0;
+    esp_timer_handle_t miniapp_hold_timer_ = nullptr;
+    gpio_num_t gpio_num_ = GPIO_NUM_NC;
     button_handle_t button_handle_ = nullptr;
 
     std::function<void()> on_press_down_;

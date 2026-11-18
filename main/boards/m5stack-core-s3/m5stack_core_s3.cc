@@ -1,3 +1,5 @@
+#include "miniapp/miniapp.h"
+#include "miniapp/miniapp_input.h"
 #include "wifi_board.h"
 #include "cores3_audio_codec.h"
 #include "display/lcd_display.h"
@@ -25,7 +27,7 @@ constexpr uint8_t kAxp2101IrqEnable1Reg = 0x41;
 constexpr uint8_t kAxp2101IrqStatus1Reg = 0x49;
 constexpr uint8_t kPowerKeyLongPressMask = 1 << 2;
 constexpr uint8_t kPowerKeyShortPressMask = 1 << 3;
-constexpr uint8_t kPowerKeyEventMask = kPowerKeyLongPressMask | kPowerKeyShortPressMask;
+constexpr uint8_t kPowerKeyEventMask = kPowerKeyLongPressMask | kPowerKeyShortPressMask | 0x03;
 
 // 等待后续短按以识别双击、多击；Application 会根据最终击次执行业务。
 constexpr int64_t kPowerKeyMultiClickTimeoutUs = 400 * 1000;
@@ -202,6 +204,9 @@ private:
     esp_timer_handle_t touchpad_timer_;
     esp_timer_handle_t power_key_timer_;
     PowerSaveTimer* power_save_timer_;
+    bool miniapp_key_captured_ = false;
+    bool miniapp_key_held_ = false;
+    int64_t miniapp_key_down_us_ = 0;
     uint8_t pending_power_key_clicks_ = 0;
     int64_t last_power_key_click_time_us_ = 0;
     SpiBusArbiter spi_bus_arbiter_;
@@ -267,6 +272,27 @@ private:
 
     void PollPowerKey() {
         const uint8_t events = pmic_->ReadAndClearPowerKeyEvents();
+#if CONFIG_MINIAPP
+        // AXP2101 REG49[1:0] reports PWRON falling/rising edges. Use these
+        // edges rather than its 1–2.5 s long-press IRQ for the 3 s exit hold.
+        if ((events & 0x02) && MiniappInputActive()) {
+            miniapp_key_captured_ = true;
+            miniapp_key_held_ = false;
+            miniapp_key_down_us_ = esp_timer_get_time();
+            pending_power_key_clicks_ = 0;
+        }
+        if (miniapp_key_captured_) {
+            if (!miniapp_key_held_ && esp_timer_get_time() - miniapp_key_down_us_ >= 3000000) {
+                miniapp_key_held_ = true;
+                if (MiniappInputActive()) miniapp_exit();
+            }
+            if (events & 0x01) {
+                if (!miniapp_key_held_ && MiniappInputActive()) miniapp_button_click("function");
+                miniapp_key_captured_ = false;
+            }
+            return;
+        }
+#endif
 
         // 某些按压过程可能同时留下多个状态位，长按优先，避免再触发短按业务。
         if ((events & kPowerKeyLongPressMask) != 0) {
@@ -296,6 +322,7 @@ private:
     }
 
     void InitializePowerKey() {
+        MiniappRegisterButton("function", "电源键", true);
         pmic_->EnablePowerKeyEvents();
         const esp_timer_create_args_t timer_args = {
             .callback = [](void* arg) {

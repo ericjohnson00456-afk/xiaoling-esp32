@@ -800,6 +800,19 @@ idf_component_register(SRCS ${SOURCES}
                     EMBED_FILES ${MWW_EMBED_FILES}
                     )
 
+# Reuse upstream GPIO definitions and optional physical display metadata.
+execute_process(
+    COMMAND ${PYTHON} "${PROJECT_DIR}/scripts/generate_miniapp_board_config.py"
+            --board-dir "${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_TYPE}"
+            --output "${CMAKE_CURRENT_BINARY_DIR}/generated/miniapp_board_config.h"
+    RESULT_VARIABLE MINIAPP_BOARD_CONFIG_RESULT)
+if(NOT MINIAPP_BOARD_CONFIG_RESULT EQUAL 0)
+    message(FATAL_ERROR "Failed to generate miniapp board configuration")
+endif()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_TYPE}/config.json"
+    "${PROJECT_DIR}/scripts/generate_miniapp_board_config.py")
+
 # Optional dependencies and source options owned by an individual board.
 include("${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_TYPE}/board.cmake" OPTIONAL)
 # Resource packaging is selected centrally from the effective hardware config.

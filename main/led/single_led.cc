@@ -162,3 +162,8 @@ void SingleLed::OnStateChanged() {
             return;
     }
 }
+
+void SingleLed::SetMiniappOutput(bool on) {
+    SetColor(DEFAULT_BRIGHTNESS,DEFAULT_BRIGHTNESS,DEFAULT_BRIGHTNESS);
+    if (on) TurnOn(); else TurnOff();
+}

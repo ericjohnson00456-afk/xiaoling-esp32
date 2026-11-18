@@ -1,3 +1,4 @@
+#include "miniapp/miniapp.h"
 #include "application.h"
 
 #include "alarm/alarm_service.h"
@@ -68,6 +69,9 @@ void Application::ProcessButtonLongPress() {
         AlarmService::GetInstance().Stop(true);
         return;
     }
+#if CONFIG_MINIAPP
+    if (miniapp_is_active()) { miniapp_exit(); return; }
+#endif
     if (CameraService::GetInstance().Exit()) {
         ESP_LOGI(kTag, "Long press: exit camera preview");
         return;
@@ -105,6 +109,12 @@ void Application::ProcessButtonClick(uint8_t click_count) {
         }
         return;
     }
+#if CONFIG_MINIAPP
+    if (miniapp_is_active()) {
+        for (uint8_t i = 0; i < click_count; ++i) miniapp_button_click("function");
+        return;
+    }
+#endif
     auto& camera_service = CameraService::GetInstance();
     if (camera_service.CancelVoiceMcpCountdown("用户通过按键取消拍照")) {
         return;

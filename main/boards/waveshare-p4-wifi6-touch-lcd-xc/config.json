@@ -1,4 +1,5 @@
 {
+    "display_shape": "round",
     "target": "esp32p4",
     "builds": [
         {

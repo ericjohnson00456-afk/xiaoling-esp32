@@ -39,21 +39,18 @@ cd xiaoling-esp32
 
 首次配置时，ESP-IDF Component Manager 会根据 `main/idf_component.yml` 安装组件。工程自动加载 `sdkconfig.defaults`、对应芯片的默认配置和 `sdkconfig.lsplatform`；已有 `sdkconfig` 的设置优先。
 
-### 选择芯片、板型和功能
+### 按板型构建
+
+使用发布脚本选择实际板型并加载对应配置：
 
 ```bash
-idf.py set-target esp32s3
-idf.py menuconfig
+python scripts/release.py --list-boards
+python scripts/release.py m5stack-core-s3-se
 ```
 
-在 `Xiaoling Device` 菜单中配置：
+脚本会重建 `build/` 并修改生成的 `sdkconfig`。已有同名发布 ZIP 时会跳过构建，验证新代码前请先移走旧产物。Flash 容量、Quad/Octal PSRAM 和摄像头等配置必须与实物匹配；仅传入 `BOARD_TYPE` 不能替代实际 Kconfig 的板型选择。
 
-- `Board Type`：选择实际开发板；
-- `LSPlatform 选项 → Product ID`：使用内置小聆应用，或填写自建应用的 Product ID/Secret；
-- `配网模式`：选择 BLE 配网或热点配网；
-- `Flash Assets`、默认语言、唤醒词、摄像头等功能。
-
-板型由 `menuconfig` 中的 `Board Type` 选择，或由下文的发布脚本写入配置。部分板型还需要匹配的板级默认值，例如 CoreS3 的 Quad PSRAM 配置；具体操作见 [SDK 配置说明](docs/xiaoling.md)。
+自建应用及功能配置见 [SDK 配置说明](docs/xiaoling.md)。
 
 设备 NVS 中保存的 `user/pid` 和 `user/sid` 分别优先于固件内置的 Product ID 和 Product Secret。普通 `idf.py flash` 保留这些配置；切换应用时同时更新设备保存的应用身份。
 

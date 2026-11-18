@@ -18,6 +18,8 @@ class GpioLed : public Led {
     virtual ~GpioLed();
 
     void OnStateChanged() override;
+    bool SupportsMiniapp() const override { return true; }
+    void SetMiniappOutput(bool on) override;
     void TurnOn();
     void TurnOff();
     void SetBrightness(uint8_t brightness);

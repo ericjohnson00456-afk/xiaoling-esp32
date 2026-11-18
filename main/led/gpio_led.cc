@@ -275,3 +275,8 @@ void GpioLed::EventTask(void* arg) {
         led->OnFadeEnd();
     }
 }
+
+void GpioLed::SetMiniappOutput(bool on) {
+    SetBrightness(DEFAULT_BRIGHTNESS);
+    if (on) TurnOn(); else TurnOff();
+}

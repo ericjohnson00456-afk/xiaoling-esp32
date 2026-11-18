@@ -1,3 +1,4 @@
+#include "miniapp_board_config.h"
 #include "board.h"
 #include "display/display.h"
 #include "display/oled_display.h"
@@ -187,3 +188,5 @@ std::string Board::GetSystemInfoJson() {
 }
 
 
+
+const char* Board::GetDisplayShape() const { return MINIAPP_BOARD_DISPLAY_SHAPE; }

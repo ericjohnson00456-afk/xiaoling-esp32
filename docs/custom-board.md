@@ -451,3 +451,12 @@ python scripts/release.py my-custom-board
 - ESP-IDF 文档: https://docs.espressif.com/projects/esp-idf/
 - LVGL 文档: https://docs.lvgl.io/
 - ESP-SR 文档: https://github.com/espressif/esp-sr
+
+
+## Lua 小应用能力
+
+公共小应用运行时复用现有 `Display`、`Button`、`Led` 和音频驱动，不需要在每个板型增加启动代码。屏幕尺寸来自实际 Display；圆屏在本板型 `config.json` 中增加 `"display_shape": "round"`，未声明时为矩形。
+
+普通 GPIO 按键从已有 `config.h` 定义及实际 Button 构造过程注册。BOOT 为 `function`；特殊 PMIC、ADC、自定义输入通过 `Button::SetMiniapp` 或公共小应用输入接口适配。扩展应默认不支持，不能虚报不存在的按键或灯。功能键短按投递点击，持续 3 秒退出；正常系统行为在退出后恢复。
+
+无 PSRAM 或使用 Nano printf 的板型默认不启用 Lua，保留原有固件功能和硬件能力查询。使用 `python scripts/release.py <板型>` 构建并检查生成的实际板型与内存配置，详见 [Lua 小应用](miniapp.md)。

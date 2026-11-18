@@ -14,6 +14,8 @@ public:
     virtual ~SingleLed();
 
     void OnStateChanged() override;
+    bool SupportsMiniapp() const override { return true; }
+    void SetMiniappOutput(bool on) override;
 
 private:
     std::mutex mutex_;
