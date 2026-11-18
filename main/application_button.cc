@@ -160,8 +160,7 @@ void Application::ProcessButtonClick(uint8_t click_count) {
             break;
         }
         case 4:
-            // 四击：切换 UI 语言。
-            Ui::ToggleLanguage();
+            // 四击保留，暂不定义功能。
             break;
         case 5:
             // 五击：清除已保存的 Wi-Fi，断开小聆并重新进入配网。
