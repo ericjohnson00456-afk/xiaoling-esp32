@@ -220,8 +220,10 @@ private:
         auto* owner = static_cast<TtsSubtitleFetcher*>(arg);
         bool external_stack = false;
         if (owner != nullptr) {
-            owner->WorkerLoop();
+            // WorkerLoop publishes completion and may release the last owner.
+            // Save this task's allocation before a subsequent worker can start.
             external_stack = owner->worker_stack_external_;
+            owner->WorkerLoop();
         }
         PsramTask::Delete(external_stack);
     }
