@@ -15,6 +15,7 @@
 
 #include "playback_backend.h"
 #include "decode_yield_policy.h"
+#include "audio/playback_memory_policy.h"
 
 class EspSimplePlayerBackend final : public PlaybackBackend {
 public:
@@ -71,6 +72,7 @@ private:
     static void CommandTaskEntry(void* arg);
 
     AudioOutput* audio_output_ = nullptr;
+    PlaybackMemoryPolicy memory_policy_ = PlaybackMemoryPolicy::For(0, false);
     // prev 回调在流水线启动前安装端口代理；每个 backend 只有一条解码流水线。
     port_acquire original_output_acquire_ = nullptr;
     port_release original_output_release_ = nullptr;

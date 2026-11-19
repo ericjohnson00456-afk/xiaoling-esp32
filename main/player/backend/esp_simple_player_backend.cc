@@ -49,8 +49,6 @@ constexpr size_t kStreamingHttpBufferSize = 32 * 1024;
 // especially important when an SD card shares its SPI bus with the LCD: a
 // synchronous fread/decode chain cannot sustain high-bitrate tracks while
 // display flushes are active.
-constexpr size_t kFileReadSize = 16 * 1024;
-constexpr size_t kFileBufferSize = 256 * 1024;
 constexpr size_t kFileInputStackSize = 4 * 1024;
 constexpr char kBufferedFileIoName[] = "io_file_buffered";
 // 建链阶段由 HTTP 客户端先在 10 秒返回，外层 12 秒看门狗负责兜底；请求
@@ -154,8 +152,8 @@ int EspSimplePlayerBackend::ConfigureInputIo(esp_asp_handle_t handle, void* ctx)
         ESP_LOGI(TAG,
                  "文件输入任务已配置: read=%u, buffer=%u bytes, "
                  "priority=%u, core=%d",
-                 static_cast<unsigned>(kFileReadSize),
-                 static_cast<unsigned>(kFileBufferSize),
+                 static_cast<unsigned>(engine->memory_policy_.file_read_bytes),
+                 static_cast<unsigned>(engine->memory_policy_.file_buffer_bytes),
                  static_cast<unsigned>(kPlayerInputPriority),
                  engine->file_input_->io_cfg.thread.core);
         return ESP_GMF_ERR_OK;
@@ -177,7 +175,8 @@ int EspSimplePlayerBackend::ConfigureInputIo(esp_asp_handle_t handle, void* ctx)
         io->io_cfg.thread.core = kPlayerCommandCore;
         io->io_cfg.thread.stack_in_ext = true;
         io->io_cfg.buffer_cfg.io_size = kStreamingHttpReadSize;
-        io->io_cfg.buffer_cfg.buffer_size = kStreamingHttpBufferSize;
+        io->io_cfg.buffer_cfg.buffer_size = heap_caps_get_total_size(MALLOC_CAP_SPIRAM) != 0
+                                               ? kStreamingHttpBufferSize : 8 * 1024;
         // 在音频 TCP/TLS 已连接且 GET 已写出之后通知上层。字幕连接可从
         // 此时开始，不会与音频争抢首个 TLS 建连，同时能利用云端生成
         // 首批音频前的等待窗口。
@@ -286,7 +285,7 @@ bool EspSimplePlayerBackend::Initialize(AudioOutput* audio_output, EventCallback
     // 避免与显示、AFE 和唤醒任务争用同一个核心。
     config.task_prio = kPlayerDecodePriority;
     config.task_stack = 8 * 1024;
-    config.task_core = Board::GetInstance().IsSdCardSpiSharedWithDisplay() ? 0 : 1;
+    config.task_core = Board::GetInstance().IsSdCardSpiSharedWithDisplay() ? 0 : kPlayerCommandCore;
     // 解码任务使用 8 KiB 栈，并放在 PSRAM 中，以便在多个 TLS 流并发时
     // 为 Wi-Fi/lwIP 和 DMA 保留紧张的片上 SRAM。
     config.task_stack_in_ext = true;
@@ -312,8 +311,11 @@ bool EspSimplePlayerBackend::Initialize(AudioOutput* audio_output, EventCallback
     file_cfg.io_cfg.thread.core =
         Board::GetInstance().IsSdCardSpiSharedWithDisplay() ? 0 : kPlayerCommandCore;
     file_cfg.io_cfg.thread.stack_in_ext = true;
-    file_cfg.io_cfg.buffer_cfg.io_size = kFileReadSize;
-    file_cfg.io_cfg.buffer_cfg.buffer_size = kFileBufferSize;
+    memory_policy_ = PlaybackMemoryPolicy::For(
+        heap_caps_get_total_size(MALLOC_CAP_SPIRAM),
+        Board::GetInstance().IsSdCardSpiSharedWithDisplay());
+    file_cfg.io_cfg.buffer_cfg.io_size = memory_policy_.file_read_bytes;
+    file_cfg.io_cfg.buffer_cfg.buffer_size = memory_policy_.file_buffer_bytes;
 
     esp_gmf_io_handle_t file_io = nullptr;
     auto file_result = esp_gmf_io_file_init(&file_cfg, &file_io);
@@ -434,23 +436,23 @@ bool EspSimplePlayerBackend::DoPlay(const PlaybackRequest& request) {
     if (!audio_output_->BeginPlayback(AudioPlaybackConfig{
         .session_id = request.session_id,
         .initial_prebuffer_bytes = local_file
-                                       ? kAudioLocalFilePrebufferBytes
+                                       ? memory_policy_.local_prebuffer_bytes
                                        : (local_prompt ? kAudioPromptInitialPrebufferBytes
                                           : request.channel == PlaybackChannel::kTts
                                               ? kAudioTtsInitialPrebufferBytes
                                               : kAudioPlayerInitialPrebufferBytes),
         .recovery_prebuffer_bytes = local_file
-                                        ? kAudioLocalFilePrebufferBytes
+                                        ? memory_policy_.local_prebuffer_bytes
                                         : (local_prompt ? kAudioPromptRecoveryPrebufferBytes
                                            : tts ? kAudioTtsRecoveryPrebufferBytes
                                                  : kAudioPlayerInitialPrebufferBytes),
         .prebuffer_max_wait_ms = tts ? kAudioTtsPrebufferMaxWaitMs : 0,
         .underrun_grace_ms = tts ? kAudioTtsUnderrunGraceMs : 0,
         .max_buffered_pcm_bytes = request.pcm_buffer_limit ? request.pcm_buffer_limit : local_file
-                                      ? kAudioLocalFileMaxBufferedBytes
+                                      ? memory_policy_.local_max_bytes
                                       : (tts ? kAudioTtsMaxBufferedPcmBytes : 0),
         .producer_resume_pcm_bytes = request.pcm_buffer_limit ? request.pcm_buffer_limit / 2 : local_file
-                                         ? kAudioLocalFileProducerResumeBytes
+                                         ? memory_policy_.local_resume_bytes
                                          : (tts ? kAudioTtsProducerResumeBytes : 0),
     })) {
         command_pending_playback_ = false;

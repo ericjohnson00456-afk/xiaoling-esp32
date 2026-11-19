@@ -1,6 +1,7 @@
 #include "audio_service.h"
 #include "playback_session_guard.h"
 #include "playback_stream_policy.h"
+#include "playback_memory_policy.h"
 #include "audio_yield_policy.h"
 #include "input_discard_policy.h"
 #include "input_gain_policy.h"
@@ -129,8 +130,17 @@ bool AudioTask::AllocatePlayerPcm(size_t samples) {
         return true;
     }
 
+    const bool external = heap_caps_get_total_size(MALLOC_CAP_SPIRAM) != 0;
+    if (samples > SIZE_MAX / sizeof(int16_t) ||
+        (!external && samples > PlaybackMemoryPolicy::kInternalPcmLimit / sizeof(int16_t))) {
+        return false;
+    }
+    // On PSRAM boards, exhaustion must not spill a large PCM queue into DMA
+    // memory. Internal-only boards use the bounded queue configured below.
+    const uint32_t caps = MALLOC_CAP_8BIT |
+                          (external ? MALLOC_CAP_SPIRAM : MALLOC_CAP_INTERNAL);
     player_pcm = static_cast<int16_t*>(heap_caps_aligned_alloc(
-        16, samples * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+        16, samples * sizeof(int16_t), caps));
     if (player_pcm == nullptr) {
         return false;
     }
@@ -1148,14 +1158,14 @@ bool AudioService::PushPcm(const uint8_t* data, size_t size, int sample_rate,
             }
             const int target_size = player_resampler_.GetOutputSamples(input_samples);
             if (target_size <= 0 || !task->AllocatePlayerPcm(target_size)) {
-                ESP_LOGE(TAG, "播放器 PCM PSRAM 分配失败: samples=%d", target_size);
+                ESP_LOGE(TAG, "播放器 PCM 分配失败: samples=%d", target_size);
                 return false;
             }
             player_resampler_.Process(reinterpret_cast<const int16_t*>(data), input_samples,
                                       task->player_pcm);
         } else {
             if (!task->AllocatePlayerPcm(input_samples)) {
-                ESP_LOGE(TAG, "播放器 PCM PSRAM 分配失败: bytes=%u",
+                ESP_LOGE(TAG, "播放器 PCM 分配失败: bytes=%u",
                          static_cast<unsigned>(size));
                 return false;
             }
@@ -1242,6 +1252,23 @@ bool AudioService::BeginPlayback(const AudioPlaybackConfig& config) {
                 ? std::min(config.producer_resume_pcm_bytes,
                            config.max_buffered_pcm_bytes)
                 : config.max_buffered_pcm_bytes;
+        if (heap_caps_get_total_size(MALLOC_CAP_SPIRAM) == 0) {
+            constexpr size_t limit = PlaybackMemoryPolicy::kInternalPcmLimit;
+            player_max_buffered_pcm_bytes_ = player_max_buffered_pcm_bytes_ == 0
+                ? limit : std::min(player_max_buffered_pcm_bytes_, limit);
+            player_initial_prebuffer_bytes_ = std::min(
+                player_initial_prebuffer_bytes_, PlaybackMemoryPolicy::kInternalPrebuffer);
+            player_recovery_prebuffer_bytes_ = std::min(
+                player_recovery_prebuffer_bytes_, PlaybackMemoryPolicy::kInternalPrebuffer);
+            player_producer_resume_pcm_bytes_ = std::min(
+                player_producer_resume_pcm_bytes_, player_max_buffered_pcm_bytes_ / 2);
+        }
+        if (player_max_buffered_pcm_bytes_ != 0) {
+            player_initial_prebuffer_bytes_ = std::min(
+                player_initial_prebuffer_bytes_, player_max_buffered_pcm_bytes_);
+            player_recovery_prebuffer_bytes_ = std::min(
+                player_recovery_prebuffer_bytes_, player_max_buffered_pcm_bytes_);
+        }
         ESP_LOGI(TAG,
                  "播放器 PCM 水位: session=%lu, start=%u, recovery=%u, resume=%u, max=%u, wait=%lums",
                  static_cast<unsigned long>(config.session_id),
