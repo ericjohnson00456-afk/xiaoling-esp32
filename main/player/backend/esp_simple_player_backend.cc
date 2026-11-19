@@ -168,11 +168,11 @@ int EspSimplePlayerBackend::ConfigureInputIo(esp_asp_handle_t handle, void* ctx)
         // 在 esp_gmf_pipeline_run() 打开 IO 并创建任务、数据总线之前配置克隆出的
         // Pipeline IO。这里只覆盖播放实例的 HTTP 参数，不修改 managed_components。
         auto* io = static_cast<esp_gmf_io_t*>(input);
-        // 网络拉流任务需要先于解码和输出任务准备数据，同时避免 TTS 网络工作
-        // 占用运行 AFE 的 0 号核心。
+        // HTTP 拉流放到 CPU0，避免与 CPU1 上的 AFE、唤醒和显示争用。
+        // 保持低于音频算法的优先级，并保留 PSRAM 栈和流式缓冲。
         const auto input_priority = engine->tts_decode_.load() ? 7 : kPlayerInputPriority;
         io->io_cfg.thread.prio = input_priority;
-        io->io_cfg.thread.core = kPlayerCommandCore;
+        io->io_cfg.thread.core = 0;
         io->io_cfg.thread.stack_in_ext = true;
         io->io_cfg.buffer_cfg.io_size = kStreamingHttpReadSize;
         io->io_cfg.buffer_cfg.buffer_size = heap_caps_get_total_size(MALLOC_CAP_SPIRAM) != 0
@@ -197,7 +197,7 @@ int EspSimplePlayerBackend::ConfigureInputIo(esp_asp_handle_t handle, void* ctx)
                  static_cast<unsigned>(kStreamingHttpReadSize),
                  static_cast<unsigned>(kStreamingHttpBufferSize),
                  static_cast<unsigned>(input_priority),
-                 kPlayerCommandCore);
+                 io->io_cfg.thread.core);
         // 保留组件原有的 acquire_read 实现。上面的回调只观察请求生命周期，
         // 这里保存的后端上下文与播放器句柄具有相同的生命周期。
         return ESP_GMF_ERR_OK;
