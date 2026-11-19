@@ -75,10 +75,14 @@ int HomePresenter::Show(const UiNavScreen* screen, void* data) {
     if (presenter == nullptr || presenter->view_ == nullptr) {
         return -1;
     }
+    presenter->visible_ = true;
     presenter->view_->Show();
     presenter->SetEmotion(presenter->last_emotion_);
-    presenter->SetChatMessage(presenter->last_chat_role_, presenter->last_chat_text_);
-    presenter->SetText(presenter->last_text_);
+    presenter->view_->SetChatMessage(presenter->last_chat_role_, presenter->last_chat_text_);
+    if (!presenter->last_text_.empty()) {
+        presenter->view_->SetText(presenter->last_text_);
+    }
+    presenter->view_->SetSubtitleText(presenter->last_subtitle_text_, presenter->subtitle_max_lines_);
     presenter->SetWifiIcon(presenter->wifi_icon_);
     presenter->SetTfCardPresent(presenter->tf_card_present_);
     presenter->SetAlarmActive(presenter->alarm_active_);
@@ -89,8 +93,12 @@ int HomePresenter::Show(const UiNavScreen* screen, void* data) {
 #ifdef CONFIG_LSPLATFORM
     if (presenter->image_ != nullptr) {
         presenter->view_->ShowImage(std::make_unique<SharedLvglImage>(presenter->image_));
+    } else {
+        presenter->view_->HideImage();
     }
 #endif
+    presenter->voice_subtitles_.SetVisible(true);
+    presenter->StartBannerTimer();
     return 0;
 }
 
@@ -98,6 +106,9 @@ int HomePresenter::Pause(const UiNavScreen* screen, void* data) {
     (void)screen;
     auto* presenter = static_cast<HomePresenter*>(data);
     if (presenter != nullptr && presenter->view_ != nullptr) {
+        presenter->visible_ = false;
+        presenter->voice_subtitles_.SetVisible(false);
+        presenter->StopBannerTimer();
         presenter->view_->Hide();
     }
     return 0;
@@ -113,6 +124,8 @@ int HomePresenter::Close(const UiNavScreen* screen, void* data) {
     if (presenter == nullptr) {
         return 0;
     }
+    presenter->visible_ = false;
+    presenter->voice_subtitles_.SetVisible(false);
     presenter->voice_subtitles_.Stop();
     presenter->StopBannerTimer();
     presenter->view_.reset();
@@ -124,13 +137,13 @@ int HomePresenter::Close(const UiNavScreen* screen, void* data) {
 
 void HomePresenter::SetEmotion(std::string emotion) {
     last_emotion_ = std::move(emotion);
-    if (view_ != nullptr && !last_emotion_.empty()) {
+    if (visible_ && view_ != nullptr && !last_emotion_.empty()) {
         view_->SetEmotion(last_emotion_);
     }
 }
 
 void HomePresenter::ShowEmotionOnce(std::string emotion) {
-    if (view_ != nullptr) {
+    if (visible_ && view_ != nullptr) {
         view_->ShowEmotionOnce(emotion);
     }
 }
@@ -142,50 +155,55 @@ void HomePresenter::SetPowerSaveMode(bool enabled) {
 
 void HomePresenter::SetText(std::string text) {
     last_text_ = std::move(text);
-    if (view_ != nullptr && !last_text_.empty()) {
+    last_subtitle_text_.clear();
+    if (visible_ && view_ != nullptr && !last_text_.empty()) {
         view_->SetText(last_text_);
     }
 }
 
 void HomePresenter::SetSubtitleText(std::string text, uint8_t max_lines) {
+    last_subtitle_text_ = std::move(text);
+    subtitle_max_lines_ = max_lines;
+    if (!visible_) return;
     ESP_LOGI(TAG, "更新 Home 字幕: bytes=%u, max_lines=%u, top_page=%d, view=%d",
-             static_cast<unsigned>(text.size()),
+             static_cast<unsigned>(last_subtitle_text_.size()),
              static_cast<unsigned>(max_lines),
              UiManager::GetInstance().TopScreenId(), view_ != nullptr ? 1 : 0);
     if (view_ != nullptr) {
-        view_->SetSubtitleText(text, max_lines);
+        view_->SetSubtitleText(last_subtitle_text_, max_lines);
     }
 }
 
 void HomePresenter::SetChatMessage(std::string role, std::string text) {
+    last_subtitle_text_.clear();
     last_chat_role_ = role;
     last_chat_text_ = text;
-    if (view_ != nullptr) {
+    if (visible_ && view_ != nullptr) {
         view_->SetChatMessage(std::move(role), std::move(text));
     }
 }
 
 void HomePresenter::ShowNotification(std::string text, int duration_ms) {
-    if (view_ != nullptr && !text.empty()) {
+    if (visible_ && view_ != nullptr && !text.empty()) {
         view_->ShowNotification(text, duration_ms);
     }
 }
 
 void HomePresenter::SetWifiIcon(std::string icon) {
     wifi_icon_ = std::move(icon);
-    if (view_ != nullptr) {
+    if (visible_ && view_ != nullptr) {
         view_->SetWifiIcon(wifi_icon_);
     }
 }
 
 void HomePresenter::SetTfCardPresent(bool present) {
     tf_card_present_ = present;
-    if (view_ != nullptr) view_->SetTfCardPresent(present);
+    if (visible_ && view_ != nullptr) view_->SetTfCardPresent(present);
 }
 
 void HomePresenter::SetAlarmActive(bool active) {
     alarm_active_ = active;
-    if (view_ != nullptr) {
+    if (visible_ && view_ != nullptr) {
         view_->SetAlarmActive(active);
     }
 }
@@ -206,7 +224,7 @@ void HomePresenter::SetChargingAnimationReady(bool ready) {
     }
     battery_level_ = level;
     battery_charging_ = charging;
-    if (view_ != nullptr) {
+    if (visible_ && view_ != nullptr) {
         view_->SetBattery(battery_level_, battery_charging_);
     }
 }
@@ -224,7 +242,7 @@ void HomePresenter::UpdateBattery() {
     const bool charging_started = charging && !battery_charging_;
     battery_level_ = level;
     battery_charging_ = charging;
-    if (view_ != nullptr) {
+    if (visible_ && view_ != nullptr) {
         view_->SetBattery(battery_level_, battery_charging_);
         if (charging_started && charging_animation_ready_) {
             view_->ShowEmotionOnce("充电");
@@ -239,7 +257,7 @@ void HomePresenter::SetStatus(std::string status, bool standby) {
     }
     status_text_ = std::move(status);
     standby_ = standby;
-    if (view_ != nullptr) {
+    if (visible_ && view_ != nullptr) {
         view_->SetStatus(status_text_);
         RenderMusicTrack();
     }
@@ -263,7 +281,7 @@ void HomePresenter::SetMusicPaused(bool paused) {
 }
 
 void HomePresenter::RenderMusicTrack() {
-    if (view_ != nullptr) {
+    if (visible_ && view_ != nullptr) {
         view_->SetMusicTrack(
             music_track_,
             standby_ && !voice_subtitles_.IsTtsPlaying() &&
@@ -273,21 +291,21 @@ void HomePresenter::RenderMusicTrack() {
 
 void HomePresenter::SetTime(std::string time) {
     time_text_ = std::move(time);
-    if (view_ != nullptr && !time_text_.empty()) {
+    if (visible_ && view_ != nullptr && !time_text_.empty()) {
         view_->SetTime(time_text_);
     }
 }
 
 void HomePresenter::SetDuplexMode(DuplexMode mode) {
     duplex_mode_ = mode;
-    if (duplex_visible_ && view_ != nullptr) {
+    if (visible_ && duplex_visible_ && view_ != nullptr) {
         view_->SetDuplexMode(mode);
     }
 }
 
 void HomePresenter::SetDuplexVisible(bool visible) {
     duplex_visible_ = visible;
-    if (view_ != nullptr) {
+    if (visible_ && view_ != nullptr) {
         view_->SetDuplexMode(visible ? duplex_mode_ : DuplexMode::kSimplex);
     }
 }
@@ -298,14 +316,14 @@ void HomePresenter::SetImage(std::unique_ptr<LvglImage> image) {
         return;
     }
     image_ = std::shared_ptr<LvglImage>(std::move(image));
-    if (view_ != nullptr && UiManager::GetInstance().TopScreenId() == UI_PAGE_HOME) {
+    if (visible_ && view_ != nullptr && UiManager::GetInstance().TopScreenId() == UI_PAGE_HOME) {
         view_->ShowImage(std::make_unique<SharedLvglImage>(image_));
     }
 }
 
 void HomePresenter::ClearImage() {
     image_.reset();
-    if (view_ != nullptr) {
+    if (visible_ && view_ != nullptr) {
         view_->HideImage();
     }
 }
@@ -363,6 +381,7 @@ std::string HomePresenter::SubstituteWakeWord(const std::string& text) const {
 
 void HomePresenter::SetBanners(std::vector<std::string> texts, uint32_t interval_ms) {
     StopBannerTimer();
+    banner_interval_ms_ = interval_ms;
     bool has_banners = false;
     std::string first_text;
     {
@@ -382,11 +401,16 @@ void HomePresenter::SetBanners(std::vector<std::string> texts, uint32_t interval
 
     // Show the first banner immediately. Waiting for the first periodic tick
     // makes startup appear blocked by the role-config image download.
-    if (!first_text.empty() && view_ != nullptr) {
-        view_->SetText(first_text);
-        ESP_LOGI(TAG, "首条 Banner 已显示");
+    if (!first_text.empty()) {
+        SetText(first_text);
+        if (visible_) ESP_LOGI(TAG, "首条 Banner 已显示");
     }
 
+    StartBannerTimer();
+}
+
+void HomePresenter::StartBannerTimer() {
+    if (!visible_ || banner_timer_ != nullptr || banner_texts_.empty()) return;
     esp_timer_create_args_t args = {
         .callback = &HomePresenter::BannerTimerCallback,
         .arg = this,
@@ -399,7 +423,7 @@ void HomePresenter::SetBanners(std::vector<std::string> texts, uint32_t interval
         banner_timer_ = nullptr;
         return;
     }
-    esp_timer_start_periodic(banner_timer_, static_cast<uint64_t>(interval_ms) * 1000);
+    esp_timer_start_periodic(banner_timer_, static_cast<uint64_t>(banner_interval_ms_) * 1000);
 }
 
 void HomePresenter::StopBannerTimer() {
@@ -419,7 +443,7 @@ void HomePresenter::OnBannerTick() {
         auto& home = HomePresenter::GetInstance();
         // 歌曲名称占用待命内容区域时暂停 Banner。这里在 UI 队列中再次
         // 判断，避免定时器投递后、命令执行前恰好发生曲目切换。
-        if (home.view_ == nullptr || !home.standby_ ||
+        if (!home.visible_ || home.view_ == nullptr || !home.standby_ ||
             (!home.music_paused_ && !home.music_track_.name.empty()) ||
             DeviceStatus::GetState() != kDeviceStateIdle) {
             return;
@@ -434,6 +458,6 @@ void HomePresenter::OnBannerTick() {
             home.banner_index_ =
                 (home.banner_index_ + 1) % home.banner_texts_.size();
         }
-        home.view_->SetText(text);
+        home.SetText(std::move(text));
     });
 }

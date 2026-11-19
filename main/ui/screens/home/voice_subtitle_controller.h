@@ -18,6 +18,7 @@ public:
 
     void Start();
     void Stop();
+    void SetVisible(bool visible);
     bool IsTtsPlaying() const { return subtitle_audio_started_; }
 
 private:
@@ -49,9 +50,10 @@ private:
     void ScheduleSubtitle();
     void AppendPlainSubtitle(const std::string& text);
     void BuildPlainSubtitleCues(bool flush_pending);
-    void SchedulePlainSubtitle();
+    void SchedulePlainSubtitle(bool force = false);
 
     HomePresenter& presenter_;
+    std::atomic_bool visible_{false};
     std::vector<uint32_t> event_subscriptions_;
     std::vector<SubtitleSegment> subtitle_segments_;
     size_t subtitle_index_ = 0;

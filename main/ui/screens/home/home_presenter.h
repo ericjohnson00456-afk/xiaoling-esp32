@@ -65,6 +65,7 @@ private:
 
     void SetBanners(std::vector<std::string> texts, uint32_t interval_ms);
     std::string SubstituteWakeWord(const std::string& text) const;
+    void StartBannerTimer();
     void StopBannerTimer();
     void OnBannerTick();
     void RenderMusicTrack();
@@ -72,9 +73,11 @@ private:
 
     std::unique_ptr<HomeView> view_;
     VoiceSubtitleController voice_subtitles_;
+    bool visible_ = false;
     std::mutex banner_mutex_;
     std::vector<std::string> banner_texts_;
     size_t banner_index_ = 0;
+    uint32_t banner_interval_ms_ = 3000;
     esp_timer_handle_t banner_timer_ = nullptr;
     mutable std::mutex wake_word_mutex_;
     std::string wake_word_;
@@ -82,6 +85,8 @@ private:
     std::string last_chat_role_;
     std::string last_chat_text_;
     std::string last_text_;
+    std::string last_subtitle_text_;
+    uint8_t subtitle_max_lines_ = 3;
     std::string wifi_icon_;
     bool tf_card_present_ = false;
     bool alarm_active_ = false;

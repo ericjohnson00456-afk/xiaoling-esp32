@@ -236,6 +236,20 @@ void VoiceSubtitleController::Stop() {
     tts_progress_dispatch_pending_.store(false);
 }
 
+void VoiceSubtitleController::SetVisible(bool visible) {
+    visible_.store(visible);
+    if (!visible) return;
+    // 隐藏期间只接收文本与音频时钟；恢复时直接显示当前句段。
+    subtitle_audio_clock_ms_ = std::max(
+        subtitle_audio_clock_ms_, latest_tts_audio_clock_ms_.load());
+    subtitle_page_shown_ = false;
+    if (plain_subtitle_mode_) {
+        SchedulePlainSubtitle(true);
+    } else {
+        ScheduleSubtitle();
+    }
+}
+
 void VoiceSubtitleController::QueueIatText(std::string text, AppEvent::EpochSnapshot scope) {
     if (text.empty()) return;
     bool schedule = false;
@@ -304,6 +318,7 @@ void VoiceSubtitleController::QueueTtsAudioProgress(uint32_t audio_clock_ms) {
                observed, audio_clock_ms, std::memory_order_release,
                std::memory_order_relaxed)) {
     }
+    if (!visible_.load()) return;
     bool expected = false;
     if (!tts_progress_dispatch_pending_.compare_exchange_strong(expected, true)) return;
     const uint32_t generation = tts_progress_generation_.load();
@@ -336,7 +351,7 @@ void VoiceSubtitleController::ResetSubtitles(bool clear_text) {
     plain_subtitle_next_due_ms_ = 0;
     plain_subtitle_mode_ = false;
     if (clear_text && presenter_.view_ != nullptr) {
-        presenter_.view_->SetSubtitleText("");
+        presenter_.SetSubtitleText("");
     }
 }
 
@@ -464,6 +479,7 @@ void VoiceSubtitleController::OnTtsStopped() {
 }
 
 void VoiceSubtitleController::ScheduleSubtitle() {
+    if (!visible_.load()) return;
     if (plain_subtitle_mode_) {
         SchedulePlainSubtitle();
         return;
@@ -489,7 +505,7 @@ void VoiceSubtitleController::ScheduleSubtitle() {
             subtitle_pages_, segment.start_ms, segment.end_ms, subtitle_audio_clock_ms_);
         if (subtitle_page_shown_ && subtitle_page_index_ == page_index) return;
         const auto& page = subtitle_pages_[page_index];
-        presenter_.view_->SetSubtitleText(
+        presenter_.SetSubtitleText(
             segment.text.substr(page.start_byte, page.end_byte - page.start_byte), 3);
         subtitle_page_index_ = page_index;
         subtitle_page_shown_ = true;
@@ -542,6 +558,8 @@ void VoiceSubtitleController::AppendPlainSubtitle(const std::string& text) {
 }
 
 void VoiceSubtitleController::BuildPlainSubtitleCues(bool flush_pending) {
+    subtitle_audio_clock_ms_ = std::max(
+        subtitle_audio_clock_ms_, latest_tts_audio_clock_ms_.load());
     // 优先按完整句子切分。逗号、顿号和冒号只影响时长，不再生成过碎的
     // 字幕片段；若云端文本迟迟没有句末标点，则在约两行处提前切分，
     // 避免下一条字幕无限等待。
@@ -609,7 +627,8 @@ void VoiceSubtitleController::BuildPlainSubtitleCues(bool flush_pending) {
     }
 }
 
-void VoiceSubtitleController::SchedulePlainSubtitle() {
+void VoiceSubtitleController::SchedulePlainSubtitle(bool force) {
+    if (!visible_.load()) return;
     if (iat_text_visible_ || !subtitle_audio_started_ ||
         !plain_subtitle_mode_ || presenter_.view_ == nullptr) {
         return;
@@ -625,10 +644,10 @@ void VoiceSubtitleController::SchedulePlainSubtitle() {
         ++plain_subtitle_cue_index_;
     }
     if (plain_subtitle_visible_bytes_ == 0 ||
-        plain_subtitle_visible_bytes_ == previous_visible) {
+        (!force && plain_subtitle_visible_bytes_ == previous_visible)) {
         return;
     }
-    presenter_.view_->SetSubtitleText(
+    presenter_.SetSubtitleText(
         plain_subtitle_text_.substr(
             plain_subtitle_visible_start_byte_,
             plain_subtitle_visible_bytes_ - plain_subtitle_visible_start_byte_),

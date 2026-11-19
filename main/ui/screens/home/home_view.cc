@@ -468,6 +468,9 @@ void HomeView::Show() {
         DisplayLockGuard lock(display_);
         if (lock.locked()) {
             lv_obj_remove_flag(root_, LV_OBJ_FLAG_HIDDEN);
+            for (auto* label : {status_label_, music_title_label_}) {
+                if (label != nullptr) lv_label_set_long_mode(label, LV_LABEL_LONG_SCROLL_CIRCULAR);
+            }
         }
     } else if (display_ != nullptr) {
         display_->SetHomeVisible(true);
@@ -479,6 +482,17 @@ void HomeView::Hide() {
         DisplayLockGuard lock(display_);
         if (lock.locked()) {
             lv_obj_add_flag(root_, LV_OBJ_FLAG_HIDDEN);
+            if (animation_player_ != nullptr) {
+                animation_player_->Stop();
+            }
+            one_shot_emotion_active_ = false;
+            for (auto* label : {status_label_, music_title_label_}) {
+                if (label != nullptr) lv_label_set_long_mode(label, LV_LABEL_LONG_CLIP);
+            }
+            if (notification_label_ != nullptr) lv_label_set_text(notification_label_, "");
+            if (notification_timer_ != nullptr) {
+                NotificationTimerCallback(notification_timer_);
+            }
         }
     } else if (display_ != nullptr) {
         display_->SetHomeVisible(false);
@@ -509,6 +523,10 @@ void HomeView::RenderEmotion(const std::string& emotion, bool one_shot, uint32_t
 
     DisplayLockGuard lock(display_);
     if (!lock.locked()) {
+        return;
+    }
+    // 隐藏后已投递的单次动画回调也不能重新启动播放器。
+    if (root_ != nullptr && lv_obj_has_flag(root_, LV_OBJ_FLAG_HIDDEN)) {
         return;
     }
     if (image_visible_) {
