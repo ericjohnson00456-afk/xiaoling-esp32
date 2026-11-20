@@ -1,7 +1,3 @@
-#include "miniapp/miniapp.h"
-#if CONFIG_MINIAPP
-#include "miniapp/miniapp_install.h"
-#endif
 /* MCP 服务端：协议分发与工具调度。具体工具实现位于 mcp/tools 目录。 */
 
 #include "mcp_server.h"
@@ -109,15 +105,19 @@ void McpServer::AddTool(McpTool *tool) {
 void McpServer::AddTool(
     const std::string &name, const std::string &description,
     const PropertyList &properties,
-    std::function<ReturnValue(const PropertyList &)> callback) {
-  AddTool(new McpTool(name, description, properties, std::move(callback)));
+    std::function<ReturnValue(const PropertyList &)> callback,
+    McpToolArgumentValidator validator) {
+  AddTool(new McpTool(name, description, properties, std::move(callback),
+                      std::move(validator)));
 }
 
 void McpServer::AddAsyncTool(const std::string &name,
                              const std::string &description,
                              const PropertyList &properties,
-                             McpAsyncToolCallback callback) {
-  AddTool(new McpTool(name, description, properties, std::move(callback)));
+                             McpAsyncToolCallback callback,
+                             McpToolArgumentValidator validator) {
+  AddTool(new McpTool(name, description, properties, std::move(callback),
+                      std::move(validator)));
 }
 
 void McpServer::AddUserOnlyTool(
@@ -281,25 +281,17 @@ void McpServer::GetToolsList(const std::string &id, const std::string &cursor,
 
 void McpServer::DoToolCall(const std::string &id, const std::string &tool_name,
                            const cJSON *tool_arguments) {
-#if CONFIG_MINIAPP
-  if (miniapp_is_active() && !Miniapp::AllowedTool(tool_name)) {
-    ReplyResult("tools/call", id, McpTool::SerializeResult(McpTextResult{"tool unavailable in miniapp mode",true}));
-    return;
-  }
-  if (Miniapp::AllowedTool(tool_name)) {
-    std::string error;
-    if (!Miniapp::ValidArguments(tool_name,tool_arguments,error)) {
-      ReplyResult("tools/call", id, McpTool::SerializeResult(McpTextResult{error,true}));
-      return;
-    }
-  }
-#endif
   const auto tool = std::find_if(tools_.begin(), tools_.end(),
                                  [&tool_name](const McpTool *value) {
                                    return value->name() == tool_name;
                                  });
   if (tool == tools_.end()) {
     ReplyError("tools/call", id, "Unknown tool: " + tool_name);
+    return;
+  }
+  std::string error;
+  if (!(*tool)->ValidateArguments(tool_arguments, error)) {
+    ReplyResult("tools/call", id, McpTool::SerializeResult(McpTextResult{error, true}));
     return;
   }
   PropertyList arguments = (*tool)->properties();
@@ -348,12 +340,6 @@ void McpServer::DoToolCall(const std::string &id, const std::string &tool_name,
   auto &app = Application::GetInstance();
   app.Schedule([this, id, tool, arguments = std::move(arguments)]() {
     try {
-#if CONFIG_MINIAPP
-      if (miniapp_is_active() && !Miniapp::AllowedTool((*tool)->name())) {
-        ReplyResult("tools/call", id, McpTool::SerializeResult(McpTextResult{"tool unavailable in miniapp mode",true}));
-        return;
-      }
-#endif
       if ((*tool)->is_async()) {
         // 异步工具只启动业务，不阻塞 Application 主任务。成功和失败回调
         // 共用一次性门闩，避免取消与后台任务完成竞态造成重复响应。

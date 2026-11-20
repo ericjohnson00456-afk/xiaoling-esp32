@@ -8,10 +8,8 @@
 #include <esp_crt_bundle.h>
 #include <mbedtls/md5.h>
 #include <cJSON.h>
-#include <cmath>
 #include <cstring>
 #include <memory>
-#include <set>
 
 namespace Miniapp {
 std::string JsonText(cJSON *value) {
@@ -22,73 +20,6 @@ std::string JsonText(cJSON *value) {
     cJSON_free(raw);
     cJSON_Delete(value);
     return result;
-}
-bool AllowedTool(const std::string &name) {
-    return name == "ls.built_in.get_device_capabilities" || name == "ls.built_in.miniapp_install" ||
-           name == "ls.built_in.miniapp_exit" || name == "ls.built_in.miniapp_describe" ||
-           name == "ls.built_in.miniapp_action";
-}
-bool ValidArguments(const std::string &name, const cJSON *args, std::string &error) {
-    std::set<std::string> keys;
-    if (args && !cJSON_IsObject(args)) {
-        error = "arguments must be an object";
-        return false;
-    }
-    for (auto *item = args ? args->child : nullptr; item; item = item->next) {
-        if (!item->string || !keys.insert(item->string).second) {
-            error = "duplicate argument";
-            return false;
-        }
-    }
-    if (name == "ls.built_in.miniapp_install") {
-        if (keys != std::set<std::string>{"id", "version", "name", "url", "size", "hash"}) {
-            error = "expected id, version, name, url, size and hash";
-            return false;
-        }
-        for (const auto *key : {"id", "version", "name", "url", "hash"}) {
-            const auto *value = cJSON_GetObjectItemCaseSensitive(args, key);
-            size_t limit = !strcmp(key, "url") ? 2047 : (!strcmp(key, "hash") ? 32 : 127);
-            if (!cJSON_IsString(value) || !value->valuestring[0] ||
-                strlen(value->valuestring) > limit) {
-                error = "invalid string argument";
-                return false;
-            }
-        }
-        const auto *size = cJSON_GetObjectItemCaseSensitive(args, "size");
-        if (!cJSON_IsNumber(size) || !std::isfinite(size->valuedouble) || size->valuedouble < 1 ||
-            size->valuedouble > MINIAPP_SOURCE_MAX ||
-            floor(size->valuedouble) != size->valuedouble) {
-            error = "invalid source size";
-            return false;
-        }
-        const char *hash = cJSON_GetObjectItemCaseSensitive(args, "hash")->valuestring;
-        if (strlen(hash) != 32 || strspn(hash, "0123456789abcdef") != 32) {
-            error = "invalid MD5";
-            return false;
-        }
-        const char *url = cJSON_GetObjectItemCaseSensitive(args, "url")->valuestring;
-        if ((strncmp(url, "http://", 7) && strncmp(url, "https://", 8)) ||
-            strpbrk(url, " \t\r\n")) {
-            error = "invalid source URL";
-            return false;
-        }
-    } else if (name == "ls.built_in.miniapp_action") {
-        if (keys != std::set<std::string>{"action", "arguments"} ||
-            !cJSON_IsObject(cJSON_GetObjectItemCaseSensitive(args, "arguments")) ||
-            !cJSON_IsString(cJSON_GetObjectItemCaseSensitive(args, "action"))) {
-            error = "expected action and arguments object";
-            return false;
-        }
-        auto *action = cJSON_GetObjectItemCaseSensitive(args, "action");
-        if (!*action->valuestring || strlen(action->valuestring) > 63) {
-            error = "invalid action name";
-            return false;
-        }
-    } else if (!keys.empty()) {
-        error = "expected empty arguments";
-        return false;
-    }
-    return true;
 }
 bool VerifySource(const miniapp_package_t &package, const char *source, std::string &error) {
     unsigned char digest[16];

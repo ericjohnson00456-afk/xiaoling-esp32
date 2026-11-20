@@ -89,6 +89,13 @@ namespace {
 MCP_REGISTER_TOOL(RegisterDeviceCapabilities, McpToolGroup::kCommon, 109) {
     server.AddTool("ls.built_in.get_device_capabilities", "查询实际板型硬件和 Lua 小应用能力。",
                    PropertyList(),
-                   [](const PropertyList &) -> ReturnValue { return miniapp_capabilities(); });
+                   [](const PropertyList &) -> ReturnValue { return miniapp_capabilities(); },
+                   [](const cJSON *args, std::string &error) {
+                       if (args && (!cJSON_IsObject(args) || args->child)) {
+                           error = "expected empty arguments";
+                           return false;
+                       }
+                       return true;
+                   });
 }
 } // namespace

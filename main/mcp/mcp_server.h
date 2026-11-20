@@ -304,6 +304,9 @@ public:
     }
 };
 
+// Validate raw JSON before property conversion can discard fields or coerce types.
+using McpToolArgumentValidator = std::function<bool(const cJSON*, std::string&)>;
+
 class McpTool {
 private:
     std::string name_;
@@ -311,26 +314,35 @@ private:
     PropertyList properties_;
     std::function<ReturnValue(const PropertyList&)> callback_;
     McpAsyncToolCallback async_callback_;
+    McpToolArgumentValidator argument_validator_;
     bool user_only_ = false;
 
 public:
     McpTool(const std::string& name, 
             const std::string& description, 
             const PropertyList& properties, 
-            std::function<ReturnValue(const PropertyList&)> callback)
+            std::function<ReturnValue(const PropertyList&)> callback,
+            McpToolArgumentValidator validator = {})
         : name_(name), 
         description_(description), 
         properties_(properties), 
-        callback_(callback) {}
+        callback_(std::move(callback)),
+        argument_validator_(std::move(validator)) {}
 
     McpTool(const std::string& name,
             const std::string& description,
             const PropertyList& properties,
-            McpAsyncToolCallback callback)
+            McpAsyncToolCallback callback,
+            McpToolArgumentValidator validator = {})
         : name_(name),
           description_(description),
           properties_(properties),
-          async_callback_(std::move(callback)) {}
+          async_callback_(std::move(callback)),
+          argument_validator_(std::move(validator)) {}
+
+    bool ValidateArguments(const cJSON* arguments, std::string& error) const {
+        return !argument_validator_ || argument_validator_(arguments, error);
+    }
 
     void set_user_only(bool user_only) { user_only_ = user_only; }
     inline const std::string& name() const { return name_; }
@@ -448,10 +460,14 @@ public:
     // 启动时构造一次本地工具表，WebSocket 重连时直接复用。
     void Initialize();
     void AddTool(McpTool* tool);
-    void AddTool(const std::string& name, const std::string& description, const PropertyList& properties, std::function<ReturnValue(const PropertyList&)> callback);
+    void AddTool(const std::string& name, const std::string& description,
+                 const PropertyList& properties,
+                 std::function<ReturnValue(const PropertyList&)> callback,
+                 McpToolArgumentValidator validator = {});
     void AddAsyncTool(const std::string& name, const std::string& description,
                       const PropertyList& properties,
-                      McpAsyncToolCallback callback);
+                      McpAsyncToolCallback callback,
+                      McpToolArgumentValidator validator = {});
     void AddUserOnlyTool(const std::string& name, const std::string& description, const PropertyList& properties, std::function<ReturnValue(const PropertyList&)> callback);
     void ParseMessage(const cJSON* json);
     void ParseMessage(const std::string& message);

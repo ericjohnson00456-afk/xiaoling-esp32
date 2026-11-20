@@ -5,10 +5,91 @@
 #include "miniapp/miniapp.h"
 #include "miniapp/miniapp_install.h"
 #include "mcp_server.h"
+#include <cmath>
+#include <cstring>
+#include <set>
 #include <cstdio>
 #include <memory>
 
 namespace {
+bool CollectArgumentKeys(const cJSON *args, std::set<std::string> &keys, std::string &error) {
+    if (args && !cJSON_IsObject(args)) {
+        error = "arguments must be an object";
+        return false;
+    }
+    for (auto *item = args ? args->child : nullptr; item; item = item->next) {
+        if (!item->string || !keys.insert(item->string).second) {
+            error = "duplicate argument";
+            return false;
+        }
+    }
+    return true;
+}
+
+bool ValidateInstallArguments(const cJSON *args, std::string &error) {
+    std::set<std::string> keys;
+    if (!CollectArgumentKeys(args, keys, error))
+        return false;
+    if (keys != std::set<std::string>{"id", "version", "name", "url", "size", "hash"}) {
+        error = "expected id, version, name, url, size and hash";
+        return false;
+    }
+    for (const auto *key : {"id", "version", "name", "url", "hash"}) {
+        const auto *value = cJSON_GetObjectItemCaseSensitive(args, key);
+        size_t limit = !strcmp(key, "url") ? 2047 : (!strcmp(key, "hash") ? 32 : 127);
+        if (!cJSON_IsString(value) || !value->valuestring[0] ||
+            strlen(value->valuestring) > limit) {
+            error = "invalid string argument";
+            return false;
+        }
+    }
+    const auto *size = cJSON_GetObjectItemCaseSensitive(args, "size");
+    if (!cJSON_IsNumber(size) || !std::isfinite(size->valuedouble) || size->valuedouble < 1 ||
+        size->valuedouble > MINIAPP_SOURCE_MAX ||
+        floor(size->valuedouble) != size->valuedouble) {
+        error = "invalid source size";
+        return false;
+    }
+    const char *hash = cJSON_GetObjectItemCaseSensitive(args, "hash")->valuestring;
+    if (strlen(hash) != 32 || strspn(hash, "0123456789abcdef") != 32) {
+        error = "invalid MD5";
+        return false;
+    }
+    const char *url = cJSON_GetObjectItemCaseSensitive(args, "url")->valuestring;
+    if ((strncmp(url, "http://", 7) && strncmp(url, "https://", 8)) ||
+        strpbrk(url, " \t\r\n")) {
+        error = "invalid source URL";
+        return false;
+    }
+    return true;
+}
+
+bool ValidateActionArguments(const cJSON *args, std::string &error) {
+    std::set<std::string> keys;
+    if (!CollectArgumentKeys(args, keys, error))
+        return false;
+    if (keys != std::set<std::string>{"action", "arguments"} ||
+        !cJSON_IsObject(cJSON_GetObjectItemCaseSensitive(args, "arguments")) ||
+        !cJSON_IsString(cJSON_GetObjectItemCaseSensitive(args, "action"))) {
+        error = "expected action and arguments object";
+        return false;
+    }
+    auto *action = cJSON_GetObjectItemCaseSensitive(args, "action");
+    if (!*action->valuestring || strlen(action->valuestring) > 63) {
+        error = "invalid action name";
+        return false;
+    }
+    return true;
+}
+
+bool ValidateEmptyArguments(const cJSON *args, std::string &error) {
+    if (args && (!cJSON_IsObject(args) || args->child)) {
+        error = "expected empty arguments";
+        return false;
+    }
+    return true;
+}
+
 void ControlWorker(void *value) {
     using Work = std::function<void()>;
     std::unique_ptr<Work> work(static_cast<Work *>(value));
@@ -44,7 +125,7 @@ MCP_REGISTER_TOOL(RegisterMiniapp, McpToolGroup::kCommon, 110) {
                                 [success](bool ok, std::string text) {
                                     success(McpTextResult{std::move(text), !ok});
                                 });
-        });
+        }, ValidateInstallArguments);
     server.AddTool("ls.built_in.miniapp_exit", "退出小应用并返回桌面。", PropertyList(),
                    [](const PropertyList &) -> ReturnValue {
                        if (!miniapp_is_active())
@@ -52,7 +133,7 @@ MCP_REGISTER_TOOL(RegisterMiniapp, McpToolGroup::kCommon, 110) {
                        const bool ok = miniapp_exit() == 0;
                        return McpTextResult{ok ? "miniapp exit requested" : "miniapp queue is busy",
                                             !ok};
-                   });
+                   }, ValidateEmptyArguments);
     server.AddAsyncTool(
         "ls.built_in.miniapp_describe", "查询前台小应用的身份、状态和可用操作。", PropertyList(),
         [](const PropertyList &, McpToolSuccessCallback success, McpToolErrorCallback) {
@@ -67,7 +148,7 @@ MCP_REGISTER_TOOL(RegisterMiniapp, McpToolGroup::kCommon, 110) {
                     success(McpTextResult{result ? Miniapp::JsonText(result) : error, !result});
                 },
                 success);
-        });
+        }, ValidateEmptyArguments);
     server.AddAsyncTool(
         "ls.built_in.miniapp_action", "根据 miniapp_describe 的声明执行操作。",
         PropertyList(
@@ -94,7 +175,7 @@ MCP_REGISTER_TOOL(RegisterMiniapp, McpToolGroup::kCommon, 110) {
                     cJSON_Delete(result);
                 },
                 success);
-        });
+        }, ValidateActionArguments);
 }
 } // namespace
 #endif
