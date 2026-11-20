@@ -5,10 +5,12 @@ on:
     branches:
       - main
       - dev
+      - 'dev-*'
       - ci/* # for ci test
   pull_request:
     branches:
       - main
+      - 'dev-*'
   release:
     types: [published]
 
@@ -42,7 +44,7 @@ jobs:
         run: |
           EVENT_NAME="${{ github.event_name }}"
 
-          # push 到 main 分支或 release，编译全部变体
+          # push 或 release，编译全部变体
           if [[ "$EVENT_NAME" == "push" || "$EVENT_NAME" == "release" ]]; then
             echo "variants=$ALL_VARIANTS" >> $GITHUB_OUTPUT
             exit 0
