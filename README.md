@@ -45,7 +45,7 @@ cd xiaoling-esp32
 
 ```bash
 python scripts/release.py --list-boards
-python scripts/release.py m5stack-core-s3-se
+python scripts/release.py m5stack-core-s3
 ```
 
 脚本会重建 `build/` 并修改生成的 `sdkconfig`。已有同名发布 ZIP 时会跳过构建，验证新代码前请先移走旧产物。Flash 容量、Quad/Octal PSRAM 和摄像头等配置必须与实物匹配；仅传入 `BOARD_TYPE` 不能替代实际 Kconfig 的板型选择。
