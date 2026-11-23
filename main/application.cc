@@ -1049,6 +1049,12 @@ void Application::HandleToggleChatEvent() {
         if (!xiaoling_conn_->CancelSession()) {
             ESP_LOGW(TAG, "按键取消云端语音会话上报失败");
         }
+        // 本地取消不等待云端 finish；释放语音占用后，由 Intent 栈恢复
+        // 被唤醒暂停的音乐。已接纳的 TTS 则仍由播放终态负责收尾。
+        if (active_tts_session_id_ == 0 && pending_tts_session_id_ == 0 &&
+            !tts_waiting_for_playback_.load()) {
+            intent_manager_.Pop(PlaybackIntentId::kVoiceSession);
+        }
     }
 }
 
