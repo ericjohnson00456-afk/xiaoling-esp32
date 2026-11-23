@@ -24,7 +24,13 @@ constexpr uint16_t kDeviceConfigToneId = 104;
 // 板级按键回调可能运行在非应用主任务中，常规短击业务投递到
 // Application 主任务串行执行；激活期间的恢复出厂例外。
 void Application::HandleButtonClick(uint8_t click_count) {
-    if (GetDeviceState() == kDeviceStateActivating) {
+    const auto state = GetDeviceState();
+    // 升级期间的输入直接丢弃，不能排队到升级结束后再执行。
+    if (state == kDeviceStateUpgrading) {
+        ESP_LOGI(kTag, "升级期间忽略 %u 击按键", static_cast<unsigned>(click_count));
+        return;
+    }
+    if (state == kDeviceStateActivating) {
         // 激活请求会阻塞 Application 主任务，不能等待调度队列。
         if (click_count >= kFactoryResetClickCount) {
             StartFactoryReset();
@@ -42,7 +48,12 @@ void Application::HandleButtonClick(uint8_t click_count) {
 // 将板级长按回调切换到 Application 主任务，避免在按键回调中直接
 // 操作闹钟、播放器和 OTA 状态。
 void Application::HandleButtonLongPress() {
-    if (GetDeviceState() == kDeviceStateActivating) {
+    const auto state = GetDeviceState();
+    if (state == kDeviceStateUpgrading) {
+        ESP_LOGI(kTag, "升级期间忽略长按按键");
+        return;
+    }
+    if (state == kDeviceStateActivating) {
         ESP_LOGI(kTag, "激活期间忽略长按按键");
         return;
     }
@@ -54,6 +65,9 @@ void Application::HandleButtonLongPress() {
 // 长按优先停止正在响铃的闹钟；如果正在等待固件升级确认，则跳过本次升级。
 void Application::ProcessButtonLongPress() {
     const auto state = GetDeviceState();
+    if (state == kDeviceStateUpgrading) {
+        return;
+    }
     if (state == kDeviceStateActivating) {
         ESP_LOGI(kTag, "激活期间忽略长按按键");
         return;
@@ -83,6 +97,10 @@ void Application::ProcessButtonLongPress() {
 // 然后再执行各个击次对应的常规功能。
 void Application::ProcessButtonClick(uint8_t click_count) {
     const auto state = GetDeviceState();
+    // 入队后可能才开始升级，执行时仍需检查，避免中断固件或资源写入。
+    if (state == kDeviceStateUpgrading) {
+        return;
+    }
     if (state == kDeviceStateActivating) {
         if (click_count >= kFactoryResetClickCount) {
             StartFactoryReset();
