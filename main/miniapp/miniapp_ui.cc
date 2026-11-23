@@ -22,9 +22,7 @@ uint32_t submitted = 0;
 const lv_font_t *Font() {
     auto *display = UiManager::GetInstance().display();
     auto *theme = display ? dynamic_cast<LvglTheme *>(display->GetTheme()) : nullptr;
-    static lv_font_t font = font_puhui_basic_16_4;
-    font.fallback = theme && theme->text_font() ? theme->text_font()->font() : nullptr;
-    return &font;
+    return theme && theme->text_font() ? theme->text_font()->font() : &font_puhui_basic_16_4;
 }
 void DrawShape(lv_layer_t *layer, const miniapp_shape_t &s, int x, int y) {
     if (!s.opacity)

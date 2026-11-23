@@ -253,7 +253,6 @@ elseif(CONFIG_BOARD_TYPE_M5STACK_STICK_S3)
     set(BUILTIN_TEXT_FONT font_puhui_basic_16_4)
     set(BUILTIN_ICON_FONT font_awesome_16_4)
     set(DEFAULT_EMOJI_COLLECTION twemoji_32)
-    set(SPLIT_TEXT_FONT_FILE "font_puhui_common_16_4.bin")
 elseif(CONFIG_BOARD_TYPE_M5STACK_CORE_S3_SE)
     set(BOARD_TYPE "m5stack-core-s3-se")
     set(BUILTIN_TEXT_FONT font_puhui_basic_20_4)
@@ -850,10 +849,6 @@ target_compile_definitions(${COMPONENT_LIB}
                     PRIVATE BOARD_TYPE=\"${BOARD_TYPE}\" BOARD_NAME=\"${BOARD_NAME}\"
                     PRIVATE BUILTIN_TEXT_FONT=${BUILTIN_TEXT_FONT} BUILTIN_ICON_FONT=${BUILTIN_ICON_FONT}
                     )
-if(SPLIT_TEXT_FONT_FILE)
-    target_compile_definitions(${COMPONENT_LIB}
-        PRIVATE RESOURCE_TEXT_FONT_FILE=\"${SPLIT_TEXT_FONT_FILE}\")
-endif()
 
 # Add generation rules
 add_custom_command(
@@ -1007,12 +1002,6 @@ function(build_split_resources)
     set(SPLIT_TONE "${SPLIT_OUTPUT_DIR}/tone.bin")
     set(SPLIT_EMOJI "${SPLIT_OUTPUT_DIR}/emoji.bin")
     set(SPLIT_WAKE_WORD "${SPLIT_OUTPUT_DIR}/wake_word.bin")
-    set(SPLIT_FONT_ARGS)
-    set(SPLIT_FONT_DEPENDS)
-    if(SPLIT_TEXT_FONT_FILE)
-        set(SPLIT_FONT_DEPENDS "${XIAOZHI_FONTS_PATH}/cbin/${SPLIT_TEXT_FONT_FILE}")
-        list(APPEND SPLIT_FONT_ARGS --text-font-file "${SPLIT_FONT_DEPENDS}")
-    endif()
 
     set(SPLIT_WAKE_WORD_DEPENDS)
     set(SPLIT_WAKE_WORD_ARGS)
@@ -1038,12 +1027,10 @@ function(build_split_resources)
                 --output-dir "${SPLIT_OUTPUT_DIR}"
                 ${SPLIT_BOARD_ARGS}
                 ${SPLIT_WAKE_WORD_ARGS}
-                ${SPLIT_FONT_ARGS}
         DEPENDS ${PROJECT_DIR}/scripts/build_split_resources.py
                 ${PROJECT_DIR}/scripts/romfs.py ${SPLIT_RESOURCE_FILES}
                 ${SPLIT_WAKE_WORD_DEPENDS}
                 ${SPLIT_BOARD_DEPENDS}
-                ${SPLIT_FONT_DEPENDS}
         COMMENT "Building split respak/tone/emoji resource images"
         VERBATIM)
     add_custom_target(generated_split_resources ALL

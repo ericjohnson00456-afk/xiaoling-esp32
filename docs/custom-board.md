@@ -322,23 +322,24 @@ endchoice
 # 在 elseif 链中添加你的开发板配置
 elseif(CONFIG_BOARD_TYPE_MY_CUSTOM_BOARD)
     set(BOARD_TYPE "my-custom-board")  # 与目录名一致
-    set(BUILTIN_TEXT_FONT font_puhui_basic_20_4)  # 根据屏幕大小选择合适的字体
-    set(BUILTIN_ICON_FONT font_awesome_20_4)
-    set(DEFAULT_EMOJI_COLLECTION twemoji_64)  # 可选，如果需要表情显示
 endif()
 ```
 
 **字体和表情配置说明：**
 
-根据屏幕分辨率选择合适的字体大小：
-- 小屏幕（128x64 OLED）：`font_puhui_basic_14_1` / `font_awesome_14_1`
-- 中小屏幕（240x240）：`font_puhui_basic_16_4` / `font_awesome_16_4`
-- 中等屏幕（240x320）：`font_puhui_basic_20_4` / `font_awesome_20_4`
-- 大屏幕（480x320+）：`font_puhui_basic_30_4` / `font_awesome_30_4`
+小聆的 `respak` 资源由公共策略选择，不需要逐板指定文字字号：
 
-表情集合选项：
-- `twemoji_32` - 32x32 像素表情（小屏幕）
-- `twemoji_64` - 64x64 像素表情（大屏幕）
+- 有 PSRAM：系统和小应用共用 16px 字体；4MB/8MB Flash 使用精简字库，其余使用扩展字库。
+- 无 PSRAM：使用 14px、1bpp 字库，降低资源占用。
+- 普通图标为 20px，大图标为 30px。
+
+字体打包策略见 `main/boards/common/resource_options.cmake`，加载逻辑见
+`main/ui/themes/lvgl_theme_setup.cc`。表情资源来自 `main/resource/assets/emoji/`，
+公共显示逻辑根据可用区域缩放。
+
+`BUILTIN_TEXT_FONT`、`BUILTIN_ICON_FONT` 和 `DEFAULT_EMOJI_COLLECTION` 是仓库保留的
+旧资源配置；其中字体与表情选择用于旧 `assets` 打包路径，不决定当前小聆的
+`respak` 字体加载结果。
 
 ### 5. 配置和编译
 

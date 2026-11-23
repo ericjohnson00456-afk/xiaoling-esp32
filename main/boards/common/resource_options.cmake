@@ -10,11 +10,8 @@ function(xiaoling_resource_options output_dir args_var depends_var)
         list(APPEND resource_depends ${XIAOLING_RESOURCE_EMOJI_DEPENDS})
     endif()
 
-    # The split respak font is selected from the effective hardware budget:
-    # without PSRAM, leave more internal RAM available; with PSRAM but only
-    # 4/8 MB Flash, use the smaller common font; larger configurations keep
-    # the normal resource set. These are sdkconfig facts, so the policy also
-    # applies to new boards without a board.cmake file.
+    # PSRAM devices share the packaged 16px text font with Lua miniapps.
+    # Keep the smaller 1bpp font on devices without PSRAM.
     set(resource_font)
     set(resource_budget "default")
     set(resource_flash "${CONFIG_ESPTOOLPY_FLASHSIZE}")
@@ -35,15 +32,14 @@ function(xiaoling_resource_options output_dir args_var depends_var)
         set(resource_font "font_puhui_14_1")
         set(resource_budget "no-psram")
     elseif(CONFIG_ESPTOOLPY_FLASHSIZE_4MB OR CONFIG_ESPTOOLPY_FLASHSIZE_8MB)
-        set(resource_font "font_puhui_20_4")
+        set(resource_font "font_puhui_16_4")
         set(resource_budget "psram-4/8mb-flash")
     endif()
 
     if(resource_font)
         set(font_source "${XIAOZHI_FONTS_PATH}/src/${resource_font}.c")
-        # The runtime font role uses this canonical resource name regardless
-        # of which source variant was selected by the budget policy.
-        set(font_file "${output_dir}/font_puhui_common_20_4.bin")
+        string(REPLACE "font_puhui_" "font_puhui_common_" font_filename "${resource_font}")
+        set(font_file "${output_dir}/${font_filename}.bin")
         add_custom_command(OUTPUT "${font_file}"
             COMMAND "${PYTHON}" "${PROJECT_DIR}/scripts/convert_lvgl_c_font.py"
                     "${font_source}" "${font_file}"

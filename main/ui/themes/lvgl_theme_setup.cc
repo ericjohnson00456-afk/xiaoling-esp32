@@ -17,8 +17,10 @@
 
 namespace {
 
-#ifndef RESOURCE_TEXT_FONT_FILE
-#define RESOURCE_TEXT_FONT_FILE "font_puhui_common_20_4.bin"
+#if CONFIG_SPIRAM
+#define RESOURCE_TEXT_FONT_FILE "font_puhui_common_16_4.bin"
+#else
+#define RESOURCE_TEXT_FONT_FILE "font_puhui_common_14_1.bin"
 #endif
 
 constexpr char kTag[] = "LvglThemeSetup";

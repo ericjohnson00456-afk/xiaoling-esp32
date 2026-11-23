@@ -107,7 +107,7 @@ def main() -> int:
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--font-file")
     parser.add_argument("--emoji-dir", help="Optional board-prepared emoji resource directory")
-    parser.add_argument("--text-font-file", help="Replace the packaged text font for this board")
+    parser.add_argument("--text-font-file", help="Replace the packaged text font")
     wake_word_source = parser.add_mutually_exclusive_group()
     wake_word_source.add_argument("--wake-word-dir")
     wake_word_source.add_argument("--wake-word-file")
@@ -163,7 +163,10 @@ def main() -> int:
             font = Path(args.font_file)
             if font.is_file():
                 (respak / "font").mkdir(exist_ok=True)
-                shutil.copy2(font, respak / "font" / font.name)
+                fonts = respak / "font"
+                for original in fonts.glob("font_puhui_common_*.bin"):
+                    original.unlink()
+                shutil.copy2(font, fonts / font.name)
 
         copy_tree(source / "tone", tone)
         copy_tree(Path(args.emoji_dir) if args.emoji_dir else source / "emoji", emoji)

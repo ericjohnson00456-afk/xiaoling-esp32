@@ -1,4 +1,4 @@
-Additional glyphs in font_puhui_common_20_4.bin use Noto Sans SC and GNU Unifont.
+Additional glyphs in font_puhui_common_16_4.bin use Noto Sans SC and GNU Unifont.
 The original project font supplies its existing characters; these notices cover
 the added font sources.
 
