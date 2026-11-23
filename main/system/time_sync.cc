@@ -5,6 +5,7 @@
 #include <esp_netif_sntp.h>
 #include <esp_sntp.h>
 
+#include <cstdlib>
 #include <ctime>
 #include <mutex>
 
@@ -37,6 +38,13 @@ bool SyncSystemTime() {
 
     bool first_start = false;
     if (!s_sntp_initialized) {
+        // POSIX TZ uses the opposite sign: CST-8 is UTC+8. Keep the system
+        // timestamp in UTC; only local calendar conversions use this zone.
+        if (setenv("TZ", "CST-8", 1) != 0) {
+            ESP_LOGE(TAG, "系统时区初始化失败");
+            return false;
+        }
+        tzset();
         esp_sntp_set_sync_interval(kSyncIntervalMs);
         esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG_MULTIPLE(
             4, ESP_SNTP_SERVER_LIST(

@@ -90,7 +90,7 @@ BOOT 通常为 `function`，没有 BOOT 的设备使用已明确适配的主要�
 | `tts` | `speak(text)`、`cancel(id)`，最多 512 字节、1 个待处理请求，通过 `on_tts_result(id,result)` 回报 completed/failed/interrupted |
 | `http` | `get`、`request`、`cancel`；GET/POST，最多 4 请求、511 字节 URL、16 个请求头、1 KB 请求头总量、8 KB 请求体、32 KB 响应；通过 `on_http_response(id,response)` 回调 |
 | `json` | `encode`、`decode`、`null`；保留 JSON 数组及空值，不支持循环引用 |
-| `clock` | `now()`、`localtime()`；未校时时返回不可用，按系统时区换算 |
+| `clock` | `now()` 返回 Unix 时间戳；`localtime()` 按系统默认北京时间（UTC+8）换算，`utc_offset` 单位为秒；未校时时返回不可用 |
 | `storage` | `load`、`save`、`clear`；按应用 ID 隔离的扁平 JSON，每应用 1 KB、共 4 槽，默认有效期 7 天、最长 30 天，写入间隔 10 秒 |
 
 详细参数预算以能力查询返回值为准。启动期间的 `tts.speak` 在候选应用成功提交后才发起播报；参数无效或设备忙时通过结果回调报告失败。HLS 不支持加密、字节范围分段或 fMP4；播放错误可从状态查询获取。在线音频用户手动暂停后不会因系统语音结束而自行恢复。
