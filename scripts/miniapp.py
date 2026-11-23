@@ -30,8 +30,15 @@ class Client:
         if len(command.encode()) >= 256:
             raise TransferError("传输命令超出固件行长度限制")
         self.port.write(command.encode())
-        deadline = time.monotonic() + self.timeout
+        started = time.monotonic()
+        deadline = started + self.timeout
+        retry_at = started + 1
         while time.monotonic() < deadline:
+            # A prior terminal may have left the board in reset. Only the
+            # read-only handshake may be repeated while its console starts.
+            if verb == "hello" and time.monotonic() >= retry_at:
+                self.port.write(command.encode())
+                retry_at = time.monotonic() + 1
             self.pending.extend(self.port.read(min(getattr(self.port, "in_waiting", 0), 4096) or 1))
             while b"\n" in self.pending:
                 line, _, rest = self.pending.partition(b"\n")
@@ -71,6 +78,9 @@ class Client:
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,121}", app_id):
             raise TransferError("应用 ID 需为 1–121 个英文字母、数字、下划线或连字符；可用 --id 指定")
         limit, chunk_size = self.hello()
+        # Keep the entire command below the 128-byte UART RX FIFO capacity,
+        # including base64, the token and the largest source offset.
+        chunk_size = min(chunk_size, 60)
         if not source or len(source) > limit or b"\0" in source:
             raise TransferError(f"源码必须非空、不含 NUL，且不超过 {limit} 字节")
         digest = hashlib.md5(source).hexdigest()
@@ -157,6 +167,16 @@ def open_port(device):
             pass
 
     options = {"exclusive": True} if os.name == "posix" else {}
+    if os.name == "nt":
+        # Windows configures control lines directly in SetCommState, bypassing
+        # the hooks above. Set the cached idle states before opening the handle;
+        # enabled lines can leave the board in reset when that handle closes.
+        port = ConsolePort(None, baudrate=115200, timeout=0.1, write_timeout=2)
+        port.dtr = False
+        port.rts = False
+        port.port = device
+        port.open()
+        return port
     return ConsolePort(device, baudrate=115200, timeout=0.1, write_timeout=2, **options)
 
 

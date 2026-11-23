@@ -1,9 +1,11 @@
 import base64
 import hashlib
 import importlib.util
+import itertools
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 spec = importlib.util.spec_from_file_location("miniapp", Path(__file__).parents[2] / "scripts/miniapp.py")
 miniapp = importlib.util.module_from_spec(spec)
@@ -59,6 +61,23 @@ class Console:
 
 
 class SerialTests(unittest.TestCase):
+    def test_hello_retries_until_console_is_ready(self):
+        port = Console()
+        original_write = port.write
+        attempts = []
+
+        def write(data):
+            attempts.append(data)
+            if len(attempts) > 1:
+                original_write(data)
+
+        port.write = write
+        with mock.patch.object(miniapp.time, "monotonic",
+                               side_effect=itertools.count(0, 0.05)):
+            self.assertEqual(miniapp.Client(port).hello(), (65536, 120))
+        self.assertGreater(len(attempts), 1)
+        self.assertTrue(all(command == attempts[0] for command in attempts))
+
     def test_push_chunks_and_repeated_install(self):
         source = ("-- 中文注释\nfunction on_tick() end\n" * 32).encode()
         port = Console()
@@ -68,7 +87,7 @@ class SerialTests(unittest.TestCase):
         self.assertEqual(port.source, source)
         client.push(source, "counter")
         self.assertEqual(sum(b" commit\n" in c for c in port.commands), 2)
-        self.assertTrue(all(len(c) < 256 for c in port.commands))
+        self.assertTrue(all(len(c) < 128 for c in port.commands))
 
     def test_pull_snapshot_and_atomic_destination(self):
         source = b"function on_tick() end\n" * 32
