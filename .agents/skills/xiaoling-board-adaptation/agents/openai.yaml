@@ -1,0 +1,3 @@
+interface:
+  display_name: "小聆 ESP32 板型适配"
+  short_description: "按实际硬件适配小聆 ESP32 板型，完成构建烧录与真机验证"

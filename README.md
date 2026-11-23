@@ -126,6 +126,7 @@ python scripts/release.py all
 - [MQTT/UDP 调试](docs/mqtt-udp.md)
 - [BLE BluFi 配网](docs/blufi.md)
 - [自定义开发板](docs/custom-board.md)
+- [板型适配 Agent Skill](.agents/skills/xiaoling-board-adaptation/SKILL.md)：可使用 `$xiaoling-board-adaptation`，或让 agent 阅读该文件。
 - [S3 语音冒烟测试](docs/s3-voice-smoke-test.md)
 
 ## 获取帮助
