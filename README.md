@@ -10,6 +10,30 @@
 - [如何接入小聆 AI](https://docs2.listenai.com/x/S_TEd8h7C)
 - [ESP32 接入小聆 AI 教程](https://zhuanlan.zhihu.com/p/1936115549143823284)
 
+### V2.0 新功能亮点
+
+✨ **小聆AI小应用：说话就能做小应用**
+
+无需编程、无需电脑，直接通过语音描述需求，即可生成适配开发板的工具与互动小游戏。
+
+- 🗣️ **语音定制**：一句话定义应用，灵活满足个性化开发需求
+- ⚡ **即时部署**：生成成果自动下发至硬件设备，即刻调试体验
+- 🔁 **迭代优化**：持续语音指令调整，轻松迭代应用创意
+- 🎁 **开箱即用**：内置免费模型额度，无需额外对接 API
+
+<table>
+  <tr>
+    <td width="33%"><img src="docs/images/xiaoling/01-jungle-shooter.gif" alt="丛林枪战" width="100%"></td>
+    <td width="33%"><img src="docs/images/xiaoling/02-breakout.gif" alt="打砖块" width="100%"></td>
+    <td width="33%"><img src="docs/images/xiaoling/03-snake.gif" alt="贪吃蛇" width="100%"></td>
+  </tr>
+  <tr>
+    <td width="33%"><img src="docs/images/xiaoling/04-animal-words.gif" alt="动物单词" width="100%"></td>
+    <td width="33%"><img src="docs/images/xiaoling/05-stock-board.gif" alt="股票看板" width="100%"></td>
+    <td width="33%"><img src="docs/images/xiaoling/06-voice-to-app.gif" alt="语音生成小应用" width="100%"></td>
+  </tr>
+</table>
+
 ## 能力概览
 
 - **语音交互**：本地唤醒词、VAD/AEC、语音会话、打断和连续对话。
