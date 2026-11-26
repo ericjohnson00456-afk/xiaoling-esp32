@@ -202,6 +202,7 @@ void Application::HandlePlaybackEvent(const PlaybackEvent& event) {
         return;
     }
     // 确认 session 后才清标志；旧终态不能清掉新 TTS 的待播放状态。
+    awaiting_voice_reply_ = false;
     tts_waiting_for_playback_.store(false);
     tts_output_started_.store(false);
     const char* reason_text = "interrupted";
@@ -248,6 +249,7 @@ void Application::HandlePlaybackEvent(const PlaybackEvent& event) {
         // 音乐仍在栈中时，TTS 结束就是退出本轮录音并恢复音乐的屏障。
         ESP_LOGI(TAG, "TTS 播放结束，退出语音会话并恢复音乐");
         iat_utterance_active_ = false;
+        awaiting_voice_reply_ = false;
         audio_service_.EnableAudioUpload(false);
         session_controller_.EndSession();
         if (xiaoling_conn_) {
@@ -307,6 +309,7 @@ void Application::HandlePlayerOutputStartedEvent(
 
     tts_output_started_.store(true);
     if (event.session_id != push_tts_session_id_) {
+        awaiting_voice_reply_ = false;
         AppEvent::PublishScoped(AppEvent::Id::XiaolingTtsStarted, nullptr, 0,
             Xiaoling::voice_session_epoch, Xiaoling::voice_session_epoch.Current());
     }
@@ -934,6 +937,7 @@ void Application::InitializeXiaolingConn() {
                         return;
                     }
                     iat_utterance_active_ = false;
+                    awaiting_voice_reply_ = false;
                     audio_service_.EnableAudioUpload(false);
                     session_controller_.EndSession();
                     if (GetDeviceState() != kDeviceStateIdle) {
@@ -950,6 +954,7 @@ void Application::InitializeXiaolingConn() {
                     xiaoling_conn_ && xiaoling_conn_->IsConnected() &&
                     !xiaoling_conn_->IsSessionActive()) {
                     ESP_LOGI(TAG, "全双工云端会话已结束，立即重启 AEC 音频上行");
+                    awaiting_voice_reply_ = false;
                     xiaoling_conn_->SendStartListening(kListeningModeRealtime);
                 } else if (state == kDeviceStateListening) {
                     SetDeviceState(kDeviceStateIdle);
@@ -1043,6 +1048,7 @@ void Application::HandleToggleChatEvent() {
         // 本地反馈，再取消云端会话，防止其返回最终 IAT/TTS。
         ESP_LOGI(TAG, "按键取消聆听：立即停止本地录音并取消云端会话");
         iat_utterance_active_ = false;
+        awaiting_voice_reply_ = false;
         audio_service_.EnableAudioUpload(false);
         session_controller_.EndSession();
         SetDeviceState(kDeviceStateIdle);
@@ -1142,6 +1148,7 @@ void Application::AbortSpeaking(AbortReason reason) {
         // exit MCP 工具只结束当前上行对话。云端告别 TTS 可能尚未返回，
         // 因此只关掉音频上报，不取消会话，也不清理 TTS/字幕状态。
         iat_utterance_active_ = false;
+        awaiting_voice_reply_ = false;
         audio_service_.EnableAudioUpload(false);
         session_controller_.EndSession();
         if (xiaoling_conn_) xiaoling_conn_->DisableAudioUploadForExit();
@@ -1156,6 +1163,7 @@ void Application::AbortSpeaking(AbortReason reason) {
     // 停止播放，不会关闭云端会话，因此这里需要显式发送会话结束消息。
     if (GetDeviceState() == kDeviceStateListening) {
         iat_utterance_active_ = false;
+        awaiting_voice_reply_ = false;
         audio_service_.EnableAudioUpload(false);
         session_controller_.EndSession();
         if (xiaoling_conn_ && !xiaoling_conn_->EndSession()) {
@@ -1190,6 +1198,7 @@ void Application::BeginWakeup(ListeningMode mode, const std::string& wake_word) 
         return;
     }
     iat_utterance_active_ = false;
+    awaiting_voice_reply_ = false;
     audio_service_.EnableAudioUpload(false);
     if (!intent_manager_.Push(PlaybackIntentId::kPromptTone)) {
         ESP_LOGE(TAG, "唤醒提示音事件入栈失败");
@@ -1232,6 +1241,7 @@ void Application::BeginWakeup(ListeningMode mode, const std::string& wake_word) 
                 if (text.empty()) {
                     return;
                 }
+                // 等待回复期间，中间 IAT 可能就是唤醒词，不能提前关闭唤醒入口。
                 const bool first_iat = !iat_utterance_active_;
                 if (first_iat) {
                     iat_utterance_active_ = true;
@@ -1290,9 +1300,12 @@ void Application::BeginWakeup(ListeningMode mode, const std::string& wake_word) 
         iat_end_subscription_id_ = AppEvent::Subscribe(
             AppEvent::Id::XiaolingIatEnd, [this](const AppEvent::Event& event) {
                 const auto scope = event.Scope();
-                Schedule([this, text = std::string(event.Text()), scope]() {
+                // 与中间 IAT 和唤醒使用同一优先级，保留已接收事件的处理顺序。
+                ScheduleUrgent([this, text = std::string(event.Text()), scope]() {
                     if (!scope.IsCurrent()) return;
                     iat_utterance_active_ = false;
+                    // 空识别不能撤销上一句已经进入的等待回复阶段。
+                    if (!text.empty()) awaiting_voice_reply_ = true;
                     // 非空的最终 IAT 表示用户已经说完。在 TTS URL 到达前显示云端
                     // 思考状态。URL 回调会先设置此标志，再将自己的 UI 更新入队，
                     // 避免延迟的 IAT 任务把界面从讲话状态闪回思考状态。
@@ -1354,6 +1367,7 @@ bool Application::ResetVoiceSessionForWakeup(bool& interrupted_tts) {
              static_cast<unsigned long>(active_tts_session_id_),
              static_cast<unsigned long>(pending_tts_session_id_));
     iat_utterance_active_ = false;
+    awaiting_voice_reply_ = false;
     audio_service_.EnableAudioUpload(false);
 #ifdef CONFIG_LSPLATFORM
     uplink_watchdog_.Stop();
@@ -1456,6 +1470,7 @@ void Application::HandleStateChangedEvent() {
     switch (new_state) {
         case kDeviceStateUnknown:
         case kDeviceStateIdle:
+            awaiting_voice_reply_ = false;
             listening_started_at_us_ = 0;
             session_controller_.EndSession();
             if (tts_waiting_for_playback_.load() && !exit_requested_.load()) {
@@ -1480,6 +1495,7 @@ void Application::HandleStateChangedEvent() {
             // 等待 started 时保留原 UI，云端确认后才展示唤醒状态。
             break;
         case kDeviceStateListening:
+            awaiting_voice_reply_ = false;
             listening_started_at_us_ = esp_timer_get_time();
             session_controller_.StartListening(listening_mode_ == kListeningModeRealtime);
             Ui::SetStatus(Ui::Status::Listening);
@@ -1578,6 +1594,16 @@ void Application::HandleWakeWordInvocation(const std::string& wake_word) {
 
     auto state = GetDeviceState();
 
+    // 纯聆听期间保留有效会话，避免重复唤醒截断提问并重播提示音。
+    // 最终 IAT 后的思考阶段及待播/在播 TTS 允许唤醒打断。
+    const bool tts_active = active_tts_session_id_ != 0 || pending_tts_session_id_ != 0 ||
+                            tts_waiting_for_playback_.load();
+    if (state == kDeviceStateListening && xiaoling_conn_->IsSessionActive() &&
+        !awaiting_voice_reply_ && !tts_active) {
+        ESP_LOGI(TAG, "监听会话进行中，忽略重复唤醒词：%s", wake_word.c_str());
+        return;
+    }
+
     if (state != kDeviceStateIdle && state != kDeviceStateListening &&
         state != kDeviceStateSpeaking) {
         ESP_LOGI(TAG, "Ignoring wake word while device is in %s state",
@@ -1652,6 +1678,7 @@ void Application::SetDuplexMode(DuplexMode mode) {
         // 结束当前云端会话并只停止上行链路。保持处理器运行，可以在恢复唤醒词
         // 检测时避免拆除并重建 AFE。
         iat_utterance_active_ = false;
+        awaiting_voice_reply_ = false;
         audio_service_.EnableAudioUpload(false);
         session_controller_.EndSession();
         if (xiaoling_conn_ && !xiaoling_conn_->EndSession()) {

@@ -204,6 +204,9 @@ private:
     std::vector<uint32_t> audio_event_subscription_ids_;
     std::atomic_bool vad_event_pending_{false};
     bool iat_utterance_active_ = false;
+    // 主任务维护：最终 IAT 后保持等待回复，直到回复播放或会话阶段切换。
+    // 中间 IAT/空结果不清除此标记，以免唤醒词先被 ASR 识别而吞掉本地唤醒。
+    bool awaiting_voice_reply_ = false;
     WakeupRecordingGate wakeup_recording_gate_;
 
     /*  ========== OTA业务 ======== */
