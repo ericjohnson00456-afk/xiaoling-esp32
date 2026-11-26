@@ -4,6 +4,7 @@
         {
             "name": "atk-dnesp32s3-box",
             "sdkconfig_append": [
+                "CONFIG_BOARD_BRAND_ATK=y",
                 "CONFIG_SAMPLE_PROC_TASK_CORE=1"
             ]
         }

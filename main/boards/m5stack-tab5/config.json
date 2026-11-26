@@ -4,6 +4,7 @@
         {
             "name": "m5stack-tab5",
             "sdkconfig_append": [
+                "CONFIG_BOARD_BRAND_M5STACK=y",
                 "CONFIG_BOARD_TYPE_M5STACK_CORE_TAB5=y",
                 "CONFIG_CAMERA_SC202CS=y",
                 "CONFIG_XIAOZHI_ENABLE_ROTATE_CAMERA_IMAGE=y",

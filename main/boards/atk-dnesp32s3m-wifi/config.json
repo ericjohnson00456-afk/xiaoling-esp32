@@ -3,7 +3,9 @@
     "builds": [
         {
             "name": "atk-dnesp32s3m-wifi",
-            "sdkconfig_append": []
+            "sdkconfig_append": [
+                "CONFIG_BOARD_BRAND_ATK=y"
+            ]
         }
     ]
 }

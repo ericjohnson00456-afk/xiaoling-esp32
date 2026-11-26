@@ -17,7 +17,7 @@ idf.py menuconfig
 
 ## 1. 选择开发板
 
-进入 `Xiaoling Device → Board Type`，选择实际使用的开发板，例如：
+进入 `Xiaoling Device → Board Type`，选择实际使用的开发板；归入系列的板型先选择系列，再选择开发板型号。例如：
 
 - `Espressif ESP-BOX-3`
 - `M5Stack CoreS3`
@@ -39,7 +39,7 @@ idf.py -DBOARD_TYPE=m5stack-core-s3 menuconfig
 
 在 `Xiaoling Device → LSPlatform 选项 → Product ID` 中选择应用类型：
 
-- **内置**：使用项目默认的小聆应用；
+- **内置**：根据板型声明的品牌使用对应渠道应用，未声明品牌的板型使用公共应用；
 - **自建应用**：填写自建应用的 Product ID 和 Product Secret。
 
 自建应用需要先在小聆平台创建，并获取 Product ID 和 Secret ID。配置完成后保存，再执行编译和烧录。
