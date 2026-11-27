@@ -81,20 +81,32 @@ def emit_output(name, value):
         output.write(f'{name}={value}\n')
 
 
-def find_reusable_run(catalog, sha, repository, request):
+def find_reusable_run(catalog, sha, repository, request, wait=None, attempts=280):
     query = urllib.parse.urlencode({'head_sha': sha, 'event': 'push',
-                                    'branch': 'main', 'status': 'success', 'per_page': 10})
-    runs = request(f'/repos/{repository}/actions/workflows/build.yml/runs?{query}')
+                                    'branch': 'main', 'per_page': 10})
     expected = {'ci-plan'} | {'firmware-' + shard['id'] for shard in shards_for(catalog, catalog)}
-    for run in runs['workflow_runs']:
-        if (run['head_sha'] != sha or run['event'] != 'push' or run['head_branch'] != 'main'
-                or run['status'] != 'completed' or run['conclusion'] != 'success'
-                or run['head_repository']['full_name'] != repository):
-            continue
-        artifacts = request(f"/repos/{repository}/actions/runs/{run['id']}/artifacts?per_page=100")
-        available = {item['name'] for item in artifacts['artifacts'] if not item['expired']}
-        if expected <= available:
-            return str(run['id'])
+    deadline = time.monotonic() + 140 * 60
+    for attempt in range(attempts + 1):
+        runs = request(f'/repos/{repository}/actions/workflows/build.yml/runs?{query}')
+        pending = False
+        for run in runs['workflow_runs']:
+            if (run['head_sha'] != sha or run['event'] != 'push' or run['head_branch'] != 'main'
+                    or run['head_repository']['full_name'] != repository):
+                continue
+            if run['status'] != 'completed':
+                pending = True
+                continue
+            if run['conclusion'] != 'success':
+                continue
+            artifacts = request(f"/repos/{repository}/actions/runs/{run['id']}/artifacts?per_page=100")
+            available = {item['name'] for item in artifacts['artifacts'] if not item['expired']}
+            if expected <= available:
+                return str(run['id'])
+        remaining = deadline - time.monotonic()
+        if not pending or wait is None or attempt == attempts or remaining <= 0:
+            return ''
+        print('Waiting for the same commit on main before starting another full build...', flush=True)
+        wait(min(30, remaining))
     return ''
 
 
@@ -120,7 +132,7 @@ def plan():
             raise ValueError(f'Release tag does not match PROJECT_VER: {tag}')
         try:
             reused_run = find_reusable_run(catalog, os.environ['GITHUB_SHA'],
-                                           os.environ['GITHUB_REPOSITORY'], github_request)
+                                           os.environ['GITHUB_REPOSITORY'], github_request, wait=time.sleep)
         except (urllib.error.URLError, TimeoutError) as error:
             print(f'::warning::Cannot look up existing artifacts; building the release: {error}')
     result = {'sha': os.environ['GITHUB_SHA'], 'variants': selected, 'shards': shards,

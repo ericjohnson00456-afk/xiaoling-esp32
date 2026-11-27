@@ -174,6 +174,29 @@ class ReuseTests(unittest.TestCase):
         self.artifacts.pop()
         self.assertEqual(self.lookup(), '')
 
+    def test_release_waits_for_matching_running_main_then_reuses_it(self):
+        self.run['status'] = 'in_progress'
+        self.run['conclusion'] = None
+        waits = []
+
+        def request(path):
+            return ({'workflow_runs': [self.run]} if '/workflows/' in path
+                    else {'artifacts': self.artifacts})
+
+        def finish(seconds):
+            waits.append(seconds)
+            self.run.update(status='completed', conclusion='success')
+
+        self.assertEqual(ci.find_reusable_run(self.catalog, 'tested', 'owner/repo',
+                                             request, wait=finish), '42')
+        self.assertEqual(waits, [30])
+        self.run.update(status='queued', conclusion=None)
+        self.assertEqual(ci.find_reusable_run(self.catalog, 'tested', 'owner/repo',
+                                             request, wait=lambda _: None, attempts=1), '')
+        self.run.update(status='completed', conclusion='failure')
+        self.assertEqual(ci.find_reusable_run(self.catalog, 'tested', 'owner/repo',
+                                             request, wait=lambda _: self.fail('must not wait')), '')
+
 
 class BatchTests(unittest.TestCase):
     def test_one_failure_keeps_building_and_preserves_diagnostics(self):

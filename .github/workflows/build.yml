@@ -11,6 +11,7 @@ on:
   pull_request:
     branches:
       - main
+      - dev
       - 'dev-*'
   release:
     types: [published]
@@ -30,7 +31,7 @@ jobs:
       actions: read
     name: Determine build batches
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 150
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
       count: ${{ steps.plan.outputs.count }}
