@@ -116,6 +116,11 @@ def build_tree(root_dir):
             node.exec_bit = exec_bit
             with open(path, "rb") as f:
                 node.data = f.read()
+            if node.data.startswith(b"version https://git-lfs.github.com/spec/v1"):
+                raise ValueError(
+                    f"Unresolved Git LFS pointer: {path}. "
+                    "Run 'git lfs pull' before building resources."
+                )
             node.size = len(node.data)
             inode_map[inode_key] = node
             return node

@@ -22,6 +22,34 @@ def files_in_image(path):
 
 
 class TextFontPackagingTest(unittest.TestCase):
+    def test_unresolved_lfs_resources_fail_packaging(self):
+        for relative, partition in (
+            ("respak/font/font_puhui_common_16_4.bin", "respak"),
+            ("tone/000_greeting.mp3", "tone"),
+            ("emoji/happy/001.png", "emoji"),
+        ):
+            with self.subTest(resource=relative), tempfile.TemporaryDirectory() as temp:
+                base = Path(temp)
+                source = base / "resources"
+                for locale in ("zh-CN", "en-US"):
+                    (source / "respak/locales" / locale).mkdir(parents=True)
+                asset = source / relative
+                asset.parent.mkdir(parents=True, exist_ok=True)
+                asset.write_text(
+                    "version https://git-lfs.github.com/spec/v1\n"
+                    "oid sha256:" + "0" * 64 + "\nsize 123456\n"
+                )
+                output = base / "output"
+                result = subprocess.run([
+                    sys.executable, str(ROOT / "scripts/build_split_resources.py"),
+                    "--resource-root", str(source), "--output-dir", str(output),
+                ], capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("Unresolved Git LFS pointer", result.stderr)
+                self.assertIn(asset.name, result.stderr)
+                self.assertIn("git lfs pull", result.stderr)
+                self.assertFalse((output / (partition + ".bin")).exists())
+
     def test_small_board_font_replaces_text_only_and_preserves_sources(self):
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)
