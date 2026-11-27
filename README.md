@@ -2,7 +2,7 @@
 
 小聆 AI 是面向桌面机器人、陪伴设备和语音终端的智能语音交互方案。本仓库提供运行在 ESP32 系列芯片上的设备端固件：设备完成配网和激活后，通过小聆平台建立长连接，支持语音唤醒、录音上传、流式语音播放和多种设备能力扩展。
 
-项目当前版本为 `2.1.0`，基于 [ESP-IDF](https://github.com/espressif/esp-idf) 构建，依赖在 `main/idf_component.yml` 中声明，由 Component Manager 安装并生成本地 `dependencies.lock`。
+项目当前版本为 `2.1.1`，基于 [ESP-IDF](https://github.com/espressif/esp-idf) 构建，依赖在 `main/idf_component.yml` 中声明，由 Component Manager 安装并生成本地 `dependencies.lock`。
 
 ## 了解小聆
 
