@@ -516,21 +516,21 @@ std::string USB_Esp32Camera::Explain(const std::string& question) {
     }
     
     // 第一块：question字段
-    http->Write(question_field.c_str(), question_field.size());
+    http->Write(question_field.c_str(), question_field.size()).value_or(-1);
     
     // 第二块：文件字段头部
-    http->Write(file_header.c_str(), file_header.size());
+    http->Write(file_header.c_str(), file_header.size()).value_or(-1);
     
     // 第三块：JPEG数据
-    http->Write((const char*)jpeg_data_.fb_buf, jpeg_data_.fb_buf_size);
+    http->Write((const char*)jpeg_data_.fb_buf, jpeg_data_.fb_buf_size).value_or(-1);
 
     // 第四块：multipart尾部
-    http->Write(multipart_footer.c_str(), multipart_footer.size());
+    http->Write(multipart_footer.c_str(), multipart_footer.size()).value_or(-1);
     
     // 结束块
-    http->Write("", 0);
+    http->Write("", 0).value_or(-1);
 
-    if (http->GetStatusCode() != 200) {
+    if (http->GetStatusCode().value_or(-1) != 200) {
         throw std::runtime_error("Failed to upload photo");
     }
 

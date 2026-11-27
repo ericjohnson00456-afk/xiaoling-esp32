@@ -122,8 +122,8 @@ list(APPEND SOURCES ${BOARD_COMMON_SOURCES})
 list(APPEND INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/boards/common)
 
 if(CONFIG_IDF_TARGET_ESP32S3)
-    file(GLOB BOARD_COMMON_ESP32S3_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/boards/common_esp32s3/*.cc)
-    list(APPEND SOURCES ${BOARD_COMMON_ESP32S3_SOURCES})
+    # No current board instantiates the legacy UVC adapter. It depends on
+    # removed private USB HCD APIs, so do not add it to every S3 firmware.
     list(APPEND INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/boards/common_esp32s3)
 endif()
 
@@ -798,18 +798,30 @@ if(CONFIG_USE_MICRO_WAKE_WORD)
     list(APPEND MWW_EMBED_FILES "audio/wake_words/micro_wake_word/models/vad/vad.tflite")
 endif()
 
-set(MAIN_PRIV_REQUIRES_EXTRA "")
+set(MAIN_PRIV_REQUIRES_EXTRA esp_driver_i2s esp_driver_i2c esp_driver_gpio
+    esp_driver_spi esp_driver_ledc esp_driver_uart esp_driver_sdspi
+    esp_driver_sdmmc esp_driver_gptimer esp_driver_pcnt esp_driver_rmt esp_driver_tsens
+    esp_driver_usb_serial_jtag esp_timer esp_wifi esp_event esp_netif esp_eth
+    esp_lcd esp_mm esp_hw_support esp_system esp_ringbuf esp_partition)
+if(IDF_TARGET STREQUAL "esp32p4")
+    list(APPEND MAIN_PRIV_REQUIRES_EXTRA esp_driver_ppa)
+endif()
+if(NOT IDF_TARGET STREQUAL "esp32")
+    list(APPEND MAIN_PRIV_REQUIRES_EXTRA 78__uart-uhci)
+endif()
 if(CONFIG_BOARD_TYPE_M5STACK_STICK_S3)
     list(APPEND MAIN_PRIV_REQUIRES_EXTRA m5stack__m5pm1)
 endif()
 
 idf_component_register(SRCS ${SOURCES}
                     INCLUDE_DIRS ${INCLUDE_DIRS}
-                    REQUIRES lua esp_http_client mbedtls json nvs_flash espressif__adc_battery_estimation esp_adc efuse console spi_flash app_update esp_app_format esp_psram 78__esp-opus bt fatfs
+                    REQUIRES lua esp_http_client mbedtls espressif__cjson nvs_flash espressif__adc_battery_estimation esp_adc efuse console spi_flash app_update esp_app_format esp_psram 78__esp-opus bt fatfs
                     PRIV_REQUIRES ${MAIN_PRIV_REQUIRES_EXTRA}
                     WHOLE_ARCHIVE
                     EMBED_FILES ${MWW_EMBED_FILES}
                     )
+
+set_property(TARGET ${COMPONENT_LIB} PROPERTY CXX_STANDARD 23)
 
 # Reuse upstream GPIO definitions and optional physical display metadata.
 execute_process(

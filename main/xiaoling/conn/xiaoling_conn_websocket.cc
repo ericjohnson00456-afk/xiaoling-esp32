@@ -127,10 +127,10 @@ bool XiaolingConnWebSocket::Connect(const std::string& url, const XiaolingWsHead
         }
     });
 
-    websocket_->OnError([this](int error) {
-        ESP_LOGE(TAG, "Managed WebSocket error: %d", error);
+    websocket_->OnError([this](const NetworkError& error) {
+        ESP_LOGE(TAG, "Managed WebSocket error: %s", error.ToString().c_str());
         if (on_error_ != nullptr) {
-            on_error_(error);
+            on_error_(error.native != 0 ? error.native : -1);
         }
     });
 

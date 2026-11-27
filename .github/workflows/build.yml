@@ -96,9 +96,8 @@ jobs:
       matrix:
         include: ${{ fromJson(needs.prepare.outputs.variants) }}
     runs-on: ubuntu-latest
-    continue-on-error: true
     container:
-      image: espressif/idf:release-v5.5
+      image: espressif/idf:release-v6.1
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -123,7 +122,7 @@ jobs:
     strategy:
       matrix:
         idf:
-          - v5.5
+          - v6.1
         board:
           - atk-dnesp32s3-box
           - esp32s3-korvo2-v3

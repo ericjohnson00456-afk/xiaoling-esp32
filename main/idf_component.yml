@@ -1,5 +1,11 @@
 ## IDF Component Manager Manifest File
 dependencies:
+  espressif/cjson: ^1.7.19
+  espressif/mqtt: ^1.0.0
+  espressif/usb:
+    version: ^1.0.0
+    rules:
+    - if: target in [esp32s3, esp32p4]
   romfs:
     path: ../components/romfs
   base64_codec:
@@ -7,49 +13,57 @@ dependencies:
   image_codec:
     path: ../components/image_codec
   waveshare/esp_lcd_sh8601: 1.0.2
-  espressif/esp_lcd_ili9341: ==1.2.0
-  espressif/esp_lcd_gc9a01: ==2.0.1
-  espressif/esp_lcd_st77916: ^1.0.1
-  espressif/esp_lcd_axs15231b: ^1.0.0
+  espressif/esp_lcd_ili9341: ^2.1.0
+  espressif/esp_lcd_gc9a01: ~2.0.4
+  espressif/esp_lcd_st77916: ^2.0.2
+  espressif/esp_lcd_axs15231b: ^2.1.0
 
   espressif/esp_lcd_st7701:
-    version: ^1.1.4
+    version: ^2.0.2~2
     rules:
     - if: target in [esp32s3, esp32p4]
   espressif/esp_lcd_st7796:
-    version: 1.3.5
+    version: ~1.4.0
     rules:
     - if: target in [esp32, esp32s2, esp32s3, esp32p4]
-  espressif/esp_lcd_spd2010: ==1.0.2
-  espressif/esp_io_expander_tca9554: ==2.0.0
-  espressif/esp_lcd_panel_io_additions: ^1.0.1
-  78/esp_lcd_nv3023: ~1.0.0
-  78/esp-wifi-connect: ~3.0.2
+  espressif/esp_lcd_spd2010: ^2.0.0~1
+  espressif/esp_io_expander_tca9554: ~2.0.3
+  espressif/esp_lcd_panel_io_additions: ^1.0.1~1
+  78/esp_lcd_nv3023: ==1.0.1
+  78/esp-wifi-connect: ~3.3.3
   78/esp-opus-encoder: ~2.4.1
-  78/esp-ml307: ==3.3.2
+  78/esp-ml307: ~3.8.3
+  78/uart-uhci:
+    version: ^0.4.1
+    rules:
+    - if: target not in [esp32]
   78/xiaozhi-fonts: ~1.5.5
   espressif/led_strip: ~3.0.1
-  espressif/esp_codec_dev: ~1.5
-  espressif/esp-sr: ~2.2.0
-  espressif/button: ~4.1.3
-  espressif/knob: ^1.0.0
-  espressif/esp32-camera: ~2.1.2
+  espressif/esp_codec_dev: ~1.6.2
+  espressif/esp-sr: ==2.4.7
+  espressif/button: ~4.2.1
+  espressif/knob: ^1.1.0
+  espressif/esp32-camera: ^2.1.7
   espressif/esp_video:
-    version: ==1.3.1   # for compatibility. update version may need to modify this project code.
+    version: ^2.4.1
     rules:
-    - if: target not in [esp32]
+    - if: target in [esp32s3, esp32p4, esp32c5]
+    matches:
+    - if: target == esp32p4
+      version: ^2.6.0
+    - if: target in [esp32s3, esp32c5]
   espressif/esp_image_effects:
-    version: ^1.0.1
+    version: ^1.1.0
     rules:
     - if: target not in [esp32]
-  espressif/esp_lcd_touch_ft5x06: ~1.0.7
+  espressif/esp_lcd_touch_ft5x06: ^1.1.1
   espressif/esp_lcd_touch_gt911: ^1
   espressif/esp_lcd_touch_gt1151: ^1
   waveshare/esp_lcd_touch_cst9217: ^1.0.3
-  espressif/esp_lcd_touch_cst816s: ^1.0.6
+  espressif/esp_lcd_touch_cst816s: ^1.1.2
   # UI 使用 LVGL 9.3 的图像解码私有接口，避免重新解析时升级到不兼容版本。
   lvgl/lvgl: ==9.3.0
-  esp_lvgl_port: ~2.6.0
+  esp_lvgl_port: ~2.9.0
   espressif/esp_io_expander_tca95xx_16bit: ^2.0.0
   espressif2022/image_player: ^1.1.1
   espressif/adc_mic: ^0.2.1
@@ -59,14 +73,14 @@ dependencies:
     rules:
     - if: target in [esp32s3]
   espressif/adc_battery_estimation: ^0.2.0
-  espressif/esp_new_jpeg: ^0.6.1
+  espressif/esp_new_jpeg: ^1.0.2
   espressif/esp_audio_simple_player: ==1.0.0~2
-  # 1.0.1 需要 esp_codec_dev 2.x；当前工程的音频驱动仍使用 1.5.x。
+  # 1.0.1 需要 esp_codec_dev 2.x；当前工程的音频驱动仍使用 1.x。
   espressif/gmf_io: ==1.0.0
 
   # SenseCAP Watcher Board
   wvirgil123/sscma_client:
-    version: 1.0.2
+    version: ~1.0.4
     rules:
     - if: target in [esp32s3]
 
@@ -80,35 +94,31 @@ dependencies:
     rules:
     - if: target in [esp32p4]
   espressif/esp32_p4_function_ev_board:
-    version: ^5.0.3
+    version: ^5.2.3
     rules:
     - if: target in [esp32p4]
   espressif/esp_lcd_ili9881c:
-    version: ^1.0.1
+    version: ^1.1.0
     rules:
     - if: target in [esp32p4]
   espressif/esp_lcd_ek79007:
-    version: ^1.0.3
+    version: ^2.0.2~1
     rules:
     - if: target in [esp32p4]
   espressif/esp_hosted:
-    version: 2.0.17
+    version: ^2.12.11
     rules:
     - if: target in [esp32h2, esp32p4]
   espressif/esp_wifi_remote:
-    version: '*'
+    version: ^1.6.4
     rules:
     - if: target in [esp32p4]
   espfriends/servo_dog_ctrl:
-    version: ^0.1.8
+    version: ^0.2.0
     rules:
     - if: target in [esp32c3]
   lijunru-hub/esp-ppbuffer:
     version: ^0.1.0
-    rules:
-    - if: target in [esp32s3]
-  espressif/usb_stream:
-    version: ^1.5.1
     rules:
     - if: target in [esp32s3]
   # 与 ESPHome 2026.9.1 的 micro_wake_word 组件保持一致，避免 NN 版本漂移。
@@ -122,12 +132,12 @@ dependencies:
     - if: target in [esp32p4]
 
   espressif/bmi270_sensor:
-    version: ^0.1.0
+    version: ^0.1.2
     rules:
     - if: target in [esp32s3, esp32c5]
 
   ## Required IDF version
   idf:
-    version: '>=5.4.0'
+    version: '>=6.1.0'
   espressif/esp_lcd_touch_st7123: ^1.0.0
   m5stack/m5pm1: ^1.0.5

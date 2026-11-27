@@ -40,7 +40,7 @@ std::unique_ptr<LvglImage> ImageFetcher::Fetch(const std::string& url, int timeo
             return nullptr;
         }
 
-        int status_code = http->GetStatusCode();
+        int status_code = http->GetStatusCode().value_or(-1);
         if (status_code != 200) {
             ESP_LOGE(TAG, "Failed to fetch image, status code: %d", status_code);
             http->Close();

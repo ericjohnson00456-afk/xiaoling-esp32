@@ -50,7 +50,7 @@
 ### 环境要求
 
 - Windows、Linux 或 macOS
-- 推荐 ESP-IDF `v5.4.4`；组件清单要求 `>= 5.4.0`，其他版本需要单独验证。使用前执行 `export.bat`（Windows）或 `source export.sh`（Linux/macOS）
+- 使用 ESP-IDF `6.1.1`，组件清单要求 `>= 6.1.0`。推荐 `release/v6.1`；当前验证基线为 `c112a7898c79adc3421950a03eb56107253cd824`。使用前执行 `export.bat`（Windows）或 `source export.sh`（Linux/macOS）
 - Python、CMake、Ninja 等 ESP-IDF 工具链
 - 一块已在 `main/boards/` 中适配的开发板
 

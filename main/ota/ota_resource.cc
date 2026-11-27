@@ -164,7 +164,7 @@ esp_err_t Ota::CheckResources() {
         http->Close();
         return ESP_FAIL;
     }
-    const int status = http->GetStatusCode();
+    const int status = http->GetStatusCode().value_or(-1);
     const std::string body = http->ReadAll();
     ESP_LOGI(TAG, "Resource OTA response: status=%d body=%s", status,
              body.empty() ? "<empty>" : body.c_str());
@@ -249,7 +249,7 @@ bool Ota::UpgradeResource(Resource resource, const std::string& url, size_t expe
         ::Resource::Reload(package);
         return false;
     }
-    const int status = http->GetStatusCode();
+    const int status = http->GetStatusCode().value_or(-1);
     const size_t content_length = http->GetBodyLength();
     ESP_LOGI(TAG, "Resource download response: status=%d content_length=%u url=%s",
              status, static_cast<unsigned>(content_length), url.c_str());
@@ -288,7 +288,7 @@ bool Ota::UpgradeResource(Resource resource, const std::string& url, size_t expe
     constexpr int64_t kProgressReportIntervalUs = 200000;
     int64_t last_report_time = esp_timer_get_time();
     while (written < content_length) {
-        const int ret = http->Read(buffer.get(), std::min(kBufferSize, content_length - written));
+        const int ret = http->Read(buffer.get(), std::min(kBufferSize, content_length - written)).value_or(-1);
         if (ret <= 0 || esp_partition_write(partition, written, buffer.get(), ret) != ESP_OK) {
             ESP_LOGE(TAG, "Resource download/write failed at %u", static_cast<unsigned>(written));
             http->Close();

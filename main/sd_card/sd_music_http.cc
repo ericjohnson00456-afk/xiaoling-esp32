@@ -114,7 +114,7 @@ std::string BuildFileJson(const SdMusicTrack& track) {
 }
 
 bool WriteChunk(Http& http, const std::string& chunk) {
-    return chunk.empty() || http.Write(chunk.data(), chunk.size()) > 0;
+    return chunk.empty() || http.Write(chunk.data(), chunk.size()).value_or(-1) > 0;
 }
 
 void AppendRequestLogPreview(std::string& preview, const std::string& chunk,
@@ -151,7 +151,7 @@ SdMusicHttpResult SdMusicHttp::PostJson(const char* path,
         http->Close();
         return {ESP_FAIL, 0};
     }
-    const int status = http->GetStatusCode();
+    const int status = http->GetStatusCode().value_or(-1);
     const std::string response = http->ReadAll();
     http->Close();
     const size_t preview = std::min<size_t>(response.size(), 256);
@@ -247,7 +247,7 @@ SdMusicHttpResult SdMusicHttp::PostFiles(
         AppendRequestLogPreview(request_log_preview, "]}", request_log_truncated);
         write_ok = WriteChunk(*http, "]}");
     }
-    if (write_ok) write_ok = http->Write("", 0) >= 0;
+    if (write_ok) write_ok = http->Write("", 0).value_or(-1) >= 0;
     if (!write_ok) {
         ESP_LOGW(kTag, "发送 TF 卡文件批次失败");
         http->Close();
@@ -258,7 +258,7 @@ SdMusicHttpResult SdMusicHttp::PostFiles(
              request_log_truncated ? "(前4096字节)" : "",
              request_log_preview.c_str());
 
-    const int status = http->GetStatusCode();
+    const int status = http->GetStatusCode().value_or(-1);
     const std::string response = http->ReadAll();
     http->Close();
     const size_t preview = std::min<size_t>(response.size(), 256);

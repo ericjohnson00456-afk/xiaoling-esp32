@@ -3,7 +3,7 @@
 固件必须与实物板型匹配。`/dev/ttyACM0` 上的机器是 ESP-BOX-3，其他 S3
 板型的固件只能在对应硬件上验证麦克风、功放、屏幕和网络接口。
 
-使用 ESP-IDF 5.4.4 打开串口监视器：
+使用 ESP-IDF 6.1.1 打开串口监视器：
 
 ```sh
 idf.py -p /dev/ttyACM0 monitor

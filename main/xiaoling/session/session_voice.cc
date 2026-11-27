@@ -379,7 +379,7 @@ private:
         int header_waits = 0;
         while (IsCurrent(request.generation) && status_code < 0 &&
                header_waits < kSubtitleHeaderMaxWaits) {
-            status_code = http->GetStatusCode();
+            status_code = http->GetStatusCode().value_or(-1);
             if (status_code < 0) {
                 ++header_waits;
                 ESP_LOGW(TAG, "字幕 HTTP 等待响应头: attempt=%d/%d",
@@ -403,7 +403,7 @@ private:
         int read_errors = 0;
         char read_buffer[1024];
         while (!done && IsCurrent(request.generation)) {
-            const int bytes = http->Read(read_buffer, sizeof(read_buffer));
+            const int bytes = http->Read(read_buffer, sizeof(read_buffer)).value_or(-1);
             if (bytes == 0) {
                 ESP_LOGI(TAG, "字幕 HTTP EOF");
                 break;

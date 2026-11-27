@@ -23,7 +23,7 @@
 - **文档和配置说明**：核对代码、命令、引用和链接。说明文档变更不触发硬件验证；实际构建配置变更按上一项处理。
 - **板型适配、驱动问题、烧录与真机验证**：使用仓库内的 [xiaoling-board-adaptation skill](.agents/skills/xiaoling-board-adaptation/SKILL.md)，按任务选取相应步骤。详细适配教程见 [自定义开发板指南](docs/custom-board.md)。
 
-需要构建固件时，使用 ESP-IDF **5.4.4**、Python **3.10 以上**。标准按板型构建入口为
+需要构建固件时，使用 ESP-IDF **6.1.1**（推荐 `release/v6.1`，验证基线见 README）、Python **3.10 以上**。标准按板型构建入口为
 `python scripts/release.py <板型>`；参数及产物说明见 [README](README.md)。
 已有构建目录的板型和配置确认一致时，可用 `idf.py build` 做增量验证。
 

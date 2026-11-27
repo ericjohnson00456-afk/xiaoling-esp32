@@ -107,7 +107,7 @@ bool XiaolingConnActivation::Fetch() {
         return false;
     }
 
-    const int status = http->GetStatusCode();
+    const int status = http->GetStatusCode().value_or(-1);
     const std::string body = http->ReadAll();
     http->Close();
     if (status != 200) {
@@ -157,7 +157,7 @@ esp_err_t XiaolingConnActivation::Submit() const {
         return ESP_FAIL;
     }
 
-    const int status = http->GetStatusCode();
+    const int status = http->GetStatusCode().value_or(-1);
     if (status == 202) {
         http->Close();
         return ESP_ERR_TIMEOUT;

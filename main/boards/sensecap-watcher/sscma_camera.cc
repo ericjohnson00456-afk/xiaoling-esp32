@@ -716,22 +716,22 @@ std::string SscmaCamera::Explain(const std::string& question) {
     }
     
     // 第一块：question字段
-    http->Write(question_field.c_str(), question_field.size());
+    http->Write(question_field.c_str(), question_field.size()).value_or(-1);
     
     // 第二块：文件字段头部
-    http->Write(file_header.c_str(), file_header.size());
+    http->Write(file_header.c_str(), file_header.size()).value_or(-1);
     
     // 第三块：JPEG数据
-    http->Write((const char*)jpeg_data_.buf, jpeg_data_.len);
+    http->Write((const char*)jpeg_data_.buf, jpeg_data_.len).value_or(-1);
 
     // 第四块：multipart尾部
-    http->Write(multipart_footer.c_str(), multipart_footer.size());
+    http->Write(multipart_footer.c_str(), multipart_footer.size()).value_or(-1);
     
     // 结束块
-    http->Write("", 0);
+    http->Write("", 0).value_or(-1);
 
-    if (http->GetStatusCode() != 200) {
-        ESP_LOGE(TAG, "Failed to upload photo, status code: %d", http->GetStatusCode());
+    if (http->GetStatusCode().value_or(-1) != 200) {
+        ESP_LOGE(TAG, "Failed to upload photo, status code: %d", http->GetStatusCode().value_or(-1));
         return "{\"success\": false, \"message\": \"Failed to upload photo\"}";
     }
 

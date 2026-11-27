@@ -78,7 +78,7 @@ bool PostJsonForToken(const std::string& url, const std::string& body,
         return false;
     }
 
-    status_code = http->GetStatusCode();
+    status_code = http->GetStatusCode().value_or(-1);
     response_body = http->ReadAll();
     http->Close();
     return true;
@@ -106,7 +106,7 @@ bool GetJsonWithHeaders(
     if (!http->Open("GET", url)) {
         return false;
     }
-    status_code = http->GetStatusCode();
+    status_code = http->GetStatusCode().value_or(-1);
     response_body = http->ReadAll();
     http->Close();
     return true;
