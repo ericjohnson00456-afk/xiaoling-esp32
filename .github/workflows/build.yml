@@ -7,141 +7,164 @@ on:
       - dev
       - 'dev-*'
       - ci/* # for ci test
+      - codex/**
   pull_request:
     branches:
       - main
       - 'dev-*'
   release:
     types: [published]
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'release' }}
 
 jobs:
   prepare:
-    name: Determine variants to build
+    permissions:
+      contents: read
+      actions: read
+    name: Determine build batches
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
-      variants: ${{ steps.select.outputs.variants }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      count: ${{ steps.plan.outputs.count }}
+      reused_run: ${{ steps.plan.outputs.reused_run }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
-
-      - id: list
-        name: Get all variant list
-        run: |
-          echo "all_variants=$(python scripts/build.py --list-boards --json)" >> $GITHUB_OUTPUT
-
-      - id: select
-        name: Select variants based on changes
+      - id: plan
         env:
-          ALL_VARIANTS: ${{ steps.list.outputs.all_variants }}
-        run: |
-          EVENT_NAME="${{ github.event_name }}"
-
-          # push 或 release，编译全部变体
-          if [[ "$EVENT_NAME" == "push" || "$EVENT_NAME" == "release" ]]; then
-            echo "variants=$ALL_VARIANTS" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          # pull_request 场景
-          BASE_SHA="${{ github.event.pull_request.base.sha }}"
-          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
-          echo "Base: $BASE_SHA, Head: $HEAD_SHA"
-
-          CHANGED=$(git diff --name-only $BASE_SHA $HEAD_SHA || true)
-          echo -e "Changed files:\n$CHANGED"
-
-          SELECTED=$(printf '%s\n' "$CHANGED" | python scripts/build.py --select-changed)
-          echo "variants=$SELECTED" >> "$GITHUB_OUTPUT"
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/ci.py plan
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ci-plan
+          path: ci-plan.json
+          retention-days: 7
 
   build:
-    name: Build ${{ matrix.name }}
+    name: Build ${{ matrix.id }}
     needs: prepare
-    if: ${{ needs.prepare.outputs.variants != '[]' }}
+    if: needs.prepare.outputs.count != '0' && needs.prepare.outputs.reused_run == ''
     strategy:
-      fail-fast: false  # 单个变体失败不影响其它变体
-      matrix:
-        include: ${{ fromJson(needs.prepare.outputs.variants) }}
+      fail-fast: false
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
     runs-on: ubuntu-latest
-    container:
-      image: espressif/idf:v6.1.1
+    timeout-minutes: 120
+    container: espressif/idf:v6.1.1
+    env:
+      IDF_CCACHE_ENABLE: '1'
+      CCACHE_DIR: ${{ github.workspace }}/.cache/ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_MAXSIZE: 256M
+      CCACHE_COMPILERCHECK: content
+      IDF_COMPONENT_CACHE_PATH: ${{ github.workspace }}/.cache/components
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           lfs: true
-
       - uses: ./.github/actions/setup-idf
-
-      - name: Build current variant
+      - name: Restore component downloads
+        id: components
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache/components
+          key: idf6-components-${{ matrix.target }}-${{ hashFiles('**/idf_component.yml', '.github/actions/setup-idf/action.yml') }}
+      - name: Restore compiled objects
+        id: objects
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache/ccache
+          key: idf6-ccache-${{ matrix.id }}-${{ hashFiles('.github/actions/setup-idf/action.yml') }}-${{ github.sha }}-${{ github.run_attempt }}
+          restore-keys: |
+            idf6-ccache-${{ matrix.id }}-${{ hashFiles('.github/actions/setup-idf/action.yml') }}-
+      - name: Build batch
         shell: bash
+        env:
+          CI_VARIANTS: ${{ toJson(matrix.variants) }}
+          CI_SHARD: ${{ matrix.id }}
         run: |
-          source $IDF_PATH/export.sh
-          python scripts/build.py ${{ matrix.board }} --name ${{ matrix.name }}
-
-      - name: Upload artifacts
+          set -euo pipefail
+          source "$IDF_PATH/export.sh"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE/.git"
+          ccache --zero-stats
+          python scripts/ci.py build "$CI_SHARD"
+      - name: Compiler cache statistics
+        if: always()
+        shell: bash
+        run: ccache --show-stats
+      - name: Save compiled objects
+        if: ${{ !cancelled() && steps.objects.outputs.cache-primary-key != '' && steps.objects.outputs.cache-hit != 'true' }}
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: .cache/ccache
+          key: ${{ steps.objects.outputs.cache-primary-key }}
+      - name: Save component downloads
+        if: ${{ !cancelled() && steps.components.outputs.cache-primary-key != '' && steps.components.outputs.cache-hit != 'true' }}
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: .cache/components
+          key: ${{ steps.components.outputs.cache-primary-key }}
+      - name: Upload firmware and diagnostics
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
-          name: xiaoling_${{ matrix.name }}_${{ github.sha }}
-          path: build/merged-binary.bin
+          name: firmware-${{ matrix.id }}
+          path: ci-artifacts/${{ matrix.id }}/
           if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
 
-  compatibility:
-    name: Representative builds
-    strategy:
-      matrix:
-        idf:
-          - v6.1.1
-        board:
-          - atk-dnesp32s3-box
-          - esp32s3-korvo2-v3
+  result:
+    name: CI result
+    if: always()
+    needs: [prepare, build]
     runs-on: ubuntu-latest
-    container:
-      image: espressif/idf:${{ matrix.idf }}
+    timeout-minutes: 5
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          lfs: true
-
-      - uses: ./.github/actions/setup-idf
-
-      - name: Build current board
-        shell: bash
+      - name: Check required jobs
+        env:
+          PREPARE: ${{ needs.prepare.result }}
+          BUILD: ${{ needs.build.result }}
+          COUNT: ${{ needs.prepare.outputs.count }}
+          REUSED: ${{ needs.prepare.outputs.reused_run }}
         run: |
-          source $IDF_PATH/export.sh
-          python scripts/build.py ${{ matrix.board }}
+          test "$PREPARE" = success
+          if [ "$COUNT" != 0 ] && [ -z "$REUSED" ]; then
+            test "$BUILD" = success
+          fi
 
   release:
+    permissions:
+      contents: write
+      actions: read
     name: Publish release
-    needs: [ build, compatibility ]
+    needs: [prepare, result]
     if: github.event_name == 'release' && startsWith(github.ref, 'refs/tags/xiaoling/v')
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - name: Download artifacts
         uses: actions/download-artifact@v5
         with:
-          pattern: xiaoling_*
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.prepare.outputs.reused_run || github.run_id }}
+          pattern: firmware-*
+          path: downloaded
+          merge-multiple: true
 
-      - name: Prepare release assets
-        run: |
-          mkdir -p assets
-          for dir in xiaoling_*; do
-            board=${dir#xiaoling_}
-            board=${board%_*}
-            ref=${{ github.ref_name }}
-            ref=${ref#xiaoling/}
-            pushd $dir
-            zip -r9 "../assets/xiaoling_${board}_${ref}.zip" *.bin
-            popd
-          done
+      - name: Validate complete firmware set
+        run: python3 scripts/ci.py release-assets downloaded assets
 
       - name: Upload release assets
         uses: svenstaro/upload-release-action@2.11.2

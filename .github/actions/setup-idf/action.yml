@@ -8,7 +8,9 @@ runs:
         IDF_REVISION: c112a7898c79adc3421950a03eb56107253cd824
       run: |
         set -euo pipefail
-        git -C "$IDF_PATH" fetch --depth 1 origin "$IDF_REVISION"
-        git -C "$IDF_PATH" checkout --detach FETCH_HEAD
+        if [ "$(git -C "$IDF_PATH" rev-parse HEAD)" != "$IDF_REVISION" ]; then
+          git -C "$IDF_PATH" fetch --depth 1 origin "$IDF_REVISION"
+          git -C "$IDF_PATH" checkout --detach FETCH_HEAD
+        fi
         git -C "$IDF_PATH" submodule update --init --recursive --depth 1
         test "$(git -C "$IDF_PATH" rev-parse HEAD)" = "$IDF_REVISION"

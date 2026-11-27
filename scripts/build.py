@@ -222,12 +222,15 @@ release = build_board
 def select_changed(variants: list[dict], paths: list[str]) -> list[dict]:
     affected = set()
     for path in paths:
-        if path.startswith(("docs/", ".agents/")) or path.endswith(".md"):
+        if path.startswith(("docs/", ".agents/", "tests/")) or path.endswith(".md"):
             continue
         if path.startswith("main/boards/") and not path.startswith(
                 ("main/boards/common/", "main/boards/common_esp32s3/")):
-            affected.update(item["board"] for item in variants
-                            if path.startswith("main/boards/" + item["board"] + "/"))
+            boards = {item["board"] for item in variants
+                      if path.startswith("main/boards/" + item["board"] + "/")}
+            if not boards:
+                return variants
+            affected.update(boards)
         else:
             return variants
     return [item for item in variants if item["board"] in affected]

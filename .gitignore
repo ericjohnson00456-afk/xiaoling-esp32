@@ -3,6 +3,8 @@ tmp/
 managed_components/
 build*/
 releases/
+ci-artifacts/
+/ci-plan.json
 
 # Local editor and cache files
 .vscode/
