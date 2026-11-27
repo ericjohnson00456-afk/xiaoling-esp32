@@ -5,9 +5,7 @@
     "builds": [
         {
             "name": "atk-dnesp32s3-box2-4g",
-            "sdkconfig_append": [
-                "CONFIG_BOARD_BRAND_ATK=y"
-            ]
+            "sdkconfig_append": []
         }
     ]
 }

@@ -27,7 +27,7 @@
 mkdir -p main/boards/myvendor/my-custom-board
 ```
 
-同品牌板型放入 `main/Kconfig.projbuild` 中对应系列的型号选项，共用该系列的渠道配置。发布配置的 `sdkconfig_append` 需同时选择系列；板级 `sdkconfig.defaults` 若指定型号，也需选择对应系列。未归入品牌系列的板型使用公共应用。自建应用及设备已保存身份的覆盖规则见 [SDK 配置说明](xiaoling.md#2-配置小聆应用)。
+板型直接加入 `main/Kconfig.projbuild` 的板型选择。默认应用由 `config.json` 的 `manufacturer` 关联到 `main/boards/<厂商>/defaults.json`，其中 `product_id` 和 `secret_id` 可分别填写或省略。未提供厂商默认值的字段使用 `main/boards/defaults.json` 中的全局默认值。新增厂商渠道只需添加相应的数据文件，同厂商板型自动复用，不需要修改公共代码或 Kconfig。自建应用及设备已保存身份的覆盖规则见 [SDK 配置说明](xiaoling.md#2-配置小聆应用)。
 
 ### 2. 创建配置文件
 

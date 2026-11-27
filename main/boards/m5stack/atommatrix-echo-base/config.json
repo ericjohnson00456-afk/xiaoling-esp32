@@ -6,7 +6,6 @@
         {
             "name": "atommatrix-echo-base",
             "sdkconfig_append": [
-                "CONFIG_BOARD_BRAND_M5STACK=y",
                 "CONFIG_PARTITION_TABLE_CUSTOM_FILENAME=\"partitions/v2/4m_voice.csv\"",
                 "CONFIG_WAKE_WORD_DISABLED=y",
                 "CONFIG_FATFS_CODEPAGE_437=y",

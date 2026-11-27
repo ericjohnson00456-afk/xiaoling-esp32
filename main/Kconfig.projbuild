@@ -6,40 +6,17 @@ config LSPLATFORM
 
 if LSPLATFORM
     menu "LSPlatform 选项"
-        choice
-            prompt "Product ID"
-            default LSPLATFORM_PRODUCT_ID_BUILTIN
-            help
-                选择 Product ID
-            config LSPLATFORM_PRODUCT_ID_BUILTIN
-                bool "内置"
-                help
-                    使用内置的 Product ID
-            config LSPLATFORM_PRODUCT_ID_CUSTOM
-                bool "自建应用"
-                help
-                    使用自建应用的 Product ID
-        endchoice
-        config LSPLATFORM_BUILTIN_PRODUCT_ID
-            string
-            default LSPLATFORM_CHANNEL_PRODUCT_ID if LSPLATFORM_CHANNEL_PRODUCT_ID != ""
-            default "ef22350d-6863-4814-8ed8-47c5b0c514a6"
-            depends on LSPLATFORM_PRODUCT_ID_BUILTIN
-        config LSPLATFORM_BUILTIN_SECRET_ID
-            string
-            default LSPLATFORM_CHANNEL_SECRET_ID if LSPLATFORM_CHANNEL_SECRET_ID != ""
-            default "47b04b35-ccb6-4c08-9735-201cf22eb39b"
-            depends on LSPLATFORM_PRODUCT_ID_BUILTIN
         config LSPLATFORM_CUSTOM_PRODUCT_ID
-            string "自建应用 Product ID"
-            depends on LSPLATFORM_PRODUCT_ID_CUSTOM
-
-        config LSCHAT_SECRET_ID
-            string "自建应用 Product Secret"
+            string "Product ID（留空使用默认应用）"
             default ""
-            depends on LSPLATFORM_PRODUCT_ID_CUSTOM
             help
-                用于获取 lschat token 的自建应用 Product Secret。生产固件应改由安全存储提供。
+                编译时显式覆盖厂商或全局默认值；设备 KV 中的 pid 优先。
+        config LSCHAT_SECRET_ID
+            string "Product Secret（留空使用默认值）"
+            default ""
+            help
+                编译时显式覆盖厂商或全局默认值；设备 KV 中的 sid 优先。
+                PID 和 Secret 分别逐级回落，请为目标应用填写对应的值。
     endmenu
 
     # gmf_io 1.0.x 的后续候选使用该条件选择 USB Audio 依赖，
@@ -306,52 +283,37 @@ choice BOARD_TYPE
     config BOARD_TYPE_MAGICLICK_C3_V2
         bool "神奇按钮 Magiclick_C3_v2"
         depends on IDF_TARGET_ESP32C3
-    config BOARD_BRAND_M5STACK
-        bool "M5Stack系列"
-        depends on IDF_TARGET_ESP32 || IDF_TARGET_ESP32S3 || IDF_TARGET_ESP32P4
+    config BOARD_TYPE_M5STACK_CORE_S3
+        bool "M5Stack CoreS3"
+        depends on IDF_TARGET_ESP32S3
+    config BOARD_TYPE_M5STACK_STICK_S3
+        bool "M5Stack StickS3"
+        depends on IDF_TARGET_ESP32S3
+    config BOARD_TYPE_M5STACK_CORE_S3_SE
+        bool "M5Stack CoreS3 SE"
+        depends on IDF_TARGET_ESP32S3
+        help
+            CoreS3 SE with 16 MB Flash and 8 MB Quad PSRAM. Shares the
+            CoreS3 display/audio/SD pin map, but has no onboard camera.
+    config BOARD_TYPE_M5STACK_CORE_TAB5
+        bool "M5Stack Tab5"
+        depends on IDF_TARGET_ESP32P4
+    config BOARD_TYPE_M5STACK_ATOM_S3_ECHO_BASE
+        bool "M5Stack AtomS3 + Echo Base"
+        depends on IDF_TARGET_ESP32S3
+    config BOARD_TYPE_M5STACK_ATOM_S3R_ECHO_BASE
+        bool "M5Stack AtomS3R + Echo Base"
+        depends on IDF_TARGET_ESP32S3
+    config BOARD_TYPE_M5STACK_ATOM_S3R_CAM_M12_ECHO_BASE
+        bool "M5Stack AtomS3R CAM/M12 + Echo Base"
+        depends on IDF_TARGET_ESP32S3
+    config BOARD_TYPE_M5STACK_ATOM_ECHOS3R
+        bool "M5Stack AtomEchoS3R"
+        depends on IDF_TARGET_ESP32S3
+    config BOARD_TYPE_M5STACK_ATOM_MATRIX_ECHO_BASE
+        bool "M5Stack AtomMatrix + Echo Base"
+        depends on IDF_TARGET_ESP32
 
-    if BOARD_BRAND_M5STACK
-    choice BOARD_MODEL_M5STACK
-        prompt "开发板型号"
-        config BOARD_TYPE_M5STACK_CORE_S3
-            bool "M5Stack CoreS3"
-            depends on IDF_TARGET_ESP32S3
-        config BOARD_TYPE_M5STACK_STICK_S3
-            bool "M5Stack StickS3"
-            depends on IDF_TARGET_ESP32S3
-        config BOARD_TYPE_M5STACK_CORE_S3_SE
-            bool "M5Stack CoreS3 SE"
-            depends on IDF_TARGET_ESP32S3
-            help
-                CoreS3 SE with 16 MB Flash and 8 MB Quad PSRAM. Shares the
-                CoreS3 display/audio/SD pin map, but has no onboard camera.
-        config BOARD_TYPE_M5STACK_CORE_TAB5
-            bool "M5Stack Tab5"
-            depends on IDF_TARGET_ESP32P4
-        config BOARD_TYPE_M5STACK_ATOM_S3_ECHO_BASE
-            bool "M5Stack AtomS3 + Echo Base"
-            depends on IDF_TARGET_ESP32S3
-        config BOARD_TYPE_M5STACK_ATOM_S3R_ECHO_BASE
-            bool "M5Stack AtomS3R + Echo Base"
-            depends on IDF_TARGET_ESP32S3
-        config BOARD_TYPE_M5STACK_ATOM_S3R_CAM_M12_ECHO_BASE
-            bool "M5Stack AtomS3R CAM/M12 + Echo Base"
-            depends on IDF_TARGET_ESP32S3
-        config BOARD_TYPE_M5STACK_ATOM_ECHOS3R
-            bool "M5Stack AtomEchoS3R"
-            depends on IDF_TARGET_ESP32S3
-        config BOARD_TYPE_M5STACK_ATOM_MATRIX_ECHO_BASE
-            bool "M5Stack AtomMatrix + Echo Base"
-            depends on IDF_TARGET_ESP32
-    endchoice
-
-    config LSPLATFORM_CHANNEL_PRODUCT_ID
-        string
-        default "def3d247-a012-451b-8bde-e80f621e06d2"
-    config LSPLATFORM_CHANNEL_SECRET_ID
-        string
-        default "b70c692d-6089-41b6-bd0f-1edbf70de3c5"
-    endif
 
     config BOARD_TYPE_WAVESHARE_ESP32_S3_AUDIO_BOARD
         bool "Waveshare ESP32-S3-Audio-Board"
@@ -452,43 +414,28 @@ choice BOARD_TYPE
     config BOARD_TYPE_MOVECALL_CUICAN_ESP32S3
         bool "Movecall CuiCan 璀璨·AI吊坠"
         depends on IDF_TARGET_ESP32S3
-    config BOARD_BRAND_ATK
-        bool "正点原子系列"
+    config BOARD_TYPE_ATK_DNESP32S3
+        bool "正点原子DNESP32S3开发板"
+        depends on IDF_TARGET_ESP32S3
+    config BOARD_TYPE_ATK_DNESP32S3_BOX
+        bool "正点原子DNESP32S3-BOX"
+        depends on IDF_TARGET_ESP32S3
+    config BOARD_TYPE_ATK_DNESP32S3_BOX0
+        bool "正点原子DNESP32S3-BOX0"
+        depends on IDF_TARGET_ESP32S3
+    config BOARD_TYPE_ATK_DNESP32S3_BOX2_WIFI
+        bool "正点原子DNESP32S3-BOX2-WIFI"
+        depends on IDF_TARGET_ESP32S3
+    config BOARD_TYPE_ATK_DNESP32S3_BOX2_4G
+        bool "正点原子DNESP32S3-BOX2-4G"
+        depends on IDF_TARGET_ESP32S3
+    config BOARD_TYPE_ATK_DNESP32S3M_WIFI
+        bool "正点原子DNESP32S3M-WIFI"
+        depends on IDF_TARGET_ESP32S3
+    config BOARD_TYPE_ATK_DNESP32S3M_4G
+        bool "正点原子DNESP32S3M-4G"
         depends on IDF_TARGET_ESP32S3
 
-    if BOARD_BRAND_ATK
-    choice BOARD_MODEL_ATK
-        prompt "开发板型号"
-        config BOARD_TYPE_ATK_DNESP32S3
-            bool "正点原子DNESP32S3开发板"
-            depends on IDF_TARGET_ESP32S3
-        config BOARD_TYPE_ATK_DNESP32S3_BOX
-            bool "正点原子DNESP32S3-BOX"
-            depends on IDF_TARGET_ESP32S3
-        config BOARD_TYPE_ATK_DNESP32S3_BOX0
-            bool "正点原子DNESP32S3-BOX0"
-            depends on IDF_TARGET_ESP32S3
-        config BOARD_TYPE_ATK_DNESP32S3_BOX2_WIFI
-            bool "正点原子DNESP32S3-BOX2-WIFI"
-            depends on IDF_TARGET_ESP32S3
-        config BOARD_TYPE_ATK_DNESP32S3_BOX2_4G
-            bool "正点原子DNESP32S3-BOX2-4G"
-            depends on IDF_TARGET_ESP32S3
-        config BOARD_TYPE_ATK_DNESP32S3M_WIFI
-            bool "正点原子DNESP32S3M-WIFI"
-            depends on IDF_TARGET_ESP32S3
-        config BOARD_TYPE_ATK_DNESP32S3M_4G
-            bool "正点原子DNESP32S3M-4G"
-            depends on IDF_TARGET_ESP32S3
-    endchoice
-
-    config LSPLATFORM_CHANNEL_PRODUCT_ID
-        string
-        default "1932f91f-8e6f-4403-aada-956de35b3e5e"
-    config LSPLATFORM_CHANNEL_SECRET_ID
-        string
-        default "bbe7a680-cbc2-47aa-929f-9605c35bc583"
-    endif
 
     config BOARD_TYPE_DU_CHATX
         bool "嘟嘟开发板CHATX(wifi)"

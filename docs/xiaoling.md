@@ -37,14 +37,11 @@ idf.py -DBOARD_DIR=m5stack/core-s3 menuconfig
 
 ## 2. 配置小聆应用
 
-在 `Xiaoling Device → LSPlatform 选项 → Product ID` 中选择应用类型：
-
-- **内置**：根据板型声明的品牌使用对应渠道应用，未声明品牌的板型使用公共应用；
-- **自建应用**：填写自建应用的 Product ID 和 Product Secret。
+在 `Xiaoling Device → LSPlatform 选项` 中填写 Product ID 和 Product Secret；留空时使用板型厂商对应的默认应用，未配置厂商应用时使用全局默认应用。
 
 自建应用需要先在小聆平台创建，并获取 Product ID 和 Secret ID。配置完成后保存，再执行编译和烧录。
 
-设备运行时优先读取 NVS 中保存的 `user/pid` 和 `user/sid`；各项为空时使用对应的编译默认值。普通 `idf.py flash` 保留 NVS 中的应用身份。
+PID 和 SID 分别按非空值逐级选择：设备 NVS 的 `user/pid`、`user/sid` > menuconfig 显式填写的值 > 厂商默认值 > 全局默认值。M5Stack 和正点原子的默认应用由板型 `config.json` 的 `manufacturer` 决定，与板型菜单分组无关。两项可分别填写或留空，无需额外选择应用类型。普通 `idf.py flash` 保留 NVS 中的应用身份。
 
 可通过 USB 串口 shell 查询当前生效的 Product ID 和 NVS 中保存的 Product ID：
 

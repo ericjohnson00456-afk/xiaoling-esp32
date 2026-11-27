@@ -1,6 +1,8 @@
 #include "system_info.h"
 #include "xiaoling/conn/xiaoling_config.h"
 #include "system/settings.h"
+#include "system/product_identity.h"
+#include "product_defaults.generated.h"
 
 #include <freertos/task.h>
 #include <esp_log.h>
@@ -77,28 +79,15 @@ std::string SystemInfo::GetDeviceSerialNumber() {
 #ifdef CONFIG_LSPLATFORM
 std::string SystemInfo::GetProductId() {
     Settings settings("user", false);
-    const std::string stored = settings.GetString("pid");
-    if (!stored.empty()) {
-        return stored;
-    }
-#if defined(CONFIG_LSPLATFORM_PRODUCT_ID_BUILTIN)
-    return std::string(CONFIG_LSPLATFORM_BUILTIN_PRODUCT_ID);
-#elif defined(CONFIG_LSPLATFORM_PRODUCT_ID_CUSTOM)
-    return std::string(CONFIG_LSPLATFORM_CUSTOM_PRODUCT_ID);
-#endif
+    return ResolveIdentityField(settings.GetString("pid"),
+                                CONFIG_LSPLATFORM_CUSTOM_PRODUCT_ID,
+                                ProductDefaults::kManufacturerProductId, ProductDefaults::kGlobalProductId);
 }
 
 std::string SystemInfo::GetSecretId() {
     Settings settings("user", false);
-    const std::string stored = settings.GetString("sid");
-    if (!stored.empty()) {
-        return stored;
-    }
-#if defined(CONFIG_LSPLATFORM_PRODUCT_ID_BUILTIN)
-    return std::string(CONFIG_LSPLATFORM_BUILTIN_SECRET_ID);
-#elif defined(CONFIG_LSPLATFORM_PRODUCT_ID_CUSTOM)
-    return std::string(CONFIG_LSCHAT_SECRET_ID);
-#endif
+    return ResolveIdentityField(settings.GetString("sid"), CONFIG_LSCHAT_SECRET_ID,
+                                ProductDefaults::kManufacturerSecretId, ProductDefaults::kGlobalSecretId);
 }
 
 std::string SystemInfo::GetCloudDeviceId() {

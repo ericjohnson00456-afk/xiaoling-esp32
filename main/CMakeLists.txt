@@ -680,17 +680,11 @@ if(NOT CMAKE_BUILD_EARLY_EXPANSION AND NOT BOARD_DIR)
 endif()
 set(BOARD_CONFIG_FILE "${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_DIR}/config.json")
 set(BOARD_TYPE "")
-set(BOARD_MANUFACTURER "")
 if(EXISTS "${BOARD_CONFIG_FILE}")
     file(READ "${BOARD_CONFIG_FILE}" BOARD_CONFIG_JSON)
     string(JSON BOARD_TYPE ERROR_VARIABLE BOARD_TYPE_ERROR GET "${BOARD_CONFIG_JSON}" type)
     if(BOARD_TYPE_ERROR)
         set(BOARD_TYPE "")
-    endif()
-    string(JSON BOARD_MANUFACTURER ERROR_VARIABLE BOARD_MANUFACTURER_ERROR
-           GET "${BOARD_CONFIG_JSON}" manufacturer)
-    if(BOARD_MANUFACTURER_ERROR)
-        set(BOARD_MANUFACTURER "")
     endif()
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${BOARD_CONFIG_FILE}")
 endif()
@@ -863,6 +857,22 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_DIR}/config.json"
     "${PROJECT_DIR}/scripts/generate_miniapp_board_config.py")
 
+# Application defaults are data owned by the selected manufacturer's directory.
+execute_process(
+    COMMAND ${PYTHON} "${PROJECT_DIR}/scripts/generate_product_defaults.py"
+            --board-config "${BOARD_CONFIG_FILE}"
+            --boards-dir "${CMAKE_CURRENT_SOURCE_DIR}/boards"
+            --output "${CMAKE_CURRENT_BINARY_DIR}/generated/product_defaults.generated.h"
+    RESULT_VARIABLE PRODUCT_DEFAULTS_RESULT)
+if(NOT PRODUCT_DEFAULTS_RESULT EQUAL 0)
+    message(FATAL_ERROR "Failed to generate application defaults")
+endif()
+file(GLOB PRODUCT_DEFAULTS_FILES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/boards/defaults.json"
+    "${CMAKE_CURRENT_SOURCE_DIR}/boards/*/defaults.json")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    ${PRODUCT_DEFAULTS_FILES} "${PROJECT_DIR}/scripts/generate_product_defaults.py")
+
 # Optional dependencies and source options owned by an individual board.
 include("${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_DIR}/board.cmake" OPTIONAL)
 # Resource packaging is selected centrally from the effective hardware config.
@@ -886,7 +896,6 @@ if(NOT BOARD_NAME)
 endif()
 target_compile_definitions(${COMPONENT_LIB}
                     PRIVATE BOARD_TYPE=\"${BOARD_TYPE}\" BOARD_NAME=\"${BOARD_NAME}\"
-                    PRIVATE BOARD_MANUFACTURER=\"${BOARD_MANUFACTURER}\"
                     PRIVATE BUILTIN_TEXT_FONT=${BUILTIN_TEXT_FONT} BUILTIN_ICON_FONT=${BUILTIN_ICON_FONT}
                     )
 
