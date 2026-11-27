@@ -4,7 +4,7 @@
 
 ## 重要提示
 
-> **警告**: 对于自定义开发板，当IO配置与原有开发板不同时，切勿直接覆盖原有开发板的配置编译固件。必须创建新的开发板类型，或者通过config.json文件中的builds配置不同的name和sdkconfig宏定义来区分。使用 `python scripts/release.py [开发板目录名字]` 来编译打包固件。
+> **警告**: 对于自定义开发板，当IO配置与原有开发板不同时，切勿直接覆盖原有开发板的配置编译固件。必须创建新的开发板类型，或者通过config.json文件中的builds配置不同的name和sdkconfig宏定义来区分。使用 `python scripts/build.py [开发板目录名字]` 来编译打包固件。
 >
 > 如果直接覆盖原有配置，将来OTA升级时，您的自定义固件可能会被原有开发板的标准固件覆盖，导致您的设备无法正常工作。每个开发板有唯一的标识和对应的固件升级通道，保持开发板标识的唯一性非常重要。
 
@@ -89,7 +89,7 @@ mkdir main/boards/my-custom-board
 
 #### config.json
 
-在`config.json`中定义编译配置，这个文件用于 `scripts/release.py` 脚本自动化编译：
+在`config.json`中定义编译配置，这个文件用于 `scripts/build.py` 脚本自动化编译：
 
 ```json
 {
@@ -382,7 +382,7 @@ endif()
 如果你的开发板目录下有 `config.json` 文件，可以使用此脚本自动完成配置和编译：
 
 ```bash
-python scripts/release.py my-custom-board
+python scripts/build.py my-custom-board
 ```
 
 此脚本会自动：
@@ -462,4 +462,4 @@ python scripts/release.py my-custom-board
 
 普通 GPIO 按键从已有 `config.h` 定义及实际 Button 构造过程注册。BOOT 为 `function`；特殊 PMIC、ADC、自定义输入通过 `Button::SetMiniapp` 或公共小应用输入接口适配。扩展应默认不支持，不能虚报不存在的按键或灯。功能键短按投递点击，持续 3 秒退出；正常系统行为在退出后恢复。
 
-无 PSRAM 或使用 Nano printf 的板型默认不启用 Lua，保留原有固件功能和硬件能力查询。使用 `python scripts/release.py <板型>` 构建并检查生成的实际板型与内存配置，详见 [Lua 小应用](miniapp.md)。
+无 PSRAM 或使用 Nano printf 的板型默认不启用 Lua，保留原有固件功能和硬件能力查询。使用 `python scripts/build.py <板型>` 构建并检查生成的实际板型与内存配置，详见 [Lua 小应用](miniapp.md)。

@@ -68,9 +68,14 @@ cd xiaoling-esp32
 使用发布脚本选择实际板型并加载对应配置：
 
 ```bash
-python scripts/release.py --list-boards
-python scripts/release.py m5stack-core-s3
+python scripts/build.py --list-boards
+python scripts/build.py m5stack-core-s3
 ```
+
+构建入口支持厂商子目录；`scripts/release.py` 保留为兼容入口。使用已有
+menuconfig 配置时传入 `--sdkconfig <配置文件>`；默认按所选发布变体重新生成
+配置，避免沿用其他板型的 Flash、PSRAM 和分区设置。
+
 
 脚本会重建 `build/` 并修改生成的 `sdkconfig`。已有同名发布 ZIP 时会跳过构建，验证新代码前请先移走旧产物。Flash 容量、Quad/Octal PSRAM 和摄像头等配置必须与实物匹配；仅传入 `BOARD_TYPE` 不能替代实际 Kconfig 的板型选择。
 
@@ -94,20 +99,20 @@ idf.py set-target <esp32|esp32c3|esp32c5|esp32c6|esp32s3|esp32p4>
 
 ## 发布构建
 
-项目提供 `scripts/release.py`，用于按板型读取 `config.json`、追加板级 `sdkconfig`、编译、合并镜像并生成 `releases/v<版本>_<板型>.zip`。
+项目提供 `scripts/build.py`，用于按板型读取 `config.json`、追加板级 `sdkconfig`、编译、合并镜像并生成 `releases/v<版本>_<板型>.zip`。
 
 ```bash
 # 查看所有可发布的板型和变体
-python scripts/release.py --list-boards
+python scripts/build.py --list-boards
 
 # 编译指定板型的全部变体
-python scripts/release.py <板型>
+python scripts/build.py <板型>
 
 # 只编译指定变体
-python scripts/release.py <板型> --name <变体名称>
+python scripts/build.py <板型> --name <变体名称>
 
 # 编译所有已定义发布板型
-python scripts/release.py all
+python scripts/build.py all
 ```
 
 普通 `idf.py build` 也会在构建目录生成 `merged-binary.bin`、带板型前缀的应用 `.bin`、`.elf` 和 OTA 版本/MD5 信息，并打包以下文件：

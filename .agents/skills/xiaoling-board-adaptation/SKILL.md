@@ -21,7 +21,7 @@ description: 用于本仓库的小聆 ESP32 板型适配、板级驱动排查、
 使用 AGENTS.md 指定的工具链版本，在仓库根目录运行：
 
 ```sh
-python scripts/release.py <板型>
+python scripts/build.py <板型>
 ```
 
 `--name <变体>` 选择变体，`--list-boards` 查看目标。构建与产物说明见

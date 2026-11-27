@@ -23,7 +23,7 @@ from functools import lru_cache
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
-import release
+import build as board_build
 
 
 def idf_command():
@@ -153,7 +153,7 @@ def fingerprint(profile=None):
 
 
 def profiles():
-    mapping = release._parse_board_config_map()
+    mapping = board_build._parse_board_config_map()
     result = []
     for board in sorted((ROOT / "main/boards").iterdir()):
         if not board.is_dir() or board.name in {"common", "common_esp32s3"}:
@@ -168,12 +168,12 @@ def profiles():
             simulation = (simulation_options["targets"].get(data["target"], {})
                           if "targets" in simulation_options else simulation_options)
             for build in data["builds"]:
-                symbol = build.get("board_type_config") or release._find_board_config(board.name)
+                symbol = build.get("board_type_config") or board_build._find_board_config(board.name)
                 if mapping.get(symbol) != board.name:
                     raise RuntimeError(f"Invalid board selection: {board.name}: {symbol}")
                 result.append({"board": board.name, "target": data["target"], "name": build["name"],
                                "config_file": str(config.relative_to(ROOT)), "symbol": symbol,
-                               "append": release._apply_auto_selects(build.get("sdkconfig_append", [])),
+                               "append": list(build.get("sdkconfig_append", [])),
                                "qemu": simulation})
     if len({p["name"] for p in result}) != len(result):
         raise RuntimeError("Release variant names must be unique")
