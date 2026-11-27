@@ -55,6 +55,15 @@ extern "C" {
 esp_err_t jpeg_to_image(const uint8_t* src, size_t src_len, uint8_t** out, size_t* out_len, size_t* width,
                         size_t* height, size_t* stride);
 
+/**
+ * Decode an RGB565 preview using the smallest supported downsampling that
+ * fits max_width/max_height. A zero bound is unrestricted. Bounds smaller
+ * than 1/8 of the source use 1/8; the result may exceed those small bounds.
+ * Output ownership and error behavior match jpeg_to_image().
+ */
+esp_err_t jpeg_to_image_fit(const uint8_t* src, size_t src_len, uint8_t** out, size_t* out_len, size_t* width,
+                          size_t* height, size_t* stride, size_t max_width, size_t max_height);
+
 #ifdef __cplusplus
 }
 #endif

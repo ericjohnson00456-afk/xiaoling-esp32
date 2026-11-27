@@ -902,7 +902,7 @@ bool Esp32Camera::CaptureWithPreviewSize(uint16_t preview_width,
             h = preview_height;
         }
 
-        if (preview_width > 0 && preview_height > 0 &&
+        if (frame_.format != V4L2_PIX_FMT_JPEG && preview_width > 0 && preview_height > 0 &&
             (preview_width != w || preview_height != h)) {
             esp_imgfx_pixel_fmt_t scale_format;
             switch (frame_.format) {
@@ -1130,7 +1130,10 @@ bool Esp32Camera::CaptureWithPreviewSize(uint16_t preview_width,
                 size_t out_stride = 0;
 
                 esp_err_t ret =
-                    jpeg_to_image(frame_.data, frame_.len, &out_data, &out_len, &out_width, &out_height, &out_stride);
+                    jpeg_to_image_fit(frame_.data, frame_.len, &out_data, &out_len,
+                                      &out_width, &out_height, &out_stride,
+                                      preview_width ? preview_width : display->width(),
+                                      preview_height ? preview_height : display->height());
                 if (ret != ESP_OK) {
                     ESP_LOGE(TAG, "Failed to decode JPEG image: %d (%s)", (int)ret, esp_err_to_name(ret));
                     if (out_data) {

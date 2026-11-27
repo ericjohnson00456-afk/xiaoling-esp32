@@ -20,7 +20,8 @@
 #define TAG "jpeg_to_image"
 
 static esp_err_t decode_with_rom_jpeg(const uint8_t* src, size_t src_len, uint8_t** out, size_t* out_len,
-                                      size_t* width, size_t* height, size_t* stride) {
+                                      size_t* width, size_t* height, size_t* stride,
+                                      size_t max_width, size_t max_height) {
     ESP_LOGD(TAG, "Decoding JPEG with ESP32-S3 ROM decoder");
     esp_jpeg_image_cfg_t config = {
         .indata = (uint8_t*)src,
@@ -35,6 +36,20 @@ static esp_err_t decode_with_rom_jpeg(const uint8_t* src, size_t src_len, uint8_
     if (ret != ESP_OK || info.width == 0 || info.height == 0 || info.output_len == 0) {
         ESP_LOGE(TAG, "Failed to parse JPEG header: %s", esp_err_to_name(ret));
         return ret == ESP_OK ? ESP_ERR_INVALID_ARG : ret;
+    }
+
+    // The ROM decoder supports 1, 1/2, 1/4 and 1/8. Small displays keep
+    // the minimum decode size instead of falling back to a full-size image.
+    while (config.out_scale < JPEG_IMAGE_SCALE_1_8 &&
+           ((max_width > 0 && (info.width >> config.out_scale) > max_width) ||
+            (max_height > 0 && (info.height >> config.out_scale) > max_height))) {
+        config.out_scale++;
+    }
+    if (config.out_scale != JPEG_IMAGE_SCALE_0) {
+        ret = esp_jpeg_get_image_info(&config, &info);
+        if (ret != ESP_OK || info.output_len == 0) {
+            return ret == ESP_OK ? ESP_ERR_INVALID_SIZE : ret;
+        }
     }
 
     uint8_t* out_buf = (uint8_t*)heap_caps_aligned_alloc(
@@ -206,8 +221,8 @@ jpeg_hw_dec_failed:
 }
 #endif  // CONFIG_XIAOZHI_ENABLE_HARDWARE_JPEG_DECODER
 
-esp_err_t jpeg_to_image(const uint8_t* src, size_t src_len, uint8_t** out, size_t* out_len, size_t* width,
-                        size_t* height, size_t* stride) {
+esp_err_t jpeg_to_image_fit(const uint8_t* src, size_t src_len, uint8_t** out, size_t* out_len, size_t* width,
+                           size_t* height, size_t* stride, size_t max_width, size_t max_height) {
 #ifdef CONFIG_XIAOZHI_ENABLE_CAMERA_DEBUG_MODE
     esp_log_level_set(TAG, ESP_LOG_DEBUG);
 #endif  // CONFIG_XIAOZHI_ENABLE_CAMERA_DEBUG_MODE
@@ -222,11 +237,18 @@ esp_err_t jpeg_to_image(const uint8_t* src, size_t src_len, uint8_t** out, size_
     *height = 0;
     *stride = 0;
 #ifdef CONFIG_XIAOZHI_ENABLE_HARDWARE_JPEG_DECODER
-    esp_err_t ret = decode_with_hardware_jpeg(src, src_len, out, out_len, width, height, stride);
-    if (ret == ESP_OK) {
-        return ret;
+    if (max_width == 0 && max_height == 0) {
+        esp_err_t ret = decode_with_hardware_jpeg(src, src_len, out, out_len, width, height, stride);
+        if (ret == ESP_OK) {
+            return ret;
+        }
+        ESP_LOGW(TAG, "Failed to decode with hardware JPEG, fallback to ROM decoder");
     }
-    ESP_LOGW(TAG, "Failed to decode with hardware JPEG, fallback to ROM decoder");
 #endif
-    return decode_with_rom_jpeg(src, src_len, out, out_len, width, height, stride);
+    return decode_with_rom_jpeg(src, src_len, out, out_len, width, height, stride, max_width, max_height);
+}
+
+esp_err_t jpeg_to_image(const uint8_t* src, size_t src_len, uint8_t** out, size_t* out_len, size_t* width,
+                        size_t* height, size_t* stride) {
+    return jpeg_to_image_fit(src, src_len, out, out_len, width, height, stride, 0, 0);
 }
