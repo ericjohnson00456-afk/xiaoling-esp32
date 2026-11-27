@@ -35,7 +35,7 @@ jobs:
       - id: list
         name: Get all variant list
         run: |
-          echo "all_variants=$(python scripts/release.py --list-boards --json)" >> $GITHUB_OUTPUT
+          echo "all_variants=$(python scripts/build.py --list-boards --json)" >> $GITHUB_OUTPUT
 
       - id: select
         name: Select variants based on changes
@@ -58,34 +58,8 @@ jobs:
           CHANGED=$(git diff --name-only $BASE_SHA $HEAD_SHA || true)
           echo -e "Changed files:\n$CHANGED"
 
-          NEED_ALL=0
-          declare -A AFFECTED
-          while IFS= read -r file; do
-            if [[ "$file" == main/* && "$file" != main/boards/* ]]; then
-              NEED_ALL=1
-            fi
-
-            if [[ "$file" == main/boards/common/* ]]; then
-              NEED_ALL=1
-            fi
-
-            if [[ "$file" == main/boards/* ]]; then
-              board=$(echo "$file" | cut -d '/' -f3)
-              AFFECTED[$board]=1
-            fi
-          done <<< "$CHANGED"
-
-          if [[ "$NEED_ALL" -eq 1 ]]; then
-            echo "variants=$ALL_VARIANTS" >> $GITHUB_OUTPUT
-          else
-            if [[ ${#AFFECTED[@]} -eq 0 ]]; then
-              echo "variants=[]" >> $GITHUB_OUTPUT
-            else
-              BOARDS_JSON=$(printf '%s\n' "${!AFFECTED[@]}" | sort -u | jq -R -s -c 'split("\n")[:-1]')
-              FILTERED=$(echo "$ALL_VARIANTS" | jq -c --argjson boards "$BOARDS_JSON" 'map(select(.board as $b | $boards | index($b)))')
-              echo "variants=$FILTERED" >> $GITHUB_OUTPUT
-            fi
-          fi
+          SELECTED=$(printf '%s\n' "$CHANGED" | python scripts/build.py --select-changed)
+          echo "variants=$SELECTED" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build ${{ matrix.name }}
@@ -97,18 +71,20 @@ jobs:
         include: ${{ fromJson(needs.prepare.outputs.variants) }}
     runs-on: ubuntu-latest
     container:
-      image: espressif/idf:release-v6.1
+      image: espressif/idf:v6.1.1
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           lfs: true
 
+      - uses: ./.github/actions/setup-idf
+
       - name: Build current variant
         shell: bash
         run: |
           source $IDF_PATH/export.sh
-          python scripts/release.py ${{ matrix.board }} --name ${{ matrix.name }}
+          python scripts/build.py ${{ matrix.board }} --name ${{ matrix.name }}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -118,31 +94,30 @@ jobs:
           if-no-files-found: error
 
   compatibility:
-    name: Compatibility check
+    name: Representative builds
     strategy:
       matrix:
         idf:
-          - v6.1
+          - v6.1.1
         board:
           - atk-dnesp32s3-box
           - esp32s3-korvo2-v3
-        upstream: [ '0', '1' ]
     runs-on: ubuntu-latest
     container:
-      image: espressif/idf:release-${{ matrix.idf }}
+      image: espressif/idf:${{ matrix.idf }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           lfs: true
 
+      - uses: ./.github/actions/setup-idf
+
       - name: Build current board
         shell: bash
         run: |
           source $IDF_PATH/export.sh
-          python scripts/release.py ${{ matrix.board }}
-        env:
-          BUILD_XIAOZHI: ${{ matrix.upstream }}
+          python scripts/build.py ${{ matrix.board }}
 
   release:
     name: Publish release
