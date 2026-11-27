@@ -1,3 +1,4 @@
+#include "camera_upload.h"
 #include "system/network_compat.h"
 #include "sscma_camera.h"
 #include "mcp_server.h"
@@ -658,87 +659,8 @@ bool SscmaCamera::SetVFlip(bool enabled) {
     return false;
 }
 
-/**
- * @brief 将摄像头捕获的图像发送到远程服务器进行AI分析和解释
- * 
- * 该函数将当前摄像头缓冲区中的图像编码为JPEG格式，并通过HTTP POST请求
- * 以multipart/form-data的形式发送到指定的解释服务器。服务器将根据提供的
- * 问题对图像进行AI分析并返回结果。
- * 
- * @param question 要向AI提出的关于图像的问题，将作为表单字段发送
- * @return std::string 服务器返回的JSON格式响应字符串
- *         成功时包含AI分析结果，失败时包含错误信息
- *         格式示例：{"success": true, "result": "分析结果"}
- *                  {"success": false, "message": "错误信息"}
- * 
- * @note 调用此函数前必须先调用SetExplainUrl()设置服务器URL
- * @note 函数会等待之前的编码线程完成后再开始新的处理
- * @warning 如果摄像头缓冲区为空或网络连接失败，将返回错误信息
- */
+// Upload the full captured JPEG; CameraService invokes this on its worker.
 std::string SscmaCamera::Explain(const std::string& question) {
-    if (explain_url_.empty()) {
-        return "{\"success\": false, \"message\": \"Image explain URL or token is not set\"}";
-    }
-
-    auto network = Board::GetInstance().GetNetwork();
-    auto http = network->CreateHttp(3);
-    // 构造multipart/form-data请求体
-    std::string boundary = "----ESP32_CAMERA_BOUNDARY";
-    
-    // 构造question字段
-    std::string question_field;
-    question_field += "--" + boundary + "\r\n";
-    question_field += "Content-Disposition: form-data; name=\"question\"\r\n";
-    question_field += "\r\n";
-    question_field += question + "\r\n";
-    
-    // 构造文件字段头部
-    std::string file_header;
-    file_header += "--" + boundary + "\r\n";
-    file_header += "Content-Disposition: form-data; name=\"file\"; filename=\"camera.jpg\"\r\n";
-    file_header += "Content-Type: image/jpeg\r\n";
-    file_header += "\r\n";
-    
-    // 构造尾部
-    std::string multipart_footer;
-    multipart_footer += "\r\n--" + boundary + "--\r\n";
-
-    // 配置HTTP客户端，使用分块传输编码
-    http->SetHeader("Device-Id", SystemInfo::GetMacAddress().c_str());
-    http->SetHeader("Client-Id", Board::GetInstance().GetUuid().c_str());
-    if (!explain_token_.empty()) {
-        http->SetHeader("Authorization", "Bearer " + explain_token_);
-    }
-    http->SetHeader("Content-Type", "multipart/form-data; boundary=" + boundary);
-    http->SetHeader("Transfer-Encoding", "chunked");
-    if (!http->Open("POST", explain_url_)) {
-        ESP_LOGE(TAG, "Failed to connect to explain URL");
-        return "{\"success\": false, \"message\": \"Failed to connect to explain URL\"}";
-    }
-    
-    // 第一块：question字段
-    NetworkValue(http->Write(question_field.c_str(), question_field.size()));
-    
-    // 第二块：文件字段头部
-    NetworkValue(http->Write(file_header.c_str(), file_header.size()));
-    
-    // 第三块：JPEG数据
-    NetworkValue(http->Write((const char*)jpeg_data_.buf, jpeg_data_.len));
-
-    // 第四块：multipart尾部
-    NetworkValue(http->Write(multipart_footer.c_str(), multipart_footer.size()));
-    
-    // 结束块
-    NetworkValue(http->Write("", 0));
-
-    if (NetworkValue(http->GetStatusCode()) != 200) {
-        ESP_LOGE(TAG, "Failed to upload photo, status code: %d", NetworkValue(http->GetStatusCode()));
-        return "{\"success\": false, \"message\": \"Failed to upload photo\"}";
-    }
-
-    std::string result = http->ReadAll();
-    http->Close();
-
-    ESP_LOGI(TAG, "Explain image size=%d, question=%s\n%s", jpeg_data_.len, question.c_str(), result.c_str());
-    return result;
+    return UploadCameraJpeg(explain_url_, explain_token_, question,
+                            jpeg_data_.buf, jpeg_data_.len);
 }

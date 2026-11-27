@@ -3,22 +3,15 @@
 
 #ifndef CONFIG_IDF_TARGET_ESP32
 #include <lvgl.h>
-#include <thread>
 #include <memory>
 #include <vector>
 
 #include <freertos/FreeRTOS.h>
-#include <freertos/queue.h>
 
 #include "camera.h"
 #include "image_to_jpeg.h"
 #include "esp_cam_sensor_types.h"
 #include "esp_video_init.h"
-
-struct JpegChunk {
-    uint8_t* data;
-    size_t len;
-};
 
 class Esp32Camera : public Camera {
 private:
@@ -40,7 +33,6 @@ private:
     std::vector<MmapBuffer> mmap_buffers_;
     std::string explain_url_;
     std::string explain_token_;
-    std::thread encoder_thread_;
 
 public:
     Esp32Camera(const esp_video_init_config_t& config,

@@ -337,6 +337,13 @@ static bool encode_with_hw_jpeg(const uint8_t* src, size_t src_len, uint16_t wid
     }
 
     if (jpg_out && jpg_out_len) {
+        // Encoding is finished; retain only the compressed bytes while the
+        // caller uploads them. A failed shrink keeps the original buffer valid.
+        if (out_len > 0) {
+            auto* compact = static_cast<uint8_t*>(heap_caps_realloc(
+                outbuf, static_cast<size_t>(out_len), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+            if (compact != nullptr) outbuf = compact;
+        }
         *jpg_out = outbuf;
         *jpg_out_len = (size_t)out_len;
         return true;
@@ -415,6 +422,13 @@ static bool encode_with_esp_new_jpeg(const uint8_t* src, size_t src_len, uint16_
     }
 
     if (jpg_out && jpg_out_len) {
+        // Encoding is finished; retain only the compressed bytes while the
+        // caller uploads them. A failed shrink keeps the original buffer valid.
+        if (out_len > 0) {
+            auto* compact = static_cast<uint8_t*>(heap_caps_realloc(
+                outbuf, static_cast<size_t>(out_len), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+            if (compact != nullptr) outbuf = compact;
+        }
         *jpg_out = outbuf;
         *jpg_out_len = (size_t)out_len;
         return true;
