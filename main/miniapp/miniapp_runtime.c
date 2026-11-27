@@ -13,6 +13,7 @@
 #include "miniapp_actions.h"
 #include "miniapp_platform.h"
 #include <string.h>
+#include <strings.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
