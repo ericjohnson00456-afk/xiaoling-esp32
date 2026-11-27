@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <aes/esp_aes.h>
 #include "blufi/legacy_dh.h"
 #include <aes/esp_aes.h>
@@ -92,6 +93,7 @@ private:
     // 小聆流程直连：绕过 esp-wifi-connect 的扫描流程，直接 esp_wifi_connect
     void _connect_direct();
     void _wait_direct_connect();
+    void _scan_wifi_list();
 
     // AUTH_INFO 应答（{"code":0,"product_id","device_id"}，ls26 协议）
     void _report_identity();
@@ -143,7 +145,10 @@ private:
     char m_ble_name[24]{};
     wifi_config_t m_sta_config{};
     wifi_config_t m_ap_config{};
-    bool m_ble_is_connected;
+    std::atomic<bool> m_ble_is_connected{false};
+    std::atomic<bool> scan_running_{false};
+    std::atomic<uint32_t> connection_generation_{0};
+    uint32_t scan_generation_ = 0;
     bool m_sta_connected;
     bool m_sta_got_ip;
     bool m_provisioned;

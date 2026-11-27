@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <string>
 
 #include "esp_bt.h"
@@ -290,6 +291,66 @@ void Blufi::_wait_direct_connect() {
     vTaskDelete(nullptr);
 }
 
+void Blufi::_scan_wifi_list() {
+    // 工作任务同步扫描不会触发 SCAN_DONE，避免与 WifiManager 争用结果。
+    // 请求连接断开或 BluFi 释放后，不再向后续连接发送旧结果。
+    const auto generation = scan_generation_;
+    auto connected = [&]() {
+        return m_ble_is_connected.load() && connection_generation_.load() == generation;
+    };
+    auto fail = [&]() {
+        if (connected()) {
+            esp_blufi_send_error_info(ESP_BLUFI_WIFI_SCAN_FAIL);
+        }
+    };
+    if (!connected()) {
+        return;
+    }
+    auto &wifi_manager = WifiManager::GetInstance();
+    if (!wifi_manager.IsInitialized()) {
+        ESP_LOGE(BLUFI_TAG, "WifiManager not initialized for scan");
+        fail();
+        return;
+    }
+    if (!wifi_manager.IsConfigMode() && !wifi_manager.IsConnected()) {
+        wifi_manager.StartStation();
+    }
+    wifi_scan_config_t scan_config = {};
+    esp_err_t ret = esp_wifi_scan_start(&scan_config, true);
+    if (ret != ESP_OK) {
+        ESP_LOGE(BLUFI_TAG, "WiFi scan failed: %s", esp_err_to_name(ret));
+        fail();
+        return;
+    }
+    uint16_t ap_count = 0;
+    if (esp_wifi_scan_get_ap_num(&ap_count) != ESP_OK || ap_count == 0) {
+        esp_wifi_clear_ap_list();
+        fail();
+        return;
+    }
+    std::unique_ptr<wifi_ap_record_t, decltype(&free)> ap_list(
+        static_cast<wifi_ap_record_t *>(malloc(sizeof(wifi_ap_record_t) * ap_count)), free);
+    if (!ap_list || esp_wifi_scan_get_ap_records(&ap_count, ap_list.get()) != ESP_OK ||
+        ap_count == 0) {
+        esp_wifi_clear_ap_list();
+        fail();
+        return;
+    }
+    std::unique_ptr<esp_blufi_ap_record_t, decltype(&free)> blufi_list(
+        static_cast<esp_blufi_ap_record_t *>(malloc(sizeof(esp_blufi_ap_record_t) * ap_count)), free);
+    if (!blufi_list) {
+        fail();
+        return;
+    }
+    for (uint16_t i = 0; i < ap_count; ++i) {
+        blufi_list.get()[i].rssi = ap_list.get()[i].rssi;
+        memcpy(blufi_list.get()[i].ssid, ap_list.get()[i].ssid, sizeof(blufi_list.get()[i].ssid));
+    }
+    if (connected() && esp_blufi_send_wifi_list(ap_count, blufi_list.get()) != ESP_OK) {
+        fail();
+    }
+}
+
 esp_err_t Blufi::init(const Config &config) {
     esp_err_t ret;
     config_ = config;
@@ -327,6 +388,7 @@ esp_err_t Blufi::deinit() {
             return ESP_OK;
         }
         m_deinited = true;
+        ++connection_generation_;
         ret = _host_deinit();
         if (ret) {
             ESP_LOGE(BLUFI_TAG, "Host deinit failed: %s", esp_err_to_name(ret));
@@ -752,6 +814,7 @@ void Blufi::_handle_event(esp_blufi_cb_event_t event, esp_blufi_cb_param_t *para
             break;
         case ESP_BLUFI_EVENT_BLE_CONNECT:
             ESP_LOGI(BLUFI_TAG, "BLUFI ble connect");
+            ++connection_generation_;
             m_ble_is_connected = true;
             memcpy(m_remote_bda, param->connect.remote_bda, sizeof(m_remote_bda));
             esp_blufi_adv_stop();
@@ -760,6 +823,7 @@ void Blufi::_handle_event(esp_blufi_cb_event_t event, esp_blufi_cb_param_t *para
         case ESP_BLUFI_EVENT_BLE_DISCONNECT:
             ESP_LOGI(BLUFI_TAG, "BLUFI ble disconnect");
             m_ble_is_connected = false;
+            ++connection_generation_;
             _security_deinit();
             if (config_.restart_on_complete) {
                 // 小聆流程：配网握手未完成，回到广播等待手机重连
@@ -1010,60 +1074,23 @@ void Blufi::_handle_event(esp_blufi_cb_event_t event, esp_blufi_cb_param_t *para
             ESP_LOGI(BLUFI_TAG, "Recv STA PASSWORD");
             break;
         case ESP_BLUFI_EVENT_GET_WIFI_LIST: {
-            // 手机请求 WiFi 列表：确保 STA 已启动后执行一次扫描
-            auto &wifi_manager = WifiManager::GetInstance();
-            if (!wifi_manager.IsInitialized()) {
-                ESP_LOGE(BLUFI_TAG, "WifiManager not initialized for scan");
-                break;
-            }
-            if (!wifi_manager.IsConfigMode() && !wifi_manager.IsConnected()) {
-                wifi_manager.StartStation();
-            }
-            wifi_scan_config_t scan_config = {};
-            esp_err_t ret = esp_wifi_scan_start(&scan_config, true);
-            if (ret != ESP_OK) {
-                ESP_LOGE(BLUFI_TAG, "WiFi scan failed: %s", esp_err_to_name(ret));
+            if (scan_running_.exchange(true)) {
                 esp_blufi_send_error_info(ESP_BLUFI_WIFI_SCAN_FAIL);
                 break;
             }
-
-            uint16_t ap_count = 0;
-            esp_wifi_scan_get_ap_num(&ap_count);
-            if (ap_count == 0) {
-                ESP_LOGI(BLUFI_TAG, "Nothing AP found");
-                esp_wifi_clear_ap_list();
-                break;
+            scan_generation_ = connection_generation_.load();
+            if (xTaskCreate(
+                    [](void *ctx) {
+                        auto *self = static_cast<Blufi *>(ctx);
+                        self->_scan_wifi_list();
+                        self->scan_running_ = false;
+                        vTaskDelete(nullptr);
+                    },
+                    "blufi_wifi_scan", 4096, this, 5, nullptr) != pdTRUE) {
+                scan_running_ = false;
+                ESP_LOGE(BLUFI_TAG, "Failed to create WiFi scan task");
+                esp_blufi_send_error_info(ESP_BLUFI_WIFI_SCAN_FAIL);
             }
-            wifi_ap_record_t *ap_list =
-                (wifi_ap_record_t *)malloc(sizeof(wifi_ap_record_t) * ap_count);
-            esp_blufi_ap_record_t *blufi_list =
-                ap_list ? (esp_blufi_ap_record_t *)malloc(ap_count * sizeof(esp_blufi_ap_record_t))
-                        : nullptr;
-            if (!ap_list || !blufi_list) {
-                ESP_LOGE(BLUFI_TAG, "malloc error for AP list");
-                free(ap_list);
-                free(blufi_list);
-                esp_wifi_clear_ap_list();
-                break;
-            }
-            esp_err_t err = esp_wifi_scan_get_ap_records(&ap_count, ap_list);
-            if (err != ESP_OK) {
-                ESP_LOGE(BLUFI_TAG, "Get AP records failed: %s", esp_err_to_name(err));
-                free(ap_list);
-                free(blufi_list);
-                break;
-            }
-            for (int i = 0; i < ap_count; ++i) {
-                blufi_list[i].rssi = ap_list[i].rssi;
-                memcpy(blufi_list[i].ssid, ap_list[i].ssid, sizeof(blufi_list[i].ssid));
-            }
-            if (m_ble_is_connected) {
-                esp_blufi_send_wifi_list(ap_count, blufi_list);
-            } else {
-                ESP_LOGI(BLUFI_TAG, "BLUFI BLE is not connected yet");
-            }
-            free(ap_list);
-            free(blufi_list);
             break;
         }
         case ESP_BLUFI_EVENT_RECV_CUSTOM_DATA: {

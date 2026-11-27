@@ -15,6 +15,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <atomic>
+#include <memory>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
@@ -66,6 +68,7 @@ static uint8_t example_wifi_retry = 0;
 static bool gl_sta_connected = false;
 static bool gl_sta_got_ip = false;
 static bool ble_is_connected = false;
+static std::atomic_bool wifi_list_requested{false};
 static uint8_t gl_sta_bssid[6];
 static uint8_t gl_sta_ssid[32];
 static int gl_sta_ssid_len;
@@ -201,7 +204,7 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
         memcpy(gl_sta_bssid, event->bssid, 6);
         memcpy(gl_sta_ssid, event->ssid, event->ssid_len);
         gl_sta_ssid_len = event->ssid_len;
-        BLUFI_INFO("connected ssid: %s, password: %s", sta_config.sta.ssid, sta_config.sta.password);
+        BLUFI_INFO("connected ssid: %s", sta_config.sta.ssid);
         break;
     case WIFI_EVENT_STA_DISCONNECTED:
         /* Only handle reconnection during connecting */
@@ -245,42 +248,43 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
         }
         break;
     case WIFI_EVENT_SCAN_DONE: {
-        uint16_t apCount = 0;
-        esp_wifi_scan_get_ap_num(&apCount);
-        if (apCount == 0) {
-            BLUFI_INFO("Nothing AP found");
+        if (!wifi_list_requested.exchange(false)) {
             break;
         }
-        wifi_ap_record_t *ap_list = (wifi_ap_record_t *)malloc(sizeof(wifi_ap_record_t) * apCount);
-        if (!ap_list) {
-            BLUFI_ERROR("malloc error, ap_list is NULL");
+        auto fail_scan = []() {
             esp_wifi_clear_ap_list();
-            break;
-        }
-        ESP_ERROR_CHECK(esp_wifi_scan_get_ap_records(&apCount, ap_list));
-        esp_blufi_ap_record_t * blufi_ap_list = (esp_blufi_ap_record_t *)malloc(apCount * sizeof(esp_blufi_ap_record_t));
-        if (!blufi_ap_list) {
-            if (ap_list) {
-                free(ap_list);
+            if (ble_is_connected) {
+                esp_blufi_send_error_info(ESP_BLUFI_WIFI_SCAN_FAIL);
             }
-            BLUFI_ERROR("malloc error, blufi_ap_list is NULL");
+        };
+        auto* scan = static_cast<wifi_event_sta_scan_done_t*>(event_data);
+        uint16_t ap_count = 0;
+        if (scan == nullptr || scan->status != 0 ||
+            esp_wifi_scan_get_ap_num(&ap_count) != ESP_OK || ap_count == 0) {
+            fail_scan();
             break;
         }
-        for (int i = 0; i < apCount; ++i)
-        {
-            blufi_ap_list[i].rssi = ap_list[i].rssi;
-            memcpy(blufi_ap_list[i].ssid, ap_list[i].ssid, sizeof(ap_list[i].ssid));
+        std::unique_ptr<wifi_ap_record_t, decltype(&free)> ap_list(
+            static_cast<wifi_ap_record_t*>(malloc(sizeof(wifi_ap_record_t) * ap_count)), free);
+        if (!ap_list || esp_wifi_scan_get_ap_records(&ap_count, ap_list.get()) != ESP_OK ||
+            ap_count == 0) {
+            fail_scan();
+            break;
         }
-
-        if (ble_is_connected == true) {
-            esp_blufi_send_wifi_list(apCount, blufi_ap_list);
-        } else {
-            BLUFI_INFO("BLUFI BLE is not connected yet\n");
+        std::unique_ptr<esp_blufi_ap_record_t, decltype(&free)> blufi_list(
+            static_cast<esp_blufi_ap_record_t*>(malloc(sizeof(esp_blufi_ap_record_t) * ap_count)), free);
+        if (!blufi_list) {
+            fail_scan();
+            break;
         }
-
-        esp_wifi_scan_stop();
-        free(ap_list);
-        free(blufi_ap_list);
+        for (uint16_t i = 0; i < ap_count; ++i) {
+            blufi_list.get()[i].rssi = ap_list.get()[i].rssi;
+            memcpy(blufi_list.get()[i].ssid, ap_list.get()[i].ssid, sizeof(ap_list.get()[i].ssid));
+        }
+        if (ble_is_connected &&
+            esp_blufi_send_wifi_list(ap_count, blufi_list.get()) != ESP_OK) {
+            esp_blufi_send_error_info(ESP_BLUFI_WIFI_SCAN_FAIL);
+        }
         break;
     }
     case WIFI_EVENT_AP_STACONNECTED: {
@@ -346,6 +350,7 @@ static void example_event_callback(esp_blufi_cb_event_t event, esp_blufi_cb_para
     case ESP_BLUFI_EVENT_BLE_DISCONNECT:
         BLUFI_INFO("BLUFI ble disconnect\n");
         ble_is_connected = false;
+        wifi_list_requested.store(false);
         provstate = false;
         blufi_security_deinit();
         esp_blufi_adv_start_macname();
@@ -432,7 +437,7 @@ static void example_event_callback(esp_blufi_cb_event_t event, esp_blufi_cb_para
         sta_config.sta.password[param->sta_passwd.passwd_len] = '\0';
         sta_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
         esp_wifi_set_config(WIFI_IF_STA, &sta_config);
-        BLUFI_INFO("Recv STA PASSWORD %s\n", sta_config.sta.password);
+        BLUFI_INFO("Recv STA PASSWORD\n");
         break;
     case ESP_BLUFI_EVENT_GET_WIFI_LIST:{
         wifi_scan_config_t scanConf = {
@@ -441,8 +446,13 @@ static void example_event_callback(esp_blufi_cb_event_t event, esp_blufi_cb_para
             .channel = 0,
             .show_hidden = false
         };
-        esp_err_t ret = esp_wifi_scan_start(&scanConf, true);
-        if (ret != ESP_OK) {
+        // The BLE event task must remain available while Wi-Fi scans.
+        // Repeated requests share the pending scan and its terminal response.
+        if (wifi_list_requested.exchange(true)) {
+            break;
+        }
+        esp_err_t ret = esp_wifi_scan_start(&scanConf, false);
+        if (ret != ESP_OK && wifi_list_requested.exchange(false)) {
             esp_blufi_send_error_info(ESP_BLUFI_WIFI_SCAN_FAIL);
         }
         break;
