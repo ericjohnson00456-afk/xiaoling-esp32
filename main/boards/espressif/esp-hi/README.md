@@ -23,10 +23,10 @@ ESP-Hi x 小智内置了一个控制身体运动的 WebUI，请将手机与 ESP-
 **编译**
 
 ```bash
-python ./scripts/release.py esp-hi
+python scripts/build.py espressif/esp-hi
 ```
 
-如需手动编译，请参考 `esp-hi/config.json` 修改 menuconfig 对应选项。
+如需手动编译，请参考本目录的 `config.json` 修改 menuconfig 对应选项。4 MB 发布配置使用 Newlib Nano printf、静默错误检查并关闭日志，保留完整的屏幕状态提示。
 
 **烧录**
 
@@ -48,4 +48,4 @@ idf.py flash
 >
 > **查看 log**
 >
-> 请设置 `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y`，即 `Component config` → `ESP System Settings` → `Channel for console output` 选择 `USB Serial/JTAG Controller`。这同时会禁用舵机控制功能。
+> 请设置 `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y`，即 `Component config` → `ESP-STDIO` → `Channel for console output` 选择 `USB Serial/JTAG Controller`，并将日志默认级别改为 Warning 或 Info。这同时会禁用舵机控制功能。开启调试日志后须重新检查应用分区的体积预算。

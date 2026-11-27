@@ -53,11 +53,12 @@
                 "CONFIG_AUDIO_ENCODER_G722_SUPPORT=n",
                 "CONFIG_AUDIO_SIMPLE_DEC_M4A_SUPPORT=n",
                 "CONFIG_AUDIO_SIMPLE_DEC_TS_SUPPORT=n",
-                "CONFIG_LOG_DEFAULT_LEVEL_WARN=y",
                 "CONFIG_LOG_MAXIMUM_EQUALS_DEFAULT=y",
                 "CONFIG_MBEDTLS_TLS_CLIENT_ONLY=y",
                 "CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=y",
-                "CONFIG_AUDIO_ENCODER_OPUS_SUPPORT=n"
+                "CONFIG_AUDIO_ENCODER_OPUS_SUPPORT=n",
+                "CONFIG_COMPILER_OPTIMIZATION_CHECKS_SILENT=y",
+                "CONFIG_LOG_DEFAULT_LEVEL_NONE=y"
             ]
         }
     ]
