@@ -61,7 +61,7 @@ void AfeAudioProcessor::Initialize(AudioCodec* codec, int frame_duration_ms, srm
     } else {
         afe_config->ns_init = false;
 #if CONFIG_SR_NSN_WEBRTC
-#if CONFIG_BOARD_TYPE_ESP_BOX_3 && CONFIG_USE_DEVICE_AEC
+#if CONFIG_BOARD_TYPE_ESP32_S3_BOX_3 && CONFIG_USE_DEVICE_AEC
         // BOX3 全双工时 CPU1 同时运行 AFE、唤醒、TTS 和 LCD。这里保留
         // ESP-SR AEC，跳过额外的 WebRTC NS，避免每 10 ms 再执行一次降噪。
         ESP_LOGI(TAG, "BOX3 AEC 后置 WebRTC NS: disabled for full-duplex CPU budget");
