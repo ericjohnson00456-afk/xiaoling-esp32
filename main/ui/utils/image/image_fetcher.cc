@@ -1,3 +1,4 @@
+#include "system/network_compat.h"
 #include "image_fetcher.h"
 
 #include <cstring>
@@ -40,7 +41,7 @@ std::unique_ptr<LvglImage> ImageFetcher::Fetch(const std::string& url, int timeo
             return nullptr;
         }
 
-        int status_code = http->GetStatusCode().value_or(-1);
+        int status_code = NetworkValue(http->GetStatusCode());
         if (status_code != 200) {
             ESP_LOGE(TAG, "Failed to fetch image, status code: %d", status_code);
             http->Close();

@@ -75,11 +75,15 @@ void Ml307Board::NetworkTask() {
     int detect_retries = 0;
     while (detect_retries < MODEM_DETECT_MAX_RETRIES) {
         auto detected = AtModem::Detect(tx_pin_, rx_pin_, dtr_pin_, 921600);
+#if CONFIG_IDF_TARGET_ESP32
+        modem_ = std::move(detected);
+#else
         if (detected) {
             modem_ = std::move(*detected);
         } else {
             ESP_LOGW(TAG, "Modem detection failed: %s", detected.error().ToString().c_str());
         }
+#endif
         if (modem_ != nullptr) {
             break;
         }

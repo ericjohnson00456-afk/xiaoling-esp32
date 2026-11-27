@@ -1,3 +1,4 @@
+#include "system/network_compat.h"
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
@@ -1327,7 +1328,7 @@ std::string Esp32Camera::Explain(const std::string& question) {
         question_field += "Content-Disposition: form-data; name=\"question\"\r\n";
         question_field += "\r\n";
         question_field += question + "\r\n";
-        http->Write(question_field.c_str(), question_field.size()).value_or(-1);
+        NetworkValue(http->Write(question_field.c_str(), question_field.size()));
     }
     {
         // 第二块：文件字段头部
@@ -1336,7 +1337,7 @@ std::string Esp32Camera::Explain(const std::string& question) {
         file_header += "Content-Disposition: form-data; name=\"file\"; filename=\"camera.jpg\"\r\n";
         file_header += "Content-Type: image/jpeg\r\n";
         file_header += "\r\n";
-        http->Write(file_header.c_str(), file_header.size()).value_or(-1);
+        NetworkValue(http->Write(file_header.c_str(), file_header.size()));
     }
 
     // 第三块：JPEG数据
@@ -1352,7 +1353,7 @@ std::string Esp32Camera::Explain(const std::string& question) {
             saw_terminator = true;
             break;  // The last chunk
         }
-        http->Write((const char*)chunk.data, chunk.len).value_or(-1);
+        NetworkValue(http->Write((const char*)chunk.data, chunk.len));
         total_sent += chunk.len;
         heap_caps_free(chunk.data);
     }
@@ -1370,13 +1371,13 @@ std::string Esp32Camera::Explain(const std::string& question) {
         // 第四块：multipart尾部
         std::string multipart_footer;
         multipart_footer += "\r\n--" + boundary + "--\r\n";
-        http->Write(multipart_footer.c_str(), multipart_footer.size()).value_or(-1);
+        NetworkValue(http->Write(multipart_footer.c_str(), multipart_footer.size()));
     }
     // 结束块
-    http->Write("", 0).value_or(-1);
+    NetworkValue(http->Write("", 0));
 
-    if (http->GetStatusCode().value_or(-1) != 200) {
-        ESP_LOGE(TAG, "Failed to upload photo, status code: %d", http->GetStatusCode().value_or(-1));
+    if (NetworkValue(http->GetStatusCode()) != 200) {
+        ESP_LOGE(TAG, "Failed to upload photo, status code: %d", NetworkValue(http->GetStatusCode()));
         throw std::runtime_error("Failed to upload photo");
     }
 

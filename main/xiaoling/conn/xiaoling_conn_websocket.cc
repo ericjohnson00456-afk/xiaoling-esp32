@@ -1,3 +1,4 @@
+#include "system/network_compat.h"
 #include "xiaoling_conn_websocket.h"
 
 #include "network_diagnostics.h"
@@ -127,10 +128,10 @@ bool XiaolingConnWebSocket::Connect(const std::string& url, const XiaolingWsHead
         }
     });
 
-    websocket_->OnError([this](const NetworkError& error) {
-        ESP_LOGE(TAG, "Managed WebSocket error: %s", error.ToString().c_str());
+    websocket_->OnError([this](const auto& error) {
+        ESP_LOGE(TAG, "Managed WebSocket error: %s", NetworkErrorText(error).c_str());
         if (on_error_ != nullptr) {
-            on_error_(error.native != 0 ? error.native : -1);
+            on_error_(NetworkErrorCode(error));
         }
     });
 

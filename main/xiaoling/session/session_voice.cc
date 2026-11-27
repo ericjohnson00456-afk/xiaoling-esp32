@@ -1,3 +1,4 @@
+#include "system/network_compat.h"
 #include "miniapp/miniapp.h"
 #include "xiaoling/session/session_voice.h"
 
@@ -379,7 +380,7 @@ private:
         int header_waits = 0;
         while (IsCurrent(request.generation) && status_code < 0 &&
                header_waits < kSubtitleHeaderMaxWaits) {
-            status_code = http->GetStatusCode().value_or(-1);
+            status_code = NetworkValue(http->GetStatusCode());
             if (status_code < 0) {
                 ++header_waits;
                 ESP_LOGW(TAG, "字幕 HTTP 等待响应头: attempt=%d/%d",
@@ -403,7 +404,7 @@ private:
         int read_errors = 0;
         char read_buffer[1024];
         while (!done && IsCurrent(request.generation)) {
-            const int bytes = http->Read(read_buffer, sizeof(read_buffer)).value_or(-1);
+            const int bytes = NetworkValue(http->Read(read_buffer, sizeof(read_buffer)));
             if (bytes == 0) {
                 ESP_LOGI(TAG, "字幕 HTTP EOF");
                 break;

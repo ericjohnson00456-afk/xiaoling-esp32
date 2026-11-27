@@ -1,3 +1,4 @@
+#include "system/network_compat.h"
 #include "xiaoling_conn_activation.h"
 
 #include "board.h"
@@ -107,7 +108,7 @@ bool XiaolingConnActivation::Fetch() {
         return false;
     }
 
-    const int status = http->GetStatusCode().value_or(-1);
+    const int status = NetworkValue(http->GetStatusCode());
     const std::string body = http->ReadAll();
     http->Close();
     if (status != 200) {
@@ -157,7 +158,7 @@ esp_err_t XiaolingConnActivation::Submit() const {
         return ESP_FAIL;
     }
 
-    const int status = http->GetStatusCode().value_or(-1);
+    const int status = NetworkValue(http->GetStatusCode());
     if (status == 202) {
         http->Close();
         return ESP_ERR_TIMEOUT;

@@ -1,3 +1,4 @@
+#include "system/network_compat.h"
 #include "ota.h"
 #include "system/system_info.h"
 
@@ -114,7 +115,7 @@ esp_err_t Ota::CheckVersion() {
         return ESP_FAIL;
     }
 
-    const int status = http->GetStatusCode().value_or(-1);
+    const int status = NetworkValue(http->GetStatusCode());
     const std::string body = http->ReadAll();
     http->Close();
     ESP_LOGI(TAG, "Firmware OTA response: status=%d body=%s", status,
@@ -228,8 +229,8 @@ bool Ota::Upgrade(const std::string& firmware_url, std::function<void(int progre
         return false;
     }
 
-    if (http->GetStatusCode().value_or(-1) != 200) {
-        ESP_LOGE(TAG, "Failed to get firmware, status code: %d", http->GetStatusCode().value_or(-1));
+    if (NetworkValue(http->GetStatusCode()) != 200) {
+        ESP_LOGE(TAG, "Failed to get firmware, status code: %d", NetworkValue(http->GetStatusCode()));
         http->Close();
         return false;
     }
@@ -249,7 +250,7 @@ bool Ota::Upgrade(const std::string& firmware_url, std::function<void(int progre
     std::string pending;
     pending.reserve(sizeof(esp_image_header_t) + sizeof(esp_image_segment_header_t) + sizeof(esp_app_desc_t));
     while (true) {
-        int ret = http->Read(buffer, sizeof(buffer)).value_or(-1);
+        int ret = NetworkValue(http->Read(buffer, sizeof(buffer)));
         if (ret < 0) {
             ESP_LOGE(TAG, "Failed to read HTTP data: %s", esp_err_to_name(ret));
             http->Close();

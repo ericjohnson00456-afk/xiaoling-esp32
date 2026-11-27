@@ -32,7 +32,13 @@ dependencies:
   78/esp_lcd_nv3023: ==1.0.1
   78/esp-wifi-connect: ~3.3.3
   78/esp-opus-encoder: ~2.4.1
-  78/esp-ml307: ~3.8.3
+  78/esp-ml307:
+    version: ~3.8.3
+    matches:
+    # Classic ESP32 has no supported UHCI DMA driver. Retain its UART transport.
+    - if: target == esp32
+      version: ==3.3.2
+    - if: target != esp32
   78/uart-uhci:
     version: ^0.4.1
     rules:
