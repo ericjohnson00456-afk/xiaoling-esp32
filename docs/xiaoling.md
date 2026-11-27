@@ -17,7 +17,7 @@ idf.py menuconfig
 
 ## 1. 选择开发板
 
-进入 `Xiaoling Device → Board Type`，选择实际使用的开发板；归入系列的板型先选择系列，再选择开发板型号。例如：
+进入 `Xiaoling Device → Board Type`，直接选择实际使用的开发板。例如：
 
 - `Espressif ESP-BOX-3`
 - `M5Stack CoreS3`

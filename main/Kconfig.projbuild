@@ -900,7 +900,7 @@ endmenu
 menu "Lua 小应用"
     config MINIAPP
         bool "Enable Lua miniapps"
-        depends on LSPLATFORM && SPIRAM && !NEWLIB_NANO_FORMAT
+        depends on LSPLATFORM && SPIRAM && !LIBC_NEWLIB_NANO_FORMAT
         select FREERTOS_TASK_CREATE_ALLOW_EXT_MEM
         default y
     config MINIAPP_SOURCE_MAX_BYTES

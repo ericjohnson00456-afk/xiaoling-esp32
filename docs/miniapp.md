@@ -99,6 +99,6 @@ BOOT 通常为 `function`，没有 BOOT 的设备使用已明确适配的主要�
 
 使用现有 Display 获取尺寸，公共 Button 从板型已有 `config.h` 的 GPIO 定义注册真实按键。特殊 PMIC/ADC 输入或 LED 驱动没有适配时保持不支持，不影响板型原有功能。非矩形显示只需在板型 `config.json` 加 `"display_shape": "round"`。
 
-运行时默认在启用小聆平台、PSRAM 且使用完整 printf 的配置上启用；`CONFIG_NEWLIB_NANO_FORMAT` 不适用于 Lua 的 64 位整数和浮点格式化。未启用运行时的固件仍提供硬件能力查询。
+运行时默认在启用小聆平台、PSRAM 且使用完整 printf 的配置上启用；`CONFIG_LIBC_NEWLIB_NANO_FORMAT` 不适用于 Lua 的 64 位整数和浮点格式化。IDF 6 默认使用 Picolibc；使用 Newlib 时也须关闭 Nano printf。未启用运行时的固件仍提供硬件能力查询。
 
 按板型使用 `python scripts/build.py <板型>` 构建。主机回归见 `tests/miniapp/README.md`；`smoke.lua` 用于 320×240 CoreS3SE 实机验证，其他尺寸需要调整布局。通过云端安装或 USB 侧载传入源码，检查状态、操作、HTTP、TTS、音效、在线音频、存档及退出；同时核对串口日志、实际屏幕和实体按键。开发时使用的临时按键注入和截图入口不能保留在交付固件中。
