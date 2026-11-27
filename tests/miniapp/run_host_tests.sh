@@ -1,10 +1,12 @@
 #!/bin/sh
 set -eu
-: "${IDF_PATH:?请先加载 ESP-IDF 环境}"
 repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 work_dir=$(mktemp -d)
 trap 'rm -rf "$work_dir"' EXIT HUP INT TERM
-cjson_dir="$IDF_PATH/components/json/cJSON"
+cjson_dir="${CJSON_DIR:-$repo_dir/managed_components/espressif__cjson/cJSON}"
+if [ ! -f "$cjson_dir/cJSON.c" ]; then
+    cjson_dir="${IDF_PATH:?请先配置固件依赖或设置 CJSON_DIR}/components/json/cJSON"
+fi
 cc -std=c11 -Wall -Wextra -Werror -I"$repo_dir/main/miniapp" -I"$cjson_dir" \
     "$repo_dir/tests/miniapp/test_actions.c" "$repo_dir/main/miniapp/miniapp_actions.c" \
     "$cjson_dir/cJSON.c" -lm -o "$work_dir/actions"
@@ -39,16 +41,10 @@ printf '#define CONFIG_MINIAPP 1\n#define CONFIG_MINIAPP_SOURCE_MAX_BYTES 262144
 for header in esp_crc.h esp_heap_caps.h esp_partition.h; do
     printf '#include "store_host.h"\n' > "$work_dir/store_include/$header"
 done
-printf '#define MBEDTLS_MD5_C\n' > "$work_dir/store_include/store_mbedtls_config.h"
-mbedtls_dir="$IDF_PATH/components/mbedtls/mbedtls"
-cc -DMBEDTLS_CONFIG_FILE='"store_mbedtls_config.h"' \
-    -I"$work_dir/store_include" -I"$mbedtls_dir/include" -I"$mbedtls_dir/library" \
-    -c "$mbedtls_dir/library/md5.c" -o "$work_dir/md5.o"
-cc -DMBEDTLS_CONFIG_FILE='"store_mbedtls_config.h"' \
-    -I"$work_dir/store_include" -I"$mbedtls_dir/include" -I"$mbedtls_dir/library" \
-    -c "$mbedtls_dir/library/platform_util.c" -o "$work_dir/platform_util.o"
-c++ -std=c++17 -Wall -Wextra -Werror -DMBEDTLS_CONFIG_FILE='"store_mbedtls_config.h"' \
-    -I"$work_dir/store_include" -I"$repo_dir/tests/miniapp" -I"$mbedtls_dir/include" \
-    "$repo_dir/tests/miniapp/test_store.cc" "$work_dir/md5.o" "$work_dir/platform_util.o" -o "$work_dir/store"
+# OpenSSL only implements the host ROM boundary; production uses esp_rom_md5.
+c++ -std=c++17 -Wall -Wextra -Werror \
+    -I"$work_dir/store_include" -I"$repo_dir/tests/host" -I"$repo_dir/tests/miniapp" \
+    -I"$repo_dir/main" $(pkg-config --cflags openssl) \
+    "$repo_dir/tests/miniapp/test_store.cc" $(pkg-config --libs openssl) -o "$work_dir/store"
 "$work_dir/store"
 python3 -m unittest discover -s "$repo_dir/tests/miniapp" -p 'test_serial.py'

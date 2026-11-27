@@ -6,7 +6,7 @@
 #include "miniapp_platform.h"
 #include <esp_http_client.h>
 #include <esp_crt_bundle.h>
-#include <mbedtls/md5.h>
+#include "system/md5.h"
 #include <cJSON.h>
 #include <cstring>
 #include <memory>
@@ -23,10 +23,7 @@ std::string JsonText(cJSON *value) {
 }
 bool VerifySource(const miniapp_package_t &package, const char *source, std::string &error) {
     unsigned char digest[16];
-    if (mbedtls_md5(reinterpret_cast<const unsigned char *>(source), package.size, digest) != 0) {
-        error = "MD5 unavailable";
-        return false;
-    }
+    Md5::Digest(source, package.size, digest);
     char hash[33];
     for (int i = 0; i < 16; ++i)
         snprintf(hash + i * 2, 3, "%02x", digest[i]);

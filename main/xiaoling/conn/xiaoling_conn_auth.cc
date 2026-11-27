@@ -7,7 +7,7 @@
 
 #include <cJSON.h>
 #include <esp_log.h>
-#include <mbedtls/md5.h>
+#include "system/md5.h"
 
 #include <cctype>
 #include <cstdio>
@@ -34,10 +34,7 @@ std::string Trim(const std::string& value) {
 
 std::string CalculateChecksum(const std::string& input) {
     unsigned char digest[16] = {};
-    if (mbedtls_md5(reinterpret_cast<const unsigned char*>(input.data()),
-                    input.size(), digest) != 0) {
-        return {};
-    }
+    Md5::Digest(input.data(), input.size(), digest);
 
     char checksum[33] = {};
     for (size_t i = 0; i < sizeof(digest); ++i) {

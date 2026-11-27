@@ -1,6 +1,8 @@
 # 小应用验证
 
-加载 ESP-IDF 5.4.4 环境后运行纯主机回归，不依赖开发板：
+准备 Python 3.10 以上、C/C++ 编译器、pkg-config 和 OpenSSL 开发库。
+cJSON 默认取自固件配置后下载的 `managed_components/espressif__cjson/cJSON`，
+也可通过 `CJSON_DIR` 指定包含 `cJSON.c` 的源码目录。运行主机检查，不依赖开发板：
 
 ```sh
 sh tests/miniapp/run_host_tests.sh

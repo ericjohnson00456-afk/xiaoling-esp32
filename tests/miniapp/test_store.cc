@@ -54,7 +54,7 @@ static miniapp_package_t Package(const char *source, const char *id) {
     strcpy(package.version, "1");
     package.size = strlen(source);
     uint8_t digest[16];
-    assert(mbedtls_md5(reinterpret_cast<const uint8_t *>(source), package.size, digest) == 0);
+    Md5::Digest(source, package.size, digest);
     for (unsigned i = 0; i < sizeof(digest); ++i) snprintf(package.hash + 2 * i, 3, "%02x", digest[i]);
     return package;
 }

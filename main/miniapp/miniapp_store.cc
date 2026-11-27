@@ -3,7 +3,7 @@
 #include <esp_crc.h>
 #include <esp_heap_caps.h>
 #include <esp_partition.h>
-#include <mbedtls/md5.h>
+#include "system/md5.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -52,18 +52,16 @@ bool ValidHeader(const Header &header) {
 
 bool VerifyFlash(const esp_partition_t *partition, size_t offset,
                  const miniapp_package_t &package) {
-    mbedtls_md5_context context;
-    mbedtls_md5_init(&context);
-    bool ok = mbedtls_md5_starts(&context) == 0;
+    Md5 md5;
+    bool ok = true;
     uint8_t buffer[256], digest[16];
     for (size_t done = 0; ok && done < package.size;) {
         const size_t bytes = std::min(sizeof(buffer), size_t(package.size) - done);
-        ok = esp_partition_read(partition, offset + done, buffer, bytes) == ESP_OK &&
-             mbedtls_md5_update(&context, buffer, bytes) == 0;
+        ok = esp_partition_read(partition, offset + done, buffer, bytes) == ESP_OK;
+        if (ok) md5.Update(buffer, bytes);
         done += bytes;
     }
-    ok = ok && mbedtls_md5_finish(&context, digest) == 0;
-    mbedtls_md5_free(&context);
+    if (ok) md5.Finish(digest);
     char hash[33];
     if (ok) {
         for (unsigned i = 0; i < sizeof(digest); ++i) snprintf(hash + i * 2, 3, "%02x", digest[i]);

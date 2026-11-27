@@ -11,7 +11,7 @@
 #include <esp_log.h>
 #include <esp_partition.h>
 #include <esp_timer.h>
-#include <mbedtls/md5.h>
+#include "system/md5.h"
 
 #include <algorithm>
 #include <cctype>
@@ -201,9 +201,7 @@ bool Ota::VerifyResource(Resource resource, size_t expected_size,
         return false;
     }
 
-    mbedtls_md5_context md5;
-    mbedtls_md5_init(&md5);
-    mbedtls_md5_starts(&md5);
+    Md5 md5;
     size_t offset = 0;
     bool success = true;
     while (offset < expected_size) {
@@ -212,12 +210,11 @@ bool Ota::VerifyResource(Resource resource, size_t expected_size,
             success = false;
             break;
         }
-        mbedtls_md5_update(&md5, buffer.get(), chunk);
+        md5.Update(buffer.get(), chunk);
         offset += chunk;
     }
     std::array<uint8_t, 16> actual{};
-    mbedtls_md5_finish(&md5, actual.data());
-    mbedtls_md5_free(&md5);
+    md5.Finish(actual.data());
     success = success && actual == expected_md5;
     ESP_LOGI(TAG, "Resource %s (%u bytes)", success ? "is current" : "needs update",
              static_cast<unsigned>(expected_size));
@@ -285,9 +282,7 @@ bool Ota::UpgradeResource(Resource resource, const std::string& url, size_t expe
         return false;
     }
 
-    mbedtls_md5_context md5;
-    mbedtls_md5_init(&md5);
-    mbedtls_md5_starts(&md5);
+    Md5 md5;
     size_t written = 0;
     size_t recent_read = 0;
     constexpr int64_t kProgressReportIntervalUs = 200000;
@@ -296,13 +291,12 @@ bool Ota::UpgradeResource(Resource resource, const std::string& url, size_t expe
         const int ret = http->Read(buffer.get(), std::min(kBufferSize, content_length - written));
         if (ret <= 0 || esp_partition_write(partition, written, buffer.get(), ret) != ESP_OK) {
             ESP_LOGE(TAG, "Resource download/write failed at %u", static_cast<unsigned>(written));
-            mbedtls_md5_free(&md5);
             http->Close();
             // The partition has already been erased. Leave it unmounted; the
             // application will reboot immediately and retry the resource OTA.
             return false;
         }
-        mbedtls_md5_update(&md5, reinterpret_cast<const uint8_t*>(buffer.get()), ret);
+        md5.Update(reinterpret_cast<const uint8_t*>(buffer.get()), ret);
         written += static_cast<size_t>(ret);
         recent_read += static_cast<size_t>(ret);
         const int64_t now = esp_timer_get_time();
@@ -324,8 +318,7 @@ bool Ota::UpgradeResource(Resource resource, const std::string& url, size_t expe
     http->Close();
 
     std::array<uint8_t, 16> actual{};
-    mbedtls_md5_finish(&md5, actual.data());
-    mbedtls_md5_free(&md5);
+    md5.Finish(actual.data());
     if (expected_size != 0 && actual != expected_md5) {
         ESP_LOGE(TAG, "Downloaded resource MD5 mismatch");
         // Do not expose a corrupt ROMFS image to runtime consumers.
