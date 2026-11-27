@@ -206,7 +206,7 @@ def build_board(board: str, config_filename: str = "config.json", *,
         command = _idf_command() + [
             "-B", str(build_dir), f"-DSDKCONFIG={config_file}",
             f"-DIDF_TARGET={config['target']}", f"-DBOARD_DIR={board}",
-            f"-DBOARD_TYPE={board}", f"-DBOARD_NAME={variant['name']}", "reconfigure",
+            f"-DBOARD_NAME={variant['name']}", "reconfigure",
         ]
         subprocess.run(command, cwd=ROOT, env=environment, check=True)
         _validate_selection(board, variant, build_dir, config_filename)

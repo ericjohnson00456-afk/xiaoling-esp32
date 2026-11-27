@@ -1,4 +1,6 @@
 {
+    "manufacturer": "",
+    "type": "du-chatx",
     "target": "esp32s3",
     "builds": [
         {

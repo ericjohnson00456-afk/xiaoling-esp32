@@ -1,0 +1,40 @@
+{
+    "manufacturer": "wdmomo",
+    "type": "esp32-cgc-144",
+    "target": "esp32",
+    "builds": [
+        {
+            "name": "esp32-cgc-144",
+            "sdkconfig_append": [
+                "CONFIG_PARTITION_TABLE_CUSTOM_FILENAME=\"partitions/v2/4m_voice.csv\"",
+                "CONFIG_WAKE_WORD_DISABLED=y",
+                "CONFIG_FATFS_CODEPAGE_437=y",
+                "CONFIG_AUDIO_DECODER_AAC_SUPPORT=n",
+                "CONFIG_AUDIO_DECODER_G711_SUPPORT=n",
+                "CONFIG_AUDIO_DECODER_AMRNB_SUPPORT=n",
+                "CONFIG_AUDIO_DECODER_AMRWB_SUPPORT=n",
+                "CONFIG_AUDIO_DECODER_FLAC_SUPPORT=n",
+                "CONFIG_AUDIO_DECODER_VORBIS_SUPPORT=n",
+                "CONFIG_AUDIO_DECODER_ALAC_SUPPORT=n",
+                "CONFIG_AUDIO_DECODER_SBC_SUPPORT=n",
+                "CONFIG_AUDIO_DECODER_LC3_SUPPORT=n",
+                "CONFIG_AUDIO_DECODER_G722_SUPPORT=n",
+                "CONFIG_AUDIO_ENCODER_AAC_SUPPORT=n",
+                "CONFIG_AUDIO_ENCODER_G711_SUPPORT=n",
+                "CONFIG_AUDIO_ENCODER_AMRNB_SUPPORT=n",
+                "CONFIG_AUDIO_ENCODER_AMRWB_SUPPORT=n",
+                "CONFIG_AUDIO_ENCODER_ADPCM_SUPPORT=n",
+                "CONFIG_AUDIO_ENCODER_ALAC_SUPPORT=n",
+                "CONFIG_AUDIO_ENCODER_SBC_SUPPORT=n",
+                "CONFIG_AUDIO_ENCODER_LC3_SUPPORT=n",
+                "CONFIG_AUDIO_ENCODER_G722_SUPPORT=n",
+                "CONFIG_AUDIO_SIMPLE_DEC_M4A_SUPPORT=n",
+                "CONFIG_AUDIO_SIMPLE_DEC_TS_SUPPORT=n",
+                "CONFIG_LOG_MAXIMUM_EQUALS_DEFAULT=y",
+                "CONFIG_MBEDTLS_TLS_CLIENT_ONLY=y",
+                "CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_CMN=y",
+                "CONFIG_AUDIO_ENCODER_OPUS_SUPPORT=n"
+            ]
+        }
+    ]
+}

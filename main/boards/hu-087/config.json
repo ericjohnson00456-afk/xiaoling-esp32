@@ -1,4 +1,6 @@
 {
+    "manufacturer": "",
+    "type": "hu-087",
     "target": "esp32s3",
     "builds": [
         {

@@ -123,7 +123,8 @@ def fingerprint(profile=None):
         if profile:
             parts = Path(name).parts
             if len(parts) > 2 and parts[:2] == ("main", "boards"):
-                if parts[2] not in {profile["board"], "common", "common_esp32s3"}:
+                if not any(name.startswith("main/boards/" + board + "/")
+                           for board in (profile["board"], "common", "common_esp32s3")):
                     continue
                 if parts[2] == "common_esp32s3" and profile["target"] != "esp32s3":
                     continue
@@ -155,12 +156,12 @@ def fingerprint(profile=None):
 def profiles():
     mapping = board_build._parse_board_config_map()
     result = []
-    for board in sorted((ROOT / "main/boards").iterdir()):
-        if not board.is_dir() or board.name in {"common", "common_esp32s3"}:
-            continue
+    boards_root = ROOT / "main/boards"
+    for relative in sorted(set(mapping.values())):
+        board = boards_root / relative
         configs = sorted(board.glob("config*.json"))
         if not configs:
-            raise RuntimeError(f"Board missing release config: {board.name}")
+            raise RuntimeError(f"Board missing release config: {relative}")
         memory_profile = board / "qemu.json"
         simulation_options = json.loads(memory_profile.read_text()) if memory_profile.exists() else {}
         for config in configs:
@@ -168,10 +169,10 @@ def profiles():
             simulation = (simulation_options["targets"].get(data["target"], {})
                           if "targets" in simulation_options else simulation_options)
             for build in data["builds"]:
-                symbol = build.get("board_type_config") or board_build._find_board_config(board.name)
-                if mapping.get(symbol) != board.name:
-                    raise RuntimeError(f"Invalid board selection: {board.name}: {symbol}")
-                result.append({"board": board.name, "target": data["target"], "name": build["name"],
+                symbol = build.get("board_type_config") or board_build._find_board_config(relative)
+                if mapping.get(symbol) != relative:
+                    raise RuntimeError(f"Invalid board selection: {relative}: {symbol}")
+                result.append({"board": relative, "target": data["target"], "name": build["name"],
                                "config_file": str(config.relative_to(ROOT)), "symbol": symbol,
                                "append": list(build.get("sdkconfig_append", [])),
                                "qemu": simulation})
@@ -309,7 +310,7 @@ def build_profile(profile, work, fixture):
         config.write_text("\n".join([f"{profile['symbol']}=y"] + profile["append"]) + "\n")
     identity = int(hashlib.sha256(profile["name"].encode()).hexdigest()[:8], 16)
     command = idf_command() + ["--ccache", "-B", str(work / BUILD_SUBDIR), f"-DSDKCONFIG={config}",
-               f"-DIDF_TARGET={profile['target']}", f"-DBOARD_TYPE={profile['board']}",
+               f"-DIDF_TARGET={profile['target']}", f"-DBOARD_DIR={profile['board']}",
                f"-DBOARD_NAME={profile['name']}", "-DXIAOLING_DF_K10_QEMU=OFF",
                f"-DXIAOLING_MATRIX_STRIP_DEBUG={'ON' if MATRIX_STRIP_DEBUG else 'OFF'}",
                f"-DXIAOLING_QEMU={'ON' if fixture else 'OFF'}", f"-DXIAOLING_QEMU_ID={identity}", "build"]
@@ -620,6 +621,8 @@ def main():
     baseline_environment = {key: os.environ.get(key) for key in
                             ["IDF_PATH", "IDF_PYTHON_ENV_PATH", "IDF_TOOLS_PATH", "PATH"]}
     baseline_build_subdir = BUILD_SUBDIR
+    if args.board:
+        args.board = [board_build.resolve_board(value) for value in args.board]
     selected = [p for p in all_profiles if
                 (not args.board or p["board"] in args.board) and
                 (not args.name or p["name"] in args.name) and

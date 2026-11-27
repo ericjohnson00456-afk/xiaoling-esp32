@@ -69,7 +69,7 @@ cd xiaoling-esp32
 
 ```bash
 python scripts/build.py --list-boards
-python scripts/build.py m5stack-core-s3
+python scripts/build.py m5stack/core-s3
 ```
 
 构建入口支持厂商子目录；`scripts/release.py` 保留为兼容入口。使用已有
@@ -77,7 +77,7 @@ menuconfig 配置时传入 `--sdkconfig <配置文件>`；默认按所选发布�
 配置，避免沿用其他板型的 Flash、PSRAM 和分区设置。
 
 
-脚本会重建 `build/` 并修改生成的 `sdkconfig`。已有同名发布 ZIP 时会跳过构建，验证新代码前请先移走旧产物。Flash 容量、Quad/Octal PSRAM 和摄像头等配置必须与实物匹配；仅传入 `BOARD_TYPE` 不能替代实际 Kconfig 的板型选择。
+脚本在构建目录生成独立 `sdkconfig`，核对实际选择的板型与芯片，并重新生成同名发布包。可用 `--build-dir <目录>` 隔离产物。Flash 容量、Quad/Octal PSRAM 和摄像头等配置必须与实物匹配。
 
 自建应用及功能配置见 [SDK 配置说明](docs/xiaoling.md)。
 
@@ -120,7 +120,7 @@ python scripts/build.py all
 - `<板型>-xiaoling_v<版本>.zip`：应用固件、ELF 调试文件、合并固件和 OTA 信息。
 - `<板型>-xiaoling_v<版本>_test.zip`：应用固件、合并固件和 OTA 信息。
 
-发布脚本额外生成的 `releases/v<版本>_<板型>.zip` 仅包含 `merged-binary.bin`；同名文件已存在时会跳过编译，需要重新构建时先移走旧包。脚本会重建默认 `build/` 目录并修改根目录的 `sdkconfig`，建议在独立工作区运行或提前备份配置。
+构建脚本额外生成的 `releases/v<版本>_<变体>.zip` 仅包含 `merged-binary.bin`，每次成功构建后替换同名文件。原板型标识仍可作为命令行别名；厂商目录调整不会改变既有上报身份和发布变体名。
 
 ## 首次使用设备
 

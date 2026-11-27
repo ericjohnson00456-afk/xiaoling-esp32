@@ -21,10 +21,10 @@
 
 ### 1. 创建新的开发板目录
 
-首先在`boards/`目录下创建一个新的目录，命名方式应使用 `[品牌名]-[开发板类型]` 的形式，例如 `m5stack-tab5`：
+在 `main/boards/<厂商>/<型号>/` 下创建目录，尽量与小智上游对应板型保持相同路径，例如 `m5stack/tab5`：
 
 ```bash
-mkdir main/boards/my-custom-board
+mkdir -p main/boards/myvendor/my-custom-board
 ```
 
 同品牌板型放入 `main/Kconfig.projbuild` 中对应系列的型号选项，共用该系列的渠道配置。发布配置的 `sdkconfig_append` 需同时选择系列；板级 `sdkconfig.defaults` 若指定型号，也需选择对应系列。未归入品牌系列的板型使用公共应用。自建应用及设备已保存身份的覆盖规则见 [SDK 配置说明](xiaoling.md#2-配置小聆应用)。
@@ -93,14 +93,14 @@ mkdir main/boards/my-custom-board
 
 ```json
 {
-    "target": "esp32s3",  // 目标芯片型号: esp32, esp32s3, esp32c3, esp32c6, esp32p4等
+    "manufacturer": "myvendor",
+    "type": "my-custom-board",
+    "target": "esp32s3",
     "builds": [
         {
-            "name": "my-custom-board",  // 开发板名称，用于生成固件包
+            "name": "my-custom-board",
             "sdkconfig_append": [
-                // 特别 Flash 大小配置
                 "CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y",
-                // 特别分区表配置
                 "CONFIG_PARTITION_TABLE_CUSTOM_FILENAME=\"partitions/v2/8m.csv\""
             ]
         }
@@ -109,6 +109,8 @@ mkdir main/boards/my-custom-board
 ```
 
 **配置项说明：**
+- `manufacturer`：厂商标识，与厂商目录名一致。
+- `type`：固件上报的板型身份，目录改名时保持稳定。
 - `target`: 目标芯片型号，必须与硬件匹配
 - `name`: 编译输出的固件包名称，建议与目录名一致
 - `sdkconfig_append`: 额外的 sdkconfig 配置项数组，会追加到默认配置中
@@ -323,7 +325,7 @@ endchoice
 ```cmake
 # 在 elseif 链中添加你的开发板配置
 elseif(CONFIG_BOARD_TYPE_MY_CUSTOM_BOARD)
-    set(BOARD_TYPE "my-custom-board")  # 与目录名一致
+    set(BOARD_DIR "myvendor/my-custom-board")  # 相对于 main/boards 的目录
 endif()
 ```
 
@@ -377,12 +379,12 @@ endif()
    idf.py flash monitor
    ```
 
-#### 方法二：使用 release.py 脚本（推荐）
+#### 方法二：使用 build.py 脚本（推荐）
 
 如果你的开发板目录下有 `config.json` 文件，可以使用此脚本自动完成配置和编译：
 
 ```bash
-python scripts/build.py my-custom-board
+python scripts/build.py myvendor/my-custom-board
 ```
 
 此脚本会自动：

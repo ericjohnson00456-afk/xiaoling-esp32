@@ -1,0 +1,12 @@
+{
+    "manufacturer": "spotpear",
+    "type": "sp-esp32-s3-1.28-box",
+    "display_shape": "round",
+    "target": "esp32s3",
+    "builds": [
+        {
+            "name": "sp-esp32-s3-1.28-box",
+            "sdkconfig_append": []
+        }
+    ]
+}

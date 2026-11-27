@@ -1,4 +1,6 @@
 {
+    "manufacturer": "",
+    "type": "taiji-pi-s3",
     "target": "esp32s3",
     "builds": [
         {

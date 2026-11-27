@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 
-def generate(board_dir: Path, output: Path) -> None:
+def generate(board_dir: Path, output: Path, boards_root: Path | None = None) -> None:
     config_path = board_dir / "config.json"
     config = json.loads(config_path.read_text()) if config_path.exists() else {}
     shape = config.get("display_shape", "rectangle")
@@ -12,7 +12,9 @@ def generate(board_dir: Path, output: Path) -> None:
         raise ValueError(f"Invalid display_shape for {board_dir.name}: {shape}")
     lines = ["// Generated from the selected board; do not edit.", "#pragma once"]
     if (board_dir / "config.h").exists():
-        lines.append(f'#include "boards/{board_dir.name}/config.h"')
+        root = boards_root or Path(__file__).resolve().parents[1] / "main/boards"
+        relative = board_dir.resolve().relative_to(root.resolve()).as_posix()
+        lines.append(f'#include "boards/{relative}/config.h"')
     lines.append(f'#define MINIAPP_BOARD_DISPLAY_SHAPE "{shape}"')
     output.parent.mkdir(parents=True, exist_ok=True)
     text = "\n".join(lines) + "\n"

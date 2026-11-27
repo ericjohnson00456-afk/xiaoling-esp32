@@ -1,0 +1,16 @@
+{
+    "manufacturer": "lilygo",
+    "type": "lilygo-t-display-s3-pro-mvsrlora",
+    "target": "esp32s3",
+    "builds": [
+        {
+            "name": "lilygo-t-display-s3-pro-mvsrlora",
+            "sdkconfig_append": []
+        },
+        {
+            "name": "lilygo-t-display-s3-pro-mvsrlora-no-battery",
+            "board_type_config": "CONFIG_BOARD_TYPE_LILYGO_T_DISPLAY_S3_PRO_MVSRLORA_NO_BATTERY",
+            "sdkconfig_append": []
+        }
+    ]
+}

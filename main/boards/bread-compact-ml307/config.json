@@ -1,4 +1,6 @@
 {
+    "manufacturer": "",
+    "type": "bread-compact-ml307",
     "target": "esp32s3",
     "builds": [
         {

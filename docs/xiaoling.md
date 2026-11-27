@@ -27,8 +27,8 @@ idf.py menuconfig
 ESP32-S3 的通用默认值使用 Octal PSRAM；CoreS3 使用 Quad PSRAM，首次配置时应同时加载板级默认值：
 
 ```bash
-idf.py -DBOARD_TYPE=m5stack-core-s3 set-target esp32s3
-idf.py -DBOARD_TYPE=m5stack-core-s3 menuconfig
+idf.py -DBOARD_DIR=m5stack/core-s3 set-target esp32s3
+idf.py -DBOARD_DIR=m5stack/core-s3 menuconfig
 ```
 
 这两条命令会加载 CoreS3 的板型和 Quad PSRAM 默认配置。已有 `sdkconfig` 的选项优先；切换板型时，在 `menuconfig` 中同步调整板型及 PSRAM 模式。

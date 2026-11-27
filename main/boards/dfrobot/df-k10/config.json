@@ -1,0 +1,13 @@
+{
+    "manufacturer": "dfrobot",
+    "type": "df-k10",
+    "target": "esp32s3",
+    "builds": [
+        {
+            "name": "df-k10",
+            "sdkconfig_append": [
+                "CONFIG_SPIRAM_MODE_OCT=y"
+            ]
+        }
+    ]
+}

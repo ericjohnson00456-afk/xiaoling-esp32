@@ -1,4 +1,6 @@
 {
+    "manufacturer": "",
+    "type": "otto-robot",
     "target": "esp32s3",
     "builds": [
         {

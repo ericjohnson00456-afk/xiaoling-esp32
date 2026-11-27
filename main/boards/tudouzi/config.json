@@ -1,4 +1,6 @@
 {
+    "manufacturer": "",
+    "type": "tudouzi",
     "target": "esp32s3",
     "builds": [
         {

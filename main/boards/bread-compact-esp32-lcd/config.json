@@ -1,4 +1,6 @@
 {
+    "manufacturer": "",
+    "type": "bread-compact-esp32-lcd",
     "target": "esp32",
     "builds": [
         {

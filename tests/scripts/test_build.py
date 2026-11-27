@@ -5,11 +5,16 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import zipfile
+import subprocess
 
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("board_build", ROOT / "scripts/build.py")
 build = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(build)
+generator_spec = importlib.util.spec_from_file_location(
+    "miniapp_board_config", ROOT / "scripts/generate_miniapp_board_config.py")
+generator = importlib.util.module_from_spec(generator_spec)
+generator_spec.loader.exec_module(generator)
 
 
 class BuildTests(unittest.TestCase):
@@ -129,6 +134,27 @@ endchoice
         self.assertEqual([item["board"] for item in result], ["alientek/box"])
         self.assertEqual(build.select_changed(variants, ["docs/custom-board.md"]), [])
         self.assertEqual(build.select_changed(variants, ["main/application.cc"]), variants)
+
+    def test_miniapp_header_uses_full_board_path(self):
+        directory = self.boards / "m5stack/core-s3"
+        (directory / "config.h").write_text("#define BOOT_BUTTON_GPIO 0\n")
+        output = self.root / "generated/miniapp_board_config.h"
+        generator.generate(directory, output, self.boards)
+        self.assertIn('#include "boards/m5stack/core-s3/config.h"', output.read_text())
+
+    def test_cmake_resolves_legacy_identity_before_loading_board_defaults(self):
+        common = self.boards / "common"
+        common.mkdir()
+        helper = common / "board_config.cmake"
+        helper.write_bytes((ROOT / "main/boards/common/board_config.cmake").read_bytes())
+        script = self.root / "resolve.cmake"
+        script.write_text(f'''include("{helper}")
+xiaoling_resolve_board_dir("m5stack-core-s3" result)
+if(NOT result STREQUAL "m5stack/core-s3")
+    message(FATAL_ERROR "Legacy identity did not resolve to the board directory")
+endif()
+''')
+        subprocess.run(["cmake", "-P", str(script)], check=True)
 
 
 if __name__ == "__main__":

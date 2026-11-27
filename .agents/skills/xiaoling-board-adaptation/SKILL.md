@@ -25,8 +25,8 @@ python scripts/build.py <板型>
 ```
 
 `--name <变体>` 选择变体，`--list-boards` 查看目标。构建与产物说明见
-[README](../../../README.md)。脚本会重建 `build/` 并修改生成的 `sdkconfig`；
-先保留仍需使用的配置和产物。已有同名发布 ZIP 会跳过构建，验证新改动前移走旧包。
+[README](../../../README.md)。脚本在构建目录生成独立 `sdkconfig` 并更新发布产物；可用
+`--build-dir` 隔离产物，`--sdkconfig` 使用已有 menuconfig 配置。
 目标及配置未变化时可增量运行 `idf.py build`。
 
 构建后核对：
@@ -55,7 +55,7 @@ python scripts/build.py <板型>
 - 小应用：按 [小应用文档](../../../docs/miniapp.md) 选择安装、操作、退出及恢复场景，检查能力上报与硬件一致。
 
 缺少真机或复现特定边界时可使用 Espressif 官方 QEMU，已有入口见
-[DF-K10 QEMU](../../../main/boards/df-k10/qemu/README.md)。明确其板型、外设和联网限制，
+[DF-K10 QEMU](../../../main/boards/dfrobot/df-k10/qemu/README.md)。明确其板型、外设和联网限制，
 不把主机构建、模拟或其他板型的结果作为目标设备已验证。
 
 若验证时增加了临时按键注入、调试服务或截图入口，交付前移除，并对移除后的固件

@@ -79,15 +79,15 @@ ninja qemu-system-xtensa qemu-system-riscv32
 
 ## 复现和证据
 
-使用 ESP-IDF 5.4.4；C5/P4 使用独立安装的 5.5.5。
+当前源码使用 ESP-IDF 6.1.1；历史矩阵结果所用的 SDK 版本见各次验证记录。
 本轮 P4 的生成配置为最小硅版本 3.1，模拟 eFuse 也声明 3.1；
 矩阵产物不能作为其他硅版本的实板兼容性证明。
 不同芯片家族依次构建，以免组件管理器同时修改同一份 `managed_components`。
 并行处理不同家族时必须使用各自的源码工作树。
 
 ```sh
-eim run 'python scripts/qemu_matrix.py --board df-k10 --strip-debug' v5.4.4
-eim run 'python scripts/qemu_matrix.py --jobs 2 --resume --strip-debug --idf-for esp32c5=/path/to/esp-idf-v5.5.5 --idf-for esp32p4=/path/to/esp-idf-v5.5.5 --qemu-for esp32p4=/path/to/patched/qemu-system-riscv32 --qemu-for esp32s3=/path/to/patched/qemu-system-xtensa' v5.4.4
+eim run 'python scripts/qemu_matrix.py --board df-k10 --strip-debug' v6.1.1
+eim run 'python scripts/qemu_matrix.py --jobs 2 --resume --strip-debug --qemu-for esp32p4=/path/to/patched/qemu-system-riscv32 --qemu-for esp32s3=/path/to/patched/qemu-system-xtensa' v6.1.1
 ```
 
 `--strip-debug` 只减小矩阵 ELF 的 DWARF 信息，保留函数符号；普通客户构建

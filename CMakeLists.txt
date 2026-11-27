@@ -2,7 +2,7 @@
 # https://docs.espressif.com/projects/esp-idf/en/latest/api-guides/build-system.html
 # The following five lines of boilerplate have to be in your project's
 # CMakeLists in this exact order for cmake to work correctly
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.22)
 
 set(PROJECT_VER "2.1.1")
 
@@ -21,18 +21,27 @@ add_compile_definitions(XIAOLING_COMMIT_ID=\"${XIAOLING_COMMIT_ID}\")
 add_compile_options(-Wno-missing-field-initializers)
 
 message(STATUS "Using sdkconfig defaults for LSPlatform")
+set(XIAOLING_EXTRA_SDKCONFIG_DEFAULTS "${SDKCONFIG_DEFAULTS}")
 set(SDKCONFIG_DEFAULTS "sdkconfig.defaults;sdkconfig.lsplatform;main/boards/common/sdkconfig.defaults")
 
 # Some ESP32-S3 boards use Quad PSRAM while the target-wide defaults use
 # Octal PSRAM. Load board-specific defaults before project() so a clean
 # configuration selects the hardware settings for the requested board.
-if(BOARD_TYPE)
-    set(BOARD_SDKCONFIG_DEFAULTS "main/boards/${BOARD_TYPE}/sdkconfig.defaults")
+include("${CMAKE_CURRENT_LIST_DIR}/main/boards/common/board_config.cmake")
+if(BOARD_DIR)
+    xiaoling_resolve_board_dir("${BOARD_DIR}" BOARD_DIR)
+elseif(BOARD_TYPE)
+    xiaoling_resolve_board_dir("${BOARD_TYPE}" BOARD_DIR)
+endif()
+if(BOARD_DIR)
+    set(BOARD_SDKCONFIG_DEFAULTS "main/boards/${BOARD_DIR}/sdkconfig.defaults")
     if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/${BOARD_SDKCONFIG_DEFAULTS}")
         list(APPEND SDKCONFIG_DEFAULTS "${BOARD_SDKCONFIG_DEFAULTS}")
         message(STATUS "Using board sdkconfig defaults: ${BOARD_SDKCONFIG_DEFAULTS}")
     endif()
 endif()
+list(APPEND SDKCONFIG_DEFAULTS ${XIAOLING_EXTRA_SDKCONFIG_DEFAULTS})
+list(REMOVE_DUPLICATES SDKCONFIG_DEFAULTS)
 
 set(XIAOLING_VER ${PROJECT_VER})
 set(XIAOLING_PROJECT_NAME "xiaoling_v${XIAOLING_VER}")

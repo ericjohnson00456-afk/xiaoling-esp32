@@ -1,4 +1,6 @@
 {
+    "manufacturer": "",
+    "type": "sensecap-watcher",
     "target": "esp32s3",
     "builds": [
         {

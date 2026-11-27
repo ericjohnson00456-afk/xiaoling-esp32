@@ -19,7 +19,7 @@
 只把 PSRAM 是否可用和 Flash 容量作为打包依据。
 
 ESP-HI 的 4MB 表情缩帧属于内容预处理，不是通用容量规则，所以仍由
-`main/boards/esp-hi/prepare_emoji.py` 生成专用资源目录，再交给公共打包器。
+`main/boards/espressif/esp-hi/prepare_emoji.py` 生成专用资源目录，再交给公共打包器。
 公共脚本未指定专用目录时会打包原始表情资源。
 
 分区 CSV 保持在项目既有的 `partitions/v2` 目录；布局由芯片系列默认值和最终

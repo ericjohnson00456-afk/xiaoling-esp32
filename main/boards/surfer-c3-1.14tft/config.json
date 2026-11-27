@@ -1,4 +1,6 @@
 {
+    "manufacturer": "",
+    "type": "surfer-c3-1.14tft",
     "target": "esp32c3",
     "builds": [
         {

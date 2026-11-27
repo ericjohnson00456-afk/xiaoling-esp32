@@ -1,4 +1,6 @@
 {
+    "manufacturer": "",
+    "type": "mixgo-nova",
     "target": "esp32s3",
     "builds": [
         {
