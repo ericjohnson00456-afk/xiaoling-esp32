@@ -16,6 +16,28 @@
 namespace {
 constexpr const char *TAG = "MCP";
 
+using JsonPtr = std::unique_ptr<cJSON, decltype(&cJSON_Delete)>;
+
+JsonPtr ResponseEnvelope(const std::string& method, const std::string& id) {
+  JsonPtr response(cJSON_CreateObject(), cJSON_Delete);
+  if (!response || !cJSON_AddStringToObject(response.get(), "method", method.c_str()) ||
+      !cJSON_AddStringToObject(response.get(), "id", id.c_str())) {
+    ESP_LOGE(TAG, "Failed to allocate MCP response");
+    response.reset();
+  }
+  return response;
+}
+
+void SendResponse(const JsonPtr& response) {
+  std::unique_ptr<char, decltype(&cJSON_free)> payload(
+      cJSON_PrintUnformatted(response.get()), cJSON_free);
+  if (!payload) {
+    ESP_LOGE(TAG, "Failed to serialize MCP response");
+    return;
+  }
+  Application::GetInstance().SendMcpMessage(payload.get());
+}
+
 McpToolRegistrar*& ToolRegistrarHead() {
   static McpToolRegistrar* head = nullptr;
   return head;
@@ -232,16 +254,24 @@ void McpServer::ParseMessage(const cJSON *json) {
 
 void McpServer::ReplyResult(const std::string &method, const std::string &id,
                             const std::string &result) {
-  Application::GetInstance().SendMcpMessage("{\"method\":\"" + method +
-                                            "\",\"id\":\"" + id +
-                                            "\",\"result\":" + result + "}");
+  auto response = ResponseEnvelope(method, id);
+  if (!response || !cJSON_AddRawToObject(response.get(), "result", result.c_str())) {
+    return;
+  }
+  SendResponse(response);
 }
 
 void McpServer::ReplyError(const std::string &method, const std::string &id,
                            const std::string &message) {
-  Application::GetInstance().SendMcpMessage(
-      "{\"method\":\"" + method + "\",\"id\":\"" + id +
-      "\",\"error\":{\"message\":\"" + message + "\"}}");
+  auto response = ResponseEnvelope(method, id);
+  if (!response) {
+    return;
+  }
+  auto* error = cJSON_AddObjectToObject(response.get(), "error");
+  if (!error || !cJSON_AddStringToObject(error, "message", message.c_str())) {
+    return;
+  }
+  SendResponse(response);
 }
 
 void McpServer::GetToolsList(const std::string &id, const std::string &cursor,
