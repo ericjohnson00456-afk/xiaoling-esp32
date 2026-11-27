@@ -79,6 +79,8 @@ menuconfig 配置时传入 `--sdkconfig <配置文件>`；默认按所选发布�
 
 脚本在构建目录生成独立 `sdkconfig`，核对实际选择的板型与芯片，并重新生成同名发布包。可用 `--build-dir <目录>` 隔离产物。Flash 容量、Quad/Octal PSRAM 和摄像头等配置必须与实物匹配。
 
+经典 ESP32 默认使用紧凑诊断配置：断言和错误检查仍生效，但失败时需结合回溯地址定位，ESP 错误名称查询关闭。4 MB 语音配置的应用分区余量不足 4 KiB；增加功能前必须重新检查产物体积。
+
 自建应用及功能配置见 [SDK 配置说明](docs/xiaoling.md)。
 
 设备 NVS 中保存的 `user/pid` 和 `user/sid` 分别优先于固件内置的 Product ID 和 Product Secret。普通 `idf.py flash` 保留这些配置；切换应用时同时更新设备保存的应用身份。
