@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <new>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
@@ -23,9 +24,9 @@
 #include "esp_blufi_api.h"
 #include "blufi.h"
 
-#include "mbedtls/aes.h"
-#include "mbedtls/dhm.h"
-#include "mbedtls/md5.h"
+#include <aes/esp_aes.h>
+#include "blufi/legacy_dh.h"
+#include "system/md5.h"
 #include "esp_crc.h"
 
 /*
@@ -50,8 +51,8 @@ struct blufi_security {
     uint8_t  *dh_param;
     int      dh_param_len;
     uint8_t  iv[16];
-    mbedtls_dhm_context dhm;
-    mbedtls_aes_context aes;
+    blufi_crypto::DhContext dhm;
+    esp_aes_context aes;
 };
 static struct blufi_security *blufi_sec;
 
@@ -65,6 +66,10 @@ extern "C" void btc_blufi_report_error(esp_blufi_error_state_t state);
 
 void blufi_dh_negotiate_data_handler(uint8_t *data, int len, uint8_t **output_data, int *output_len, bool *need_free)
 {
+    if (output_data == nullptr || output_len == nullptr || need_free == nullptr) return;
+    *output_data = nullptr;
+    *output_len = 0;
+    *need_free = false;
     if (data == NULL || len < 3) {
         BLUFI_ERROR("BLUFI Invalid data format");
         btc_blufi_report_error(ESP_BLUFI_DATA_FORMAT_ERROR);
@@ -86,6 +91,10 @@ void blufi_dh_negotiate_data_handler(uint8_t *data, int len, uint8_t **output_da
         if (blufi_sec->dh_param) {
             free(blufi_sec->dh_param);
             blufi_sec->dh_param = NULL;
+        }
+        if (blufi_sec->dh_param_len <= 0 || blufi_sec->dh_param_len > 390) {
+            btc_blufi_report_error(ESP_BLUFI_DH_PARAM_ERROR);
+            return;
         }
         blufi_sec->dh_param = (uint8_t *)malloc(blufi_sec->dh_param_len);
         if (blufi_sec->dh_param == NULL) {
@@ -110,7 +119,7 @@ void blufi_dh_negotiate_data_handler(uint8_t *data, int len, uint8_t **output_da
 
         uint8_t *param = blufi_sec->dh_param;
         memcpy(blufi_sec->dh_param, &data[1], blufi_sec->dh_param_len);
-        ret = mbedtls_dhm_read_params(&blufi_sec->dhm, &param, &param[blufi_sec->dh_param_len]);
+        ret = blufi_crypto::ReadParams(&blufi_sec->dhm, &param, &param[blufi_sec->dh_param_len]);
         if (ret) {
             BLUFI_ERROR("%s read param failed %d\n", __func__, ret);
             btc_blufi_report_error(ESP_BLUFI_READ_PARAM_ERROR);
@@ -119,7 +128,7 @@ void blufi_dh_negotiate_data_handler(uint8_t *data, int len, uint8_t **output_da
         free(blufi_sec->dh_param);
         blufi_sec->dh_param = NULL;
 
-        const int dhm_len = mbedtls_dhm_get_len(&blufi_sec->dhm);
+        const int dhm_len = blufi_crypto::GetLen(&blufi_sec->dhm);
 
         if (dhm_len > DH_SELF_PUB_KEY_LEN) {
             BLUFI_ERROR("%s dhm len not support %d\n", __func__, dhm_len);
@@ -127,33 +136,27 @@ void blufi_dh_negotiate_data_handler(uint8_t *data, int len, uint8_t **output_da
             return;
         }
 
-        ret = mbedtls_dhm_make_public(&blufi_sec->dhm, dhm_len, blufi_sec->self_public_key, DH_SELF_PUB_KEY_LEN, myrand, NULL);
+        ret = blufi_crypto::MakePublic(&blufi_sec->dhm, dhm_len, blufi_sec->self_public_key, DH_SELF_PUB_KEY_LEN, myrand, NULL);
         if (ret) {
             BLUFI_ERROR("%s make public failed %d\n", __func__, ret);
             btc_blufi_report_error(ESP_BLUFI_MAKE_PUBLIC_ERROR);
             return;
         }
 
-        ret = mbedtls_dhm_calc_secret( &blufi_sec->dhm,
+        ret = blufi_crypto::CalcSecret( &blufi_sec->dhm,
                 blufi_sec->share_key,
                 SHARE_KEY_LEN,
                 &blufi_sec->share_len,
                 myrand, NULL);
         if (ret) {
-            BLUFI_ERROR("%s mbedtls_dhm_calc_secret failed %d\n", __func__, ret);
+            BLUFI_ERROR("%s blufi_crypto::CalcSecret failed %d\n", __func__, ret);
             btc_blufi_report_error(ESP_BLUFI_DH_PARAM_ERROR);
             return;
         }
 
-        ret = mbedtls_md5(blufi_sec->share_key, blufi_sec->share_len, blufi_sec->psk);
+        Md5::Digest(blufi_sec->share_key, blufi_sec->share_len, blufi_sec->psk);
 
-        if (ret) {
-            BLUFI_ERROR("%s mbedtls_md5 failed %d\n", __func__, ret);
-            btc_blufi_report_error(ESP_BLUFI_CALC_MD5_ERROR);
-            return;
-        }
-
-        mbedtls_aes_setkey_enc(&blufi_sec->aes, blufi_sec->psk, PSK_LEN * 8);
+        esp_aes_setkey(&blufi_sec->aes, blufi_sec->psk, PSK_LEN * 8);
 
         /* alloc output data */
         *output_data = &blufi_sec->self_public_key[0];
@@ -184,7 +187,7 @@ int blufi_aes_encrypt(uint8_t iv8, uint8_t *crypt_data, int crypt_len)
     memcpy(iv0, blufi_sec->iv, sizeof(blufi_sec->iv));
     iv0[0] = iv8;   /* set iv8 as the iv0[0] */
 
-    ret = mbedtls_aes_crypt_cfb128(&blufi_sec->aes, MBEDTLS_AES_ENCRYPT, crypt_len, &iv_offset, iv0, crypt_data, crypt_data);
+    ret = esp_aes_crypt_cfb128(&blufi_sec->aes, ESP_AES_ENCRYPT, crypt_len, &iv_offset, iv0, crypt_data, crypt_data);
     if (ret) {
         return -1;
     }
@@ -205,7 +208,7 @@ int blufi_aes_decrypt(uint8_t iv8, uint8_t *crypt_data, int crypt_len)
     memcpy(iv0, blufi_sec->iv, sizeof(blufi_sec->iv));
     iv0[0] = iv8;   /* set iv8 as the iv0[0] */
 
-    ret = mbedtls_aes_crypt_cfb128(&blufi_sec->aes, MBEDTLS_AES_DECRYPT, crypt_len, &iv_offset, iv0, crypt_data, crypt_data);
+    ret = esp_aes_crypt_cfb128(&blufi_sec->aes, ESP_AES_DECRYPT, crypt_len, &iv_offset, iv0, crypt_data, crypt_data);
     if (ret) {
         return -1;
     }
@@ -221,15 +224,12 @@ uint16_t blufi_crc_checksum(uint8_t iv8, uint8_t *data, int len)
 
 esp_err_t blufi_security_init(void)
 {
-    blufi_sec = (struct blufi_security *)malloc(sizeof(struct blufi_security));
+    blufi_sec = new (std::nothrow) blufi_security{};
     if (blufi_sec == NULL) {
         return ESP_FAIL;
     }
 
-    memset(blufi_sec, 0x0, sizeof(struct blufi_security));
-
-    mbedtls_dhm_init(&blufi_sec->dhm);
-    mbedtls_aes_init(&blufi_sec->aes);
+    esp_aes_init(&blufi_sec->aes);
 
     memset(blufi_sec->iv, 0x0, sizeof(blufi_sec->iv));
     return 0;
@@ -244,11 +244,11 @@ void blufi_security_deinit(void)
         free(blufi_sec->dh_param);
         blufi_sec->dh_param = NULL;
     }
-    mbedtls_dhm_free(&blufi_sec->dhm);
-    mbedtls_aes_free(&blufi_sec->aes);
 
-    memset(blufi_sec, 0x0, sizeof(struct blufi_security));
+    esp_aes_free(&blufi_sec->aes);
+    memset(blufi_sec->psk, 0, sizeof(blufi_sec->psk));
+    memset(blufi_sec->share_key, 0, sizeof(blufi_sec->share_key));
 
-    free(blufi_sec);
+    delete blufi_sec;
     blufi_sec = NULL;
 }

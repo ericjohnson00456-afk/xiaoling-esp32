@@ -59,12 +59,11 @@ if LSPLATFORM
             select BT_BLE_BLUFI_ENABLE if BT_BLUEDROID_ENABLED
             select BT_NIMBLE_BLUFI_ENABLE if BT_NIMBLE_ENABLED
             select BT_BLE_42_FEATURES_SUPPORTED if BT_BLUEDROID_ENABLED
-            select MBEDTLS_DHM_C
         config PROV_MODE_XIAOZHI
             bool "WIFI热点配网"
     endchoice
 
-    if PROV_MODE_BLE
+    if PROV_MODE_BLE || USE_ESP_BLUFI_WIFI_PROVISIONING
         choice BT_HOST
             default BT_NIMBLE_ENABLED if !SPIRAM
         endchoice
@@ -91,7 +90,7 @@ if LSPLATFORM
             config BT_BLE_DYNAMIC_ENV_MEMORY
                 default y
         endif
-    endif # PROV_MODE_BLE
+    endif # PROV_MODE_BLE || USE_ESP_BLUFI_WIFI_PROVISIONING
 endif # LSPLATFORM
 
 choice
@@ -828,12 +827,13 @@ if PROV_MODE_XIAOZHI
 
         config USE_ESP_BLUFI_WIFI_PROVISIONING
             bool "Esp Blufi"
+            depends on SOC_BLE_SUPPORTED && !APP_NO_BLOBS
             help
                 Use esp blufi protocol to transmit WiFi configuration data
             select BT_ENABLED
-            select BT_BLE_42_FEATURES_SUPPORTED
-            select BT_BLE_BLUFI_ENABLE
-            select MBEDTLS_DHM_C
+            select BT_BLE_42_FEATURES_SUPPORTED if BT_BLUEDROID_ENABLED
+            select BT_BLE_BLUFI_ENABLE if BT_BLUEDROID_ENABLED
+            select BT_NIMBLE_BLUFI_ENABLE if BT_NIMBLE_ENABLED
     endmenu
 endif
 

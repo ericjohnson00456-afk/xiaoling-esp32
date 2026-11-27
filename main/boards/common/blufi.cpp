@@ -7,6 +7,7 @@
 #include <string>
 
 #include "esp_bt.h"
+#include "esp_blufi.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_netif.h"
@@ -32,43 +33,14 @@
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 #include "services/gap/ble_svc_gap.h"
-extern void esp_blufi_gatt_svr_register_cb(struct ble_gatt_register_ctxt *ctxt, void *arg);
-extern int esp_blufi_gatt_svr_init(void);
-extern void esp_blufi_gatt_svr_deinit(void);
-extern void esp_blufi_btc_init(void);
-extern void esp_blufi_btc_deinit(void);
 #endif
 
-extern "C" {
-// Blufi Advertising & Connection
-void esp_blufi_adv_start(void);
-
-void esp_blufi_adv_stop(void);
-
-void esp_blufi_disconnect(void);
-
-// Internal BTC layer functions needed for error reporting
-void btc_blufi_report_error(esp_blufi_error_state_t state);
-
-// Bluedroid specific GAP event handler
-#ifdef CONFIG_BT_BLUEDROID_ENABLED
-void esp_blufi_gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param);
-#endif
-
-// NimBLE specific internal functions
-#ifdef CONFIG_BT_NIMBLE_ENABLED
-void esp_blufi_gatt_svr_register_cb(struct ble_gatt_register_ctxt *ctxt, void *arg);
-int esp_blufi_gatt_svr_init(void);
-void esp_blufi_gatt_svr_deinit(void);
-void esp_blufi_btc_init(void);
-void esp_blufi_btc_deinit(void);
-#endif
-}
+extern "C" void btc_blufi_report_error(esp_blufi_error_state_t state);
 
 // mbedTLS for security
 #include "esp_crc.h"
 #include "esp_random.h"
-#include "mbedtls/md5.h"
+#include "system/md5.h"
 #include "ssid_manager.h"
 
 // Logging Tag
@@ -441,7 +413,7 @@ esp_err_t Blufi::_host_and_cb_init() {
 
 #ifdef CONFIG_BT_NIMBLE_ENABLED
 // Stubs for NimBLE specific store functionality
-void ble_store_config_init();
+extern "C" void ble_store_config_init();
 
 void Blufi::_nimble_on_reset(int reason) {
     ESP_LOGE(BLUFI_TAG, "NimBLE Resetting state; reason=%d", reason);
@@ -460,7 +432,10 @@ void Blufi::_nimble_host_task(void *param) {
 }
 
 esp_err_t Blufi::_host_init() {
-    // esp_nimble_init() is called by controller_init for NimBLE
+    esp_err_t err = esp_nimble_init();
+    if (err != ESP_OK) {
+        return err;
+    }
     ble_hs_cfg.reset_cb = _nimble_on_reset;
     ble_hs_cfg.sync_cb = _nimble_on_sync;
     ble_hs_cfg.gatts_register_cb = esp_blufi_gatt_svr_register_cb;
@@ -477,14 +452,17 @@ esp_err_t Blufi::_host_init() {
 
 #if CONFIG_BT_NIMBLE_GAP_SERVICE
     // Set the default device name.
-    rc = ble_svc_gap_device_name_set(m_ble_name);
+    rc = ble_svc_gap_device_name_set(GetInstance().m_ble_name);
     assert(rc == 0);
 #endif
 
     ble_store_config_init();  // Configure the BLE storage
-    esp_blufi_btc_init();
+    err = esp_blufi_btc_init();
+    if (err != ESP_OK) {
+        return err;
+    }
 
-    esp_err_t err = esp_nimble_enable(_nimble_host_task);
+    err = esp_nimble_enable(reinterpret_cast<void *>(_nimble_host_task));
     if (err) {
         ESP_LOGE(BLUFI_TAG, "%s failed: %s", __func__, esp_err_to_name(err));
         return ESP_FAIL;
@@ -546,14 +524,6 @@ esp_err_t Blufi::_controller_init() {
         return ret;
     }
 
-#ifdef CONFIG_BT_NIMBLE_ENABLED
-    // For NimBLE, host init needs to be done after controller init
-    ret = esp_nimble_init();
-    if (ret) {
-        ESP_LOGE(BLUFI_TAG, "esp_nimble_init() failed: %s", esp_err_to_name(ret));
-        return ret;
-    }
-#endif
     return ESP_OK;
 }
 
@@ -582,11 +552,10 @@ void Blufi::_security_init() {
         return;
     }
     memset(m_sec, 0, sizeof(BlufiSecurity));
-    m_sec->dhm = new mbedtls_dhm_context();
-    m_sec->aes = new mbedtls_aes_context();
+    m_sec->dhm = new blufi_crypto::DhContext();
+    m_sec->aes = new esp_aes_context();
 
-    mbedtls_dhm_init(m_sec->dhm);
-    mbedtls_aes_init(m_sec->aes);
+    esp_aes_init(m_sec->aes);
 
     memset(m_sec->iv, 0x0, sizeof(m_sec->iv));
 }
@@ -598,8 +567,8 @@ void Blufi::_security_deinit() {
     if (m_sec->dh_param) {
         free(m_sec->dh_param);
     }
-    mbedtls_dhm_free(m_sec->dhm);
-    mbedtls_aes_free(m_sec->aes);
+
+    esp_aes_free(m_sec->aes);
     delete m_sec->dhm;
     delete m_sec->aes;
     delete m_sec;
@@ -608,13 +577,17 @@ void Blufi::_security_deinit() {
 
 void Blufi::_dh_negotiate_data_handler(uint8_t *data, int len, uint8_t **output_data,
                                        int *output_len, bool *need_free) {
+    if (output_data == nullptr || output_len == nullptr || need_free == nullptr) return;
+    *output_data = nullptr;
+    *output_len = 0;
+    *need_free = false;
     if (m_sec == nullptr) {
         ESP_LOGE(BLUFI_TAG, "Security not initialized in DH handler");
         btc_blufi_report_error(ESP_BLUFI_INIT_SECURITY_ERROR);
         return;
     }
 
-    if (len < 1) {
+    if (data == nullptr || len < 1) {
         ESP_LOGE(BLUFI_TAG, "DH handler: data too short");
         btc_blufi_report_error(ESP_BLUFI_DATA_FORMAT_ERROR);
         return;
@@ -633,6 +606,10 @@ void Blufi::_dh_negotiate_data_handler(uint8_t *data, int len, uint8_t **output_
             if (m_sec->dh_param) {
                 free(m_sec->dh_param);
                 m_sec->dh_param = nullptr;
+            }
+            if (m_sec->dh_param_len <= 0 || m_sec->dh_param_len > 390) {
+                btc_blufi_report_error(ESP_BLUFI_DH_PARAM_ERROR);
+                return;
             }
             m_sec->dh_param = (uint8_t *)malloc(m_sec->dh_param_len);
             if (m_sec->dh_param == nullptr) {
@@ -653,44 +630,39 @@ void Blufi::_dh_negotiate_data_handler(uint8_t *data, int len, uint8_t **output_
             }
             uint8_t *param = m_sec->dh_param;
             memcpy(m_sec->dh_param, &data[1], m_sec->dh_param_len);
-            int ret = mbedtls_dhm_read_params(m_sec->dhm, &param, &param[m_sec->dh_param_len]);
+            int ret = blufi_crypto::ReadParams(m_sec->dhm, &param, &param[m_sec->dh_param_len]);
             if (ret) {
-                ESP_LOGE(BLUFI_TAG, "mbedtls_dhm_read_params failed %d", ret);
+                ESP_LOGE(BLUFI_TAG, "blufi_crypto::ReadParams failed %d", ret);
                 btc_blufi_report_error(ESP_BLUFI_READ_PARAM_ERROR);
                 return;
             }
 
-            const int dhm_len = mbedtls_dhm_get_len(m_sec->dhm);
+            const int dhm_len = blufi_crypto::GetLen(m_sec->dhm);
             if (dhm_len > DH_SELF_PUB_KEY_LEN) {
                 ESP_LOGE(BLUFI_TAG, "dhm len not support %d", dhm_len);
                 btc_blufi_report_error(ESP_BLUFI_DH_PARAM_ERROR);
                 return;
             }
 
-            ret = mbedtls_dhm_make_public(m_sec->dhm, dhm_len, m_sec->self_public_key, DH_SELF_PUB_KEY_LEN,
+            ret = blufi_crypto::MakePublic(m_sec->dhm, dhm_len, m_sec->self_public_key, DH_SELF_PUB_KEY_LEN,
                                           myrand, NULL);
             if (ret != 0) {
-                ESP_LOGE(BLUFI_TAG, "mbedtls_dhm_make_public failed: %d", ret);
+                ESP_LOGE(BLUFI_TAG, "blufi_crypto::MakePublic failed: %d", ret);
                 btc_blufi_report_error(ESP_BLUFI_MAKE_PUBLIC_ERROR);
                 return;
             }
-            ret = mbedtls_dhm_calc_secret(m_sec->dhm, m_sec->share_key, SHARE_KEY_LEN,
+            ret = blufi_crypto::CalcSecret(m_sec->dhm, m_sec->share_key, SHARE_KEY_LEN,
                                           &m_sec->share_len, myrand, NULL);
             if (ret != 0) {
-                ESP_LOGE(BLUFI_TAG, "mbedtls_dhm_calc_secret failed: %d", ret);
+                ESP_LOGE(BLUFI_TAG, "blufi_crypto::CalcSecret failed: %d", ret);
                 btc_blufi_report_error(ESP_BLUFI_ENCRYPT_ERROR);
                 return;
             }
 
-            ret = mbedtls_md5(m_sec->share_key, m_sec->share_len, m_sec->psk);
+            Md5::Digest(m_sec->share_key, m_sec->share_len, m_sec->psk);
+            ret = esp_aes_setkey(m_sec->aes, m_sec->psk, PSK_LEN * 8);
             if (ret != 0) {
-                ESP_LOGE(BLUFI_TAG, "mbedtls_md5 failed: %d", ret);
-                btc_blufi_report_error(ESP_BLUFI_CALC_MD5_ERROR);
-                return;
-            }
-            ret = mbedtls_aes_setkey_enc(m_sec->aes, m_sec->psk, PSK_LEN * 8);
-            if (ret != 0) {
-                ESP_LOGE(BLUFI_TAG, "mbedtls_aes_setkey_enc failed: -0x%04X", -ret);
+                ESP_LOGE(BLUFI_TAG, "esp_aes_setkey failed: -0x%04X", -ret);
                 btc_blufi_report_error(ESP_BLUFI_ENCRYPT_ERROR);
                 return;
             }
@@ -719,7 +691,7 @@ int Blufi::_aes_encrypt(uint8_t iv8, uint8_t *crypt_data, int crypt_len) {
     uint8_t iv0[16];
     memcpy(iv0, m_sec->iv, 16);
     iv0[0] = iv8;
-    int ret = mbedtls_aes_crypt_cfb128(m_sec->aes, MBEDTLS_AES_ENCRYPT, crypt_len, &iv_offset, iv0,
+    int ret = esp_aes_crypt_cfb128(m_sec->aes, ESP_AES_ENCRYPT, crypt_len, &iv_offset, iv0,
                                        crypt_data, crypt_data);
 
     if (ret == 0) {
@@ -741,7 +713,7 @@ int Blufi::_aes_decrypt(uint8_t iv8, uint8_t *crypt_data, int crypt_len) {
     uint8_t iv0[16];
     memcpy(iv0, m_sec->iv, 16);
     iv0[0] = iv8;
-    int ret = mbedtls_aes_crypt_cfb128(m_sec->aes, MBEDTLS_AES_DECRYPT, crypt_len, &iv_offset, iv0,
+    int ret = esp_aes_crypt_cfb128(m_sec->aes, ESP_AES_DECRYPT, crypt_len, &iv_offset, iv0,
                                        crypt_data, crypt_data);
 
     if (ret != 0) {
@@ -863,6 +835,7 @@ void Blufi::_handle_event(esp_blufi_cb_event_t event, esp_blufi_cb_param_t *para
 
             // 凭据已收完，接下来的 BLE 流量只剩状态上报。放宽连接间隔给 WiFi
             // 让出射频：共存下若 BLE 保持短间隔轮询，auth/assoc 帧会频繁超时
+#ifdef CONFIG_BT_BLUEDROID_ENABLED
             esp_ble_conn_update_params_t conn_params = {};
             memcpy(conn_params.bda, m_remote_bda, sizeof(conn_params.bda));
             conn_params.min_int = 64;   // 80ms
@@ -870,6 +843,7 @@ void Blufi::_handle_event(esp_blufi_cb_event_t event, esp_blufi_cb_param_t *para
             conn_params.latency = 0;
             conn_params.timeout = 500;  // 5s
             esp_ble_gap_update_conn_params(&conn_params);
+#endif
 
             if (config_.restart_on_complete) {
                 // 小聆流程：收到 ssid/pwd 免扫描直连，不经过 esp-wifi-connect

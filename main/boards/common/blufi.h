@@ -1,8 +1,8 @@
 #pragma once
 
 #include <aes/esp_aes.h>
-#include "mbedtls/dhm.h"
-#include "mbedtls/aes.h"
+#include "blufi/legacy_dh.h"
+#include <aes/esp_aes.h>
 #include "esp_err.h"
 #include "esp_blufi_api.h"
 #include "esp_wifi_types.h"
@@ -132,7 +132,7 @@ private:
         uint8_t *dh_param;
         int dh_param_len;
         uint8_t iv[16];
-        mbedtls_dhm_context *dhm;
+        blufi_crypto::DhContext *dhm;
         esp_aes_context *aes;
     };
 
