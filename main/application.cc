@@ -1654,7 +1654,7 @@ bool Application::CanEnterSleepMode() {
     return true;
 }
 
-void Application::SendMcpMessage(const std::string& payload) {
+void Application::SendMcpMessage(std::string payload) {
     // 始终调度到主任务执行，以保证线程安全。
     Schedule([this, payload = std::move(payload)]() {
         if (xiaoling_conn_) {

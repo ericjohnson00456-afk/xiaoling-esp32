@@ -123,7 +123,7 @@ public:
     // 仅用于本地编码/唤醒压力验证，不创建云端录音会话。
     void SetAudioStressMode(bool enable);
     bool CanEnterSleepMode();
-    void SendMcpMessage(const std::string& payload);
+    void SendMcpMessage(std::string payload);
     // 语音拍照接管早到 TTS 时，要求会话层保留已收到的 timeline。
     void PrepareTtsReplay();
     void PlayRespakAudio(const char* name);

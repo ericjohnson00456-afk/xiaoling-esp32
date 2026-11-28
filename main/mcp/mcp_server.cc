@@ -289,7 +289,7 @@ void McpServer::GetToolsList(const std::string &id, const std::string &cursor,
     if (!list_user_only_tools && tool->user_only())
       continue;
     const auto tool_json = tool->to_json();
-    if (result.size() + tool_json.size() + 32 > kMaxPayloadSize) {
+    if (result.size() + tool_json.size() + tool->name().size() + 32 > kMaxPayloadSize) {
       next_cursor = tool->name();
       break;
     }
