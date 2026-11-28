@@ -242,7 +242,7 @@ private:
     std::mutex player_resampler_mutex_;
 
     // ===== 4. 服务任务 =====
-    // Start() 创建的服务任务：ADC 采集、DAC 播放、上下行 Opus 共用任务。
+    // ADC 采集、DAC 播放和上下行 Opus；Opus 工作任务按请求创建。
     TaskHandle_t audio_input_task_handle_ = nullptr;
     TaskHandle_t audio_output_task_handle_ = nullptr;
     TaskHandle_t opus_codec_task_handle_ = nullptr;
@@ -347,6 +347,7 @@ private:
     void AudioInputTask();
     void AudioOutputTask();
     void OpusCodecTask();
+    bool EnsureOpusTaskLocked();
     void CaptureUplinkPcmForTesting(const std::vector<int16_t>& data);
     void PrepareAudioTestingPlayback();
     bool ResetPlayerPlaybackState(bool clear_suspended_queue, uint32_t new_session = 0);

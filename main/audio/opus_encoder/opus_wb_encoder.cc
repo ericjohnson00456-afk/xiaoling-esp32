@@ -1,7 +1,6 @@
 #include "opus_wb_encoder.h"
 
 #include <esp_log.h>
-#include <sdkconfig.h>
 
 #define TAG "OpusWbEncoder"
 
@@ -10,11 +9,8 @@ OpusWbEncoder::OpusWbEncoder(int sample_rate, int channels, int duration_ms)
       channels_(channels),
       duration_ms_(duration_ms),
       frame_size_(sample_rate / 1000 * channels * duration_ms) {
-#if CONFIG_SPIRAM
-    EnsureEncoder();
-#endif
-    // Without PSRAM, keep both the uplink and diagnostic encoder workspaces
-    // unallocated until used. Eager allocation can starve startup OTA/TLS.
+    // Allocate the workspace on first use, leaving startup memory available
+    // for provisioning and network connections.
 }
 
 bool OpusWbEncoder::EnsureEncoder() {

@@ -59,6 +59,7 @@ private:
     int HandleEvent(esp_asp_event_pkt_t* event);
     void Emit(const PlaybackEvent& event);
     bool Enqueue(Command command);
+    bool EnsurePlayer();
     bool DoPlay(const PlaybackRequest& request);
     bool DoPause();
     bool DoResume();
@@ -72,6 +73,7 @@ private:
     static void CommandTaskEntry(void* arg);
 
     AudioOutput* audio_output_ = nullptr;
+    std::recursive_mutex initialization_mutex_;
     PlaybackMemoryPolicy memory_policy_ = PlaybackMemoryPolicy::For(0, false);
     // prev 回调在流水线启动前安装端口代理；每个 backend 只有一条解码流水线。
     port_acquire original_output_acquire_ = nullptr;

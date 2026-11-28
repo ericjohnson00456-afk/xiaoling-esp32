@@ -163,7 +163,6 @@ void AudioService::Initialize(AudioCodec* codec) {
     }
 
     /* Setup the audio codec */
-    opus_decoder_ = std::make_unique<OpusDecoderWrapper>(codec->output_sample_rate(), 1, OPUS_FRAME_DURATION_MS);
     opus_encoder_ = std::make_unique<OpusWbEncoder>(16000, 1, OPUS_FRAME_DURATION_MS);
     audio_testing_encoder_ =
         std::make_unique<OpusWbEncoder>(16000, 1, OPUS_FRAME_DURATION_MS);
@@ -281,36 +280,7 @@ void AudioService::Start() {
        &audio_output_task_handle_);
 #endif
 
-    /* Opus needs a large stack, but its working set does not need scarce
-       internal SRAM. Keep that SRAM available for Wi-Fi RX and DMA. */
-    auto opus_task = [](void* arg) {
-        AudioService* audio_service = (AudioService*)arg;
-        audio_service->OpusCodecTask();
-        const bool external_stack = audio_service->opus_codec_task_stack_external_;
-        audio_service->opus_codec_task_handle_ = nullptr;
-        if (external_stack) {
-            vTaskDeleteWithCaps(nullptr);
-        } else {
-            vTaskDelete(nullptr);
-        }
-    };
-    opus_codec_task_stack_external_ = true;
-    BaseType_t opus_task_result = xTaskCreateWithCaps(
-        opus_task, "opus_codec", 2048 * 13, this, kAudioCodecPriority,
-        &opus_codec_task_handle_, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (opus_task_result != pdPASS) {
-        opus_codec_task_stack_external_ = false;
-        opus_task_result = xTaskCreate(
-            opus_task, "opus_codec", 2048 * 13, this, kAudioCodecPriority,
-            &opus_codec_task_handle_);
-    }
-    if (opus_task_result != pdPASS) {
-        ESP_LOGE(TAG, "创建 Opus 编解码任务失败");
-    } else {
-        ESP_LOGI(TAG, "Opus 编解码任务栈: %s, bytes=%u",
-                 opus_codec_task_stack_external_ ? "PSRAM" : "internal",
-                 static_cast<unsigned>(2048 * 13));
-    }
+    // Queue producers create the Opus task when audio actually needs it.
 
 #if CONFIG_USE_MICRO_WAKE_WORD
     // 推理与配网、绘图并发时保留内部任务栈；模型和张量仍驻留 PSRAM。
@@ -336,6 +306,55 @@ void AudioService::Start() {
              static_cast<unsigned>(kAudioAlgorithmPriority),
 #endif
              static_cast<unsigned>(kAudioAfePriority));
+}
+
+// Caller holds audio_queue_mutex_ so concurrent encode/decode producers share one task.
+bool AudioService::EnsureOpusTaskLocked() {
+    if (service_stopped_) return false;
+    if (opus_codec_task_handle_ != nullptr) return true;
+    auto opus_task = [](void* arg) {
+        AudioService* audio_service = (AudioService*)arg;
+        const bool external_stack = audio_service->opus_codec_task_stack_external_;
+        for (;;) {
+            audio_service->OpusCodecTask();
+            std::lock_guard<std::mutex> lock(audio_service->audio_queue_mutex_);
+            // A producer can arrive between the idle decision and this lock.
+            // Keep serving it before publishing that the task has exited.
+            if (!audio_service->service_stopped_ &&
+                (audio_service->audio_upload_enabled_ || audio_service->local_encoding_benchmark_ ||
+                 !audio_service->audio_encode_queue_.empty() || !audio_service->audio_decode_queue_.empty())) {
+                continue;
+            }
+            audio_service->opus_codec_task_handle_ = nullptr;
+            break;
+        }
+        if (external_stack) {
+            vTaskDeleteWithCaps(nullptr);
+        } else {
+            vTaskDelete(nullptr);
+        }
+    };
+    const bool has_psram = heap_caps_get_total_size(MALLOC_CAP_SPIRAM) != 0;
+    const size_t opus_stack_bytes = 2048 * 13;
+    opus_codec_task_stack_external_ = has_psram;
+    BaseType_t opus_task_result = has_psram ? xTaskCreateWithCaps(
+        opus_task, "opus_codec", opus_stack_bytes, this, kAudioCodecPriority,
+        &opus_codec_task_handle_, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) : pdFAIL;
+    if (opus_task_result != pdPASS) {
+        opus_codec_task_stack_external_ = false;
+        opus_task_result = xTaskCreate(
+            opus_task, "opus_codec", opus_stack_bytes, this, kAudioCodecPriority,
+            &opus_codec_task_handle_);
+    }
+    if (opus_task_result != pdPASS) {
+        ESP_LOGE(TAG, "创建 Opus 编解码任务失败");
+        return false;
+    } else {
+        ESP_LOGI(TAG, "Opus 编解码任务栈: %s, bytes=%u",
+                 opus_codec_task_stack_external_ ? "PSRAM" : "internal",
+                 static_cast<unsigned>(opus_stack_bytes));
+    }
+    return true;
 }
 
 // 系统级暂停（目前由 OTA 使用）：通知任务退出并清空队列；普通业务切换不调用。
@@ -1068,7 +1087,7 @@ void AudioService::OpusCodecTask() {
 
 // 下行包参数变化时重建解码器，并准备到 DAC 采样率的重采样。
 void AudioService::SetDecodeSampleRate(int sample_rate, int frame_duration) {
-    if (opus_decoder_->sample_rate() == sample_rate && opus_decoder_->duration_ms() == frame_duration) {
+    if (opus_decoder_ && opus_decoder_->sample_rate() == sample_rate && opus_decoder_->duration_ms() == frame_duration) {
         return;
     }
 
@@ -1093,6 +1112,7 @@ void AudioService::PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t
          !local_encoding_benchmark_.load())) {
         return;
     }
+    if (!EnsureOpusTaskLocked()) return;
     auto task = std::make_unique<AudioTask>();
     task->type = type;
     task->pcm = std::move(pcm);
@@ -1465,6 +1485,7 @@ void AudioService::WaitForPlaybackComplete(uint32_t expected_session) {
 // 服务端 Opus 的下行入口；编码任务会解码并转送统一播放队列。
 bool AudioService::PushPacketToDecodeQueue(std::unique_ptr<AudioStreamPacket> packet, bool wait) {
     std::unique_lock<std::mutex> lock(audio_queue_mutex_);
+    if (!EnsureOpusTaskLocked()) return false;
     if (audio_decode_queue_.size() >= MAX_DECODE_PACKETS_IN_QUEUE) {
         if (wait) {
             audio_queue_cv_.wait(lock, [this]() { return audio_decode_queue_.size() < MAX_DECODE_PACKETS_IN_QUEUE; });
@@ -2095,7 +2116,7 @@ bool AudioService::ResetPlayerPlaybackState(bool clear_suspended_queue, uint32_t
         latest_player_session_id_ = new_session;
     }
     player_session_id_ = new_session;
-    opus_decoder_->ResetState();
+    if (opus_decoder_) opus_decoder_->ResetState();
     /* 新播放会话以干净的重采样状态开始，避免上一段音频的残留相位 */
     player_resampler_input_rate_ = 0;
     player_output_chunks_.store(0);

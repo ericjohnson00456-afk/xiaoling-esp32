@@ -267,6 +267,19 @@ bool EspSimplePlayerBackend::Initialize(AudioOutput* audio_output, EventCallback
         return false;
     }
 
+    audio_output_ = audio_output;
+    event_callback_ = std::move(callback);
+    // Create playback tasks on first use so they do not occupy startup memory.
+    initialized_ = true;
+    return true;
+}
+
+bool EspSimplePlayerBackend::EnsurePlayer() {
+    std::lock_guard<std::recursive_mutex> initialization_lock(initialization_mutex_);
+    if (handle_ != nullptr) {
+        return true;
+    }
+
     /* 不要在 115200 波特率下打印每一次 HTTP 读取和解码探测日志。
        启动 TTS 时过多串口日志会阻塞流式播放路径；状态和错误日志仍使用
        组件默认级别输出。 */
@@ -341,8 +354,6 @@ bool EspSimplePlayerBackend::Initialize(AudioOutput* audio_output, EventCallback
         return false;
     }
 
-    audio_output_ = audio_output;
-    event_callback_ = std::move(callback);
     command_task_running_ = true;
     command_task_finished_ = false;
     command_task_stack_external_ = true;
@@ -382,7 +393,6 @@ bool EspSimplePlayerBackend::Initialize(AudioOutput* audio_output, EventCallback
         handle_ = nullptr;
         return false;
     }
-    initialized_ = true;
     ESP_LOGI(TAG, "流式播放器就绪: output=%d Hz/%d ch/%d bit",
              CONFIG_AUDIO_SIMPLE_PLAYER_RESAMPLE_DEST_RATE,
              CONFIG_AUDIO_SIMPLE_PLAYER_CH_CVT_DEST,
@@ -391,10 +401,14 @@ bool EspSimplePlayerBackend::Initialize(AudioOutput* audio_output, EventCallback
 }
 
 bool EspSimplePlayerBackend::Play(const PlaybackRequest& request) {
-    if (!initialized_ || handle_ == nullptr || request.session_id == 0 ||
+    std::lock_guard<std::recursive_mutex> initialization_lock(initialization_mutex_);
+    if (!initialized_ || request.session_id == 0 ||
         (request.source_type != PlaybackSourceType::kUrl &&
          request.source_type != PlaybackSourceType::kRomfs &&
          request.source_type != PlaybackSourceType::kFile)) {
+        return false;
+    }
+    if (!EnsurePlayer()) {
         return false;
     }
 
@@ -626,6 +640,10 @@ bool EspSimplePlayerBackend::DoResume() {
 }
 
 bool EspSimplePlayerBackend::Stop(PlaybackEndReason reason) {
+    {
+        std::lock_guard<std::recursive_mutex> initialization_lock(initialization_mutex_);
+        if (handle_ == nullptr) return initialized_;
+    }
     // Stop 同样异步投递，状态终态由 GMF 回调统一确认。
     command_pending_playback_ = false;
     bool clear_output = false;
@@ -1344,5 +1362,7 @@ void EspSimplePlayerBackend::Emit(const PlaybackEvent& event) {
 }
 
 bool EspSimplePlayerBackend::RegisterInputIo(esp_gmf_io_handle_t io) {
-    return handle_ && esp_audio_simple_player_register_io(handle_,io) == ESP_GMF_ERR_OK;
+    std::lock_guard<std::recursive_mutex> initialization_lock(initialization_mutex_);
+    return initialized_ && EnsurePlayer() &&
+           esp_audio_simple_player_register_io(handle_,io) == ESP_GMF_ERR_OK;
 }
