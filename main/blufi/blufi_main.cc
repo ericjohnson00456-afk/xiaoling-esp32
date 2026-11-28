@@ -308,13 +308,22 @@ static void initialise_wifi(void)
 {
     ESP_ERROR_CHECK(esp_netif_init());
     wifi_event_group = xEventGroupCreate();
-    esp_netif_t *sta_netif = esp_netif_create_default_wifi_sta();
+    esp_netif_t *sta_netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (sta_netif == nullptr) {
+        sta_netif = esp_netif_create_default_wifi_sta();
+    }
     assert(sta_netif);
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &ip_event_handler, NULL));
 
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK( esp_wifi_init(&cfg) );
+    wifi_mode_t mode;
+    esp_err_t state = esp_wifi_get_mode(&mode);
+    if (state == ESP_ERR_WIFI_NOT_INIT) {
+        wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+        ESP_ERROR_CHECK(esp_wifi_init(&cfg));
+    } else {
+        ESP_ERROR_CHECK(state);
+    }
     ESP_ERROR_CHECK( esp_wifi_set_mode(WIFI_MODE_STA) );
     example_record_wifi_conn_info(EXAMPLE_INVALID_RSSI, EXAMPLE_INVALID_REASON);
     ESP_ERROR_CHECK( esp_wifi_start() );
