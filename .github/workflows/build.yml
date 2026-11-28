@@ -37,14 +37,14 @@ jobs:
       count: ${{ steps.plan.outputs.count }}
       reused_run: ${{ steps.plan.outputs.reused_run }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - id: plan
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 scripts/ci.py plan
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ci-plan
           path: ci-plan.json
@@ -68,19 +68,19 @@ jobs:
       CCACHE_COMPILERCHECK: content
       IDF_COMPONENT_CACHE_PATH: ${{ github.workspace }}/.cache/components
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           lfs: true
       - uses: ./.github/actions/setup-idf
       - name: Restore component downloads
         id: components
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: .cache/components
           key: idf6-components-${{ matrix.target }}-${{ hashFiles('**/idf_component.yml', '.github/actions/setup-idf/action.yml') }}
       - name: Restore compiled objects
         id: objects
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: .cache/ccache
           key: idf6-ccache-${{ matrix.id }}-${{ hashFiles('.github/actions/setup-idf/action.yml') }}-${{ github.sha }}-${{ github.run_attempt }}
@@ -105,20 +105,20 @@ jobs:
       - name: Save compiled objects
         if: ${{ !cancelled() && steps.objects.outputs.cache-primary-key != '' && steps.objects.outputs.cache-hit != 'true' }}
         continue-on-error: true
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: .cache/ccache
           key: ${{ steps.objects.outputs.cache-primary-key }}
       - name: Save component downloads
         if: ${{ !cancelled() && steps.components.outputs.cache-primary-key != '' && steps.components.outputs.cache-hit != 'true' }}
         continue-on-error: true
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: .cache/components
           key: ${{ steps.components.outputs.cache-primary-key }}
       - name: Upload firmware and diagnostics
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: firmware-${{ matrix.id }}
           path: ci-artifacts/${{ matrix.id }}/
@@ -154,9 +154,9 @@ jobs:
     if: github.event_name == 'release' && startsWith(github.ref, 'refs/tags/xiaoling/v')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Download artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           github-token: ${{ github.token }}
           run-id: ${{ needs.prepare.outputs.reused_run || github.run_id }}
@@ -168,7 +168,7 @@ jobs:
         run: python3 scripts/ci.py release-assets downloaded assets
 
       - name: Upload release assets
-        uses: svenstaro/upload-release-action@2.11.2
+        uses: svenstaro/upload-release-action@2.11.5
         with:
           file: assets/*
           file_glob: true
