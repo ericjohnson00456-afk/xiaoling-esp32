@@ -35,6 +35,7 @@ private:
 
     void Refresh();
     void SetRoleConfigUrl(std::string url);
+    void FetchRoleConfig();
     static void FetchTask(void* arg);
     void CompleteFetch(const std::string& url, uint32_t generation,
                        std::unique_ptr<LvglImage> image);
@@ -55,4 +56,6 @@ private:
     std::string custom_message_;
     bool custom_selected_ = false;
     uint32_t fetch_generation_ = 0;
+    bool fetching_ = false;
+    bool fetch_failed_ = false;
 };

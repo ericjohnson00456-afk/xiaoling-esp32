@@ -3,6 +3,8 @@
         "type": "zh-CN"
     },
     "strings": {
+        "QRCODE_LOADING": "正在加载二维码…",
+        "QRCODE_LOAD_FAILED": "二维码加载失败，请重新打开重试",
         "WARNING": "警告",
         "INFO": "信息",
         "ERROR": "错误",

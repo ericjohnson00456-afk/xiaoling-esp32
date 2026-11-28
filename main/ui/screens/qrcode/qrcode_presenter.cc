@@ -134,16 +134,34 @@ void QrCodePresenter::SetRoleConfigUrl(std::string url) {
         return;
     }
 
+    bool role_selected;
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        if (role_config_url_ == url && (role_config_image_ != nullptr || fetching_)) {
+            return;
+        }
+        ++fetch_generation_;
+        role_config_url_ = std::move(url);
+        role_config_image_.reset();
+        fetching_ = false;
+        fetch_failed_ = false;
+        role_selected = !custom_selected_;
+    }
+    // Download only for the role QR page that the user is actually viewing.
+    if (role_selected && view_ && UiManager::GetInstance().TopScreenId() == UI_PAGE_QRCODE) {
+        FetchRoleConfig();
+    }
+}
+
+void QrCodePresenter::FetchRoleConfig() {
     uint32_t generation;
     std::string request_url;
     {
         std::lock_guard<std::mutex> lock(state_mutex_);
-        if (role_config_url_ == url && role_config_image_ != nullptr) {
-            return;
-        }
-        generation = ++fetch_generation_;
-        role_config_url_ = std::move(url);
-        role_config_image_.reset();
+        if (role_config_url_.empty() || role_config_image_ || fetching_) return;
+        fetching_ = true;
+        fetch_failed_ = false;
+        generation = fetch_generation_;
         request_url = role_config_url_;
     }
 
@@ -166,6 +184,8 @@ void QrCodePresenter::ClearRoleConfigUrl() {
     ++fetch_generation_;
     role_config_url_.clear();
     role_config_image_.reset();
+    fetching_ = false;
+    fetch_failed_ = false;
 }
 
 void QrCodePresenter::SelectRoleConfig() {
@@ -175,6 +195,7 @@ void QrCodePresenter::SelectRoleConfig() {
         custom_image_.reset();
         custom_message_.clear();
     }
+    FetchRoleConfig();
     if (view_ != nullptr && UiManager::GetInstance().TopScreenId() == UI_PAGE_QRCODE) {
         Refresh();
     }
@@ -197,7 +218,7 @@ void QrCodePresenter::SetCustomQrCode(std::unique_ptr<LvglImage> image, std::str
 
 bool QrCodePresenter::HasRoleConfigQrCode() const {
     std::lock_guard<std::mutex> lock(state_mutex_);
-    return role_config_image_ != nullptr;
+    return !role_config_url_.empty();
 }
 
 void QrCodePresenter::FetchTask(void* arg) {
@@ -225,6 +246,8 @@ void QrCodePresenter::CompleteFetch(const std::string& url, uint32_t generation,
             return;
         }
         role_config_image_ = image != nullptr ? std::shared_ptr<LvglImage>(std::move(image)) : nullptr;
+        fetching_ = false;
+        fetch_failed_ = role_config_image_ == nullptr;
     }
     UiManager::GetInstance().Dispatch([]() {
         auto& presenter = QrCodePresenter::GetInstance();
@@ -286,9 +309,13 @@ void QrCodePresenter::Refresh() {
     std::shared_ptr<LvglImage> image;
     std::string message;
     bool custom_selected = false;
+    bool role_pending = false;
+    bool fetch_failed = false;
     {
         std::lock_guard<std::mutex> lock(state_mutex_);
         custom_selected = custom_selected_;
+        role_pending = !custom_selected_ && !role_config_url_.empty();
+        fetch_failed = fetch_failed_;
         if (custom_selected && custom_image_ != nullptr) {
             image = custom_image_;
             message = custom_message_;
@@ -307,6 +334,14 @@ void QrCodePresenter::Refresh() {
         last_rendered_message_ = message;
         rendered_ = true;
         view_->ShowQrCode(std::make_unique<SharedLvglImage>(std::move(image)), message);
+        return;
+    }
+
+    if (role_pending) {
+        last_rendered_image_.reset();
+        rendered_ = false;
+        view_->ShowMessage(fetch_failed ? Lang::Strings::QRCODE_LOAD_FAILED
+                                       : Lang::Strings::QRCODE_LOADING);
         return;
     }
 

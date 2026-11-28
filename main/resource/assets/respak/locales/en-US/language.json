@@ -3,6 +3,8 @@
         "type": "en-US"
     },
     "strings": {
+        "QRCODE_LOADING": "Loading QR code…",
+        "QRCODE_LOAD_FAILED": "Could not load QR code. Reopen to retry.",
         "WARNING": "Warning",
         "INFO": "Information",
         "ERROR": "Error",

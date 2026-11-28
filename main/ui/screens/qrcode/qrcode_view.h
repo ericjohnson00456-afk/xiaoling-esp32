@@ -18,6 +18,7 @@ public:
     void Show();
     void Hide();
     void ShowQrCode(std::unique_ptr<LvglImage> image, const std::string& message);
+    void ShowMessage(const std::string& message);
 
 private:
     void CreateUi();

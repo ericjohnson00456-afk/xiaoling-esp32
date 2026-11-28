@@ -116,3 +116,12 @@ void QrCodeView::ShowQrCode(std::unique_ptr<LvglImage> image, const std::string&
     lv_image_set_src(image_widget_, image_cached_->image_dsc());
     lv_label_set_text(message_label_, message.c_str());
 }
+
+void QrCodeView::ShowMessage(const std::string& message) {
+    if (lvgl_ == nullptr || image_widget_ == nullptr || message_label_ == nullptr) return;
+    DisplayLockGuard lock(display_);
+    if (!lock.locked()) return;
+    lv_image_set_src(image_widget_, nullptr);
+    image_cached_.reset();
+    lv_label_set_text(message_label_, message.c_str());
+}
