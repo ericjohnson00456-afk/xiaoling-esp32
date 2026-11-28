@@ -463,6 +463,38 @@ bool LcdDisplay::Lock(int timeout_ms) {
     return lvgl_port_lock(timeout_ms);
 }
 
+void LcdDisplay::SetUiAdapter(DisplayUiAdapter* adapter) {
+    Display::SetUiAdapter(adapter);
+    if (adapter == nullptr || container_ == nullptr) return;
+    DisplayLockGuard lock(this);
+    if (!lock.locked()) return;
+    // The managed Home page replaces this bootstrap view. Retaining its
+    // objects and animation keeps a second screen resident behind the UI.
+    esp_timer_stop(notification_timer_);
+#ifndef CONFIG_USE_XIAOLING_MESSAGE_STYLE
+    if (preview_timer_) esp_timer_stop(preview_timer_);
+#endif
+    animation_player_.reset();
+    auto* screen = lv_display_get_screen_active(display_);
+    if (status_bar_ && lv_obj_get_parent(status_bar_) == screen) lv_obj_delete(status_bar_);
+    if (low_battery_popup_ && lv_obj_get_parent(low_battery_popup_) == screen) lv_obj_delete(low_battery_popup_);
+    lv_obj_delete(container_);
+    container_ = top_bar_ = status_bar_ = content_ = side_bar_ = bottom_bar_ = nullptr;
+    preview_image_ = emoji_label_ = emoji_image_ = emoji_box_ = chat_message_label_ = nullptr;
+    network_label_ = clock_label_ = status_label_ = notification_label_ = nullptr;
+    mute_label_ = battery_label_ = low_battery_popup_ = low_battery_label_ = nullptr;
+    preview_image_cached_.reset();
+#ifdef CONFIG_USE_XIAOLING_MESSAGE_STYLE
+    duplex_image_ = nullptr;
+#endif
+#ifdef CONFIG_LSPLATFORM
+    activation_container_ = activation_qrcode_ = activation_message_ = nullptr;
+    image_container_ = image_ = nullptr;
+    activation_qrcode_cached_.reset();
+    image_cached_.reset();
+#endif
+}
+
 void LcdDisplay::Unlock() {
     lvgl_port_unlock();
 }
@@ -1294,6 +1326,10 @@ void LcdDisplay::ShowEmotionOnce(const char* emotion) {
 
 void LcdDisplay::SetTheme(Theme* theme) {
     DisplayLockGuard lock(this);
+    if (container_ == nullptr) {
+        Display::SetTheme(theme);
+        return;
+    }
 
     auto lvgl_theme = static_cast<LvglTheme*>(theme);
 

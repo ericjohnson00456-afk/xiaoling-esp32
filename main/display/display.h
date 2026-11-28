@@ -62,7 +62,7 @@ public:
     virtual void UpdateStatusBar(bool update_all = false);
     virtual void SetPowerSaveMode(bool on);
 
-    void SetUiAdapter(DisplayUiAdapter* adapter) { ui_adapter_ = adapter; }
+    virtual void SetUiAdapter(DisplayUiAdapter* adapter) { ui_adapter_ = adapter; }
 
     /* 背光亮度控制（0-100），默认实现经 Board::GetBacklight() 下发；
        无背光硬件的板子保持空操作 */

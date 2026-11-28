@@ -69,6 +69,7 @@ protected:
 
 public:
     ~LcdDisplay();
+    void SetUiAdapter(DisplayUiAdapter* adapter) override;
     virtual void SetEmotion(const char* emotion) override;
     virtual void ShowEmotionOnce(const char* emotion) override;
     virtual void SetChatMessage(const char* role, const char* content) override;
