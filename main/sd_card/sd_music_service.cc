@@ -187,16 +187,16 @@ void SdMusicService::OnUnsupportedFileSystem() {
 }
 
 void SdMusicService::OnCloudReady() {
-    cloud_ready_.store(true);
-    Ui::SetTfCardPresent(card_ready_.load());
-
     AuthorizationProvider provider;
     std::string host;
     {
         std::lock_guard<std::mutex> lock(mutex_);
+        if (!initialized_) return;
         provider = authorization_provider_;
         host = host_;
     }
+    cloud_ready_.store(true);
+    Ui::SetTfCardPresent(card_ready_.load());
     const std::string authorization = provider ? provider() : std::string{};
     if (!SdCardManager::GetInstance().IsMounted()) {
         ReconcileBootRemoval(authorization, host);
