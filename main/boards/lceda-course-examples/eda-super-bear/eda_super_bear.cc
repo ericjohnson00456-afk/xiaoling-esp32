@@ -8,7 +8,7 @@
 #include "lamp_controller.h"
 #include "led/single_led.h"
 #include "mcp_server.h"
-#include "system_reset.h"
+#include "system/system_reset.h"
 #include "wifi_board.h"
 
 #define TAG "EdaSuperBear"

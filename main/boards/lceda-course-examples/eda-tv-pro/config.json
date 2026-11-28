@@ -1,10 +1,14 @@
 {
+    "manufacturer": "lceda-course-examples",
+    "type": "eda-tv-pro",
     "target": "esp32s3",
     "builds": [
         {
             "name": "eda-tv-pro",
             "sdkconfig_append": [
-                "LCD_ST7789_240X240_7PIN=y"
+                "CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y",
+                "CONFIG_PARTITION_TABLE_CUSTOM_FILENAME=\"partitions/v2/8m.csv\"",
+                "CONFIG_LCD_ST7789_240X240_7PIN=y"
             ]
         }
     ]

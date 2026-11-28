@@ -13,7 +13,7 @@
 #include "eda_dog_movements.h"
 #include "mcp_server.h"
 #include "sdkconfig.h"
-#include "settings.h"
+#include "system/settings.h"
 
 #define TAG "EDARobotDogController"
 

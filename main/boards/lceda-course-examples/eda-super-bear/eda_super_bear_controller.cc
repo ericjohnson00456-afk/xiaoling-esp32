@@ -13,7 +13,7 @@
 #include "mcp_server.h"
 #include "eda_super_bear_movements.h"
 #include "sdkconfig.h"
-#include "settings.h"
+#include "system/settings.h"
 
 #define TAG "EdaSuperBearController"
 
